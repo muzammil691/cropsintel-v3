@@ -1,196 +1,782 @@
-// CropsIntel V3 — Database types
-//
-// HAND-WRITTEN TYPES MATCHING THE FOUNDATION MIGRATION
-// (supabase/migrations/20260428000001_v3_foundation.sql)
-//
-// In Phase 1 sub-task 1.4 we replace this file with auto-generated types via:
-//   npx supabase gen types typescript --project-id hzrnohsxigrqlmzegwlb > src/lib/database.types.ts
-//
-// Until then, these hand-written types let the Supabase client be typed correctly
-// for the foundation tables.
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
 
-export type AppRole = "auth" | "team" | "admin"
-export type CompanyType = "customer" | "broker" | "supplier" | "maxons_internal"
-export type VerificationStatus = "unverified" | "pending_review" | "verified" | "rejected"
-export type ProductType = "inshell" | "kernel" | "shelled" | "blanched" | "sliced" | "slivered" | "diced"
-export type UserTier = "guest" | "registered" | "verified" | "maxons_team"
-export type RelationshipRole = "crm_customer" | "brm_broker" | "srm_supplier"
-export type IntelSource =
-  | "abc_position_report"
-  | "abc_shipment"
-  | "abc_forecast"
-  | "abc_almanac"
-  | "usda_nass"
-  | "strata_pricing"
-  | "broker_note"
-  | "customer_indication"
-  | "supplier_offer"
-  | "news_article"
-  | "manual_entry"
-  | "ai_synthesis"
-
-export type Commodity = {
-  id: string
-  slug: string
-  display_name: string
-  trade_basis_options: string[]
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export type Company = {
-  id: string
-  name: string
-  company_type: CompanyType
-  country: string | null
-  city: string | null
-  website: string | null
-  primary_email: string | null
-  primary_phone: string | null
-  business_registration_number: string | null
-  tax_id: string | null
-  verification_status: VerificationStatus
-  verified_at: string | null
-  verified_by: string | null
-  notes: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type Contact = {
-  id: string
-  company_id: string
-  full_name: string
-  job_title: string | null
-  email: string | null
-  phone: string | null
-  whatsapp: string | null
-  is_primary: boolean
-  preferred_language: string | null
-  notes: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type CanonicalProduct = {
-  id: string
-  commodity_id: string
-  variety: string
-  product_type: ProductType
-  size: string | null
-  grade: string | null
-  description: string | null
-  aliases: string[]
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export type Profile = {
-  id: string
-  contact_id: string | null
-  company_id: string | null
-  full_name: string | null
-  display_name: string | null
-  preferred_language: string
-  tier: UserTier
-  primary_models: string[]
-  whatsapp_number: string | null
-  whatsapp_verified: boolean
-  email_verified_at: string | null
-  last_seen_at: string | null
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
-
-export type Relationship = {
-  id: string
-  company_id: string
-  role: RelationshipRole
-  verification_status: VerificationStatus
-  is_active: boolean
-  notes: string | null
-  established_at: string
-  created_at: string
-  updated_at: string
-}
-
-export type MarketIntelligence = {
-  id: string
-  commodity_id: string
-  canonical_product_id: string | null
-  source: IntelSource
-  source_url: string | null
-  source_attribution: string | null
-  occurred_at: string
-  ingested_at: string
-  origin_country: string | null
-  destination_country: string | null
-  trade_basis: string | null
-  price_per_lb_usd: number | null
-  quantity_lbs: number | null
-  raw_payload: Record<string, unknown>
-  ai_summary: string | null
-  confidence: number | null
-  is_active: boolean
-  created_at: string
-}
-
-export type ZyraConversation = {
-  id: string
-  user_id: string | null
-  session_id: string
-  channel: string
-  user_message: string
-  zyra_response: string
-  ai_provider: string | null
-  input_tokens: number | null
-  output_tokens: number | null
-  estimated_cost_usd: number | null
-  confidence: number | null
-  was_escalated: boolean
-  user_challenged: boolean
-  created_at: string
-}
-
-export type UserRole = {
-  id: string
-  user_id: string
-  role: AppRole
-  granted_at: string
-  granted_by: string | null
-}
-
-// Minimal Database type shape for the typed Supabase client.
-// Phase 1.4 replaces this with the auto-generated full schema.
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
+  }
   public: {
     Tables: {
-      commodities: { Row: Commodity; Insert: Partial<Commodity>; Update: Partial<Commodity> }
-      companies: { Row: Company; Insert: Partial<Company>; Update: Partial<Company> }
-      contacts: { Row: Contact; Insert: Partial<Contact>; Update: Partial<Contact> }
-      canonical_products: { Row: CanonicalProduct; Insert: Partial<CanonicalProduct>; Update: Partial<CanonicalProduct> }
-      profiles: { Row: Profile; Insert: Partial<Profile>; Update: Partial<Profile> }
-      relationships: { Row: Relationship; Insert: Partial<Relationship>; Update: Partial<Relationship> }
-      market_intelligence: { Row: MarketIntelligence; Insert: Partial<MarketIntelligence>; Update: Partial<MarketIntelligence> }
-      zyra_conversations: { Row: ZyraConversation; Insert: Partial<ZyraConversation>; Update: Partial<ZyraConversation> }
-      user_roles: { Row: UserRole; Insert: Partial<UserRole>; Update: Partial<UserRole> }
+      agent_audit_log: {
+        Row: {
+          action_type: string
+          agent_name: string
+          created_at: string
+          duration_ms: number | null
+          error_message: string | null
+          id: string
+          payload: Json
+          result: Json | null
+          status: string
+          user_id: string | null
+        }
+        Insert: {
+          action_type: string
+          agent_name: string
+          created_at?: string
+          duration_ms?: number | null
+          error_message?: string | null
+          id?: string
+          payload?: Json
+          result?: Json | null
+          status?: string
+          user_id?: string | null
+        }
+        Update: {
+          action_type?: string
+          agent_name?: string
+          created_at?: string
+          duration_ms?: number | null
+          error_message?: string | null
+          id?: string
+          payload?: Json
+          result?: Json | null
+          status?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      agent_rate_limits: {
+        Row: {
+          agent_name: string
+          id: string
+          last_request_at: string
+          request_count: number
+          user_id: string
+          window_start: string
+        }
+        Insert: {
+          agent_name: string
+          id?: string
+          last_request_at?: string
+          request_count?: number
+          user_id: string
+          window_start: string
+        }
+        Update: {
+          agent_name?: string
+          id?: string
+          last_request_at?: string
+          request_count?: number
+          user_id?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
+      canonical_products: {
+        Row: {
+          aliases: string[]
+          commodity_id: string
+          created_at: string
+          description: string | null
+          grade: string | null
+          id: string
+          is_active: boolean
+          product_type: Database["public"]["Enums"]["product_type"]
+          size: string | null
+          updated_at: string
+          variety: string
+        }
+        Insert: {
+          aliases?: string[]
+          commodity_id: string
+          created_at?: string
+          description?: string | null
+          grade?: string | null
+          id?: string
+          is_active?: boolean
+          product_type?: Database["public"]["Enums"]["product_type"]
+          size?: string | null
+          updated_at?: string
+          variety: string
+        }
+        Update: {
+          aliases?: string[]
+          commodity_id?: string
+          created_at?: string
+          description?: string | null
+          grade?: string | null
+          id?: string
+          is_active?: boolean
+          product_type?: Database["public"]["Enums"]["product_type"]
+          size?: string | null
+          updated_at?: string
+          variety?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "canonical_products_commodity_id_fkey"
+            columns: ["commodity_id"]
+            isOneToOne: false
+            referencedRelation: "commodities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commodities: {
+        Row: {
+          created_at: string
+          display_name: string
+          id: string
+          is_active: boolean
+          slug: string
+          trade_basis_options: string[]
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          display_name: string
+          id?: string
+          is_active?: boolean
+          slug: string
+          trade_basis_options?: string[]
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string
+          id?: string
+          is_active?: boolean
+          slug?: string
+          trade_basis_options?: string[]
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      companies: {
+        Row: {
+          business_registration_number: string | null
+          city: string | null
+          company_type: Database["public"]["Enums"]["company_type"]
+          country: string | null
+          created_at: string
+          id: string
+          name: string
+          notes: string | null
+          primary_email: string | null
+          primary_phone: string | null
+          tax_id: string | null
+          updated_at: string
+          verification_status: Database["public"]["Enums"]["verification_status"]
+          verified_at: string | null
+          verified_by: string | null
+          website: string | null
+        }
+        Insert: {
+          business_registration_number?: string | null
+          city?: string | null
+          company_type: Database["public"]["Enums"]["company_type"]
+          country?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          notes?: string | null
+          primary_email?: string | null
+          primary_phone?: string | null
+          tax_id?: string | null
+          updated_at?: string
+          verification_status?: Database["public"]["Enums"]["verification_status"]
+          verified_at?: string | null
+          verified_by?: string | null
+          website?: string | null
+        }
+        Update: {
+          business_registration_number?: string | null
+          city?: string | null
+          company_type?: Database["public"]["Enums"]["company_type"]
+          country?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          notes?: string | null
+          primary_email?: string | null
+          primary_phone?: string | null
+          tax_id?: string | null
+          updated_at?: string
+          verification_status?: Database["public"]["Enums"]["verification_status"]
+          verified_at?: string | null
+          verified_by?: string | null
+          website?: string | null
+        }
+        Relationships: []
+      }
+      contacts: {
+        Row: {
+          company_id: string
+          created_at: string
+          email: string | null
+          full_name: string
+          id: string
+          is_primary: boolean
+          job_title: string | null
+          notes: string | null
+          phone: string | null
+          preferred_language: string | null
+          updated_at: string
+          whatsapp: string | null
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          email?: string | null
+          full_name: string
+          id?: string
+          is_primary?: boolean
+          job_title?: string | null
+          notes?: string | null
+          phone?: string | null
+          preferred_language?: string | null
+          updated_at?: string
+          whatsapp?: string | null
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          email?: string | null
+          full_name?: string
+          id?: string
+          is_primary?: boolean
+          job_title?: string | null
+          notes?: string | null
+          phone?: string | null
+          preferred_language?: string | null
+          updated_at?: string
+          whatsapp?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contacts_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      market_intelligence: {
+        Row: {
+          ai_summary: string | null
+          canonical_product_id: string | null
+          commodity_id: string
+          confidence: number | null
+          created_at: string
+          destination_country: string | null
+          id: string
+          ingested_at: string
+          is_active: boolean
+          occurred_at: string
+          origin_country: string | null
+          price_per_lb_usd: number | null
+          quantity_lbs: number | null
+          raw_payload: Json
+          source: Database["public"]["Enums"]["intel_source"]
+          source_attribution: string | null
+          source_url: string | null
+          trade_basis: string | null
+        }
+        Insert: {
+          ai_summary?: string | null
+          canonical_product_id?: string | null
+          commodity_id: string
+          confidence?: number | null
+          created_at?: string
+          destination_country?: string | null
+          id?: string
+          ingested_at?: string
+          is_active?: boolean
+          occurred_at: string
+          origin_country?: string | null
+          price_per_lb_usd?: number | null
+          quantity_lbs?: number | null
+          raw_payload?: Json
+          source: Database["public"]["Enums"]["intel_source"]
+          source_attribution?: string | null
+          source_url?: string | null
+          trade_basis?: string | null
+        }
+        Update: {
+          ai_summary?: string | null
+          canonical_product_id?: string | null
+          commodity_id?: string
+          confidence?: number | null
+          created_at?: string
+          destination_country?: string | null
+          id?: string
+          ingested_at?: string
+          is_active?: boolean
+          occurred_at?: string
+          origin_country?: string | null
+          price_per_lb_usd?: number | null
+          quantity_lbs?: number | null
+          raw_payload?: Json
+          source?: Database["public"]["Enums"]["intel_source"]
+          source_attribution?: string | null
+          source_url?: string | null
+          trade_basis?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "market_intelligence_canonical_product_id_fkey"
+            columns: ["canonical_product_id"]
+            isOneToOne: false
+            referencedRelation: "canonical_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "market_intelligence_commodity_id_fkey"
+            columns: ["commodity_id"]
+            isOneToOne: false
+            referencedRelation: "commodities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          company_id: string | null
+          contact_id: string | null
+          created_at: string
+          display_name: string | null
+          email_verified_at: string | null
+          full_name: string | null
+          id: string
+          is_active: boolean
+          last_seen_at: string | null
+          preferred_language: string
+          primary_models: string[]
+          tier: Database["public"]["Enums"]["user_tier"]
+          updated_at: string
+          whatsapp_number: string | null
+          whatsapp_verified: boolean
+        }
+        Insert: {
+          company_id?: string | null
+          contact_id?: string | null
+          created_at?: string
+          display_name?: string | null
+          email_verified_at?: string | null
+          full_name?: string | null
+          id: string
+          is_active?: boolean
+          last_seen_at?: string | null
+          preferred_language?: string
+          primary_models?: string[]
+          tier?: Database["public"]["Enums"]["user_tier"]
+          updated_at?: string
+          whatsapp_number?: string | null
+          whatsapp_verified?: boolean
+        }
+        Update: {
+          company_id?: string | null
+          contact_id?: string | null
+          created_at?: string
+          display_name?: string | null
+          email_verified_at?: string | null
+          full_name?: string | null
+          id?: string
+          is_active?: boolean
+          last_seen_at?: string | null
+          preferred_language?: string
+          primary_models?: string[]
+          tier?: Database["public"]["Enums"]["user_tier"]
+          updated_at?: string
+          whatsapp_number?: string | null
+          whatsapp_verified?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profiles_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "profiles_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      relationships: {
+        Row: {
+          company_id: string
+          created_at: string
+          established_at: string
+          id: string
+          is_active: boolean
+          notes: string | null
+          role: Database["public"]["Enums"]["relationship_role"]
+          updated_at: string
+          verification_status: Database["public"]["Enums"]["verification_status"]
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          established_at?: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          role: Database["public"]["Enums"]["relationship_role"]
+          updated_at?: string
+          verification_status?: Database["public"]["Enums"]["verification_status"]
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          established_at?: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          role?: Database["public"]["Enums"]["relationship_role"]
+          updated_at?: string
+          verification_status?: Database["public"]["Enums"]["verification_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "relationships_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scope_violations: {
+        Row: {
+          context: Json
+          created_at: string
+          decided_at: string | null
+          decided_by: string | null
+          description: string
+          id: string
+          severity: string
+          user_decision: string | null
+          violation_type: string
+        }
+        Insert: {
+          context?: Json
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          description: string
+          id?: string
+          severity?: string
+          user_decision?: string | null
+          violation_type: string
+        }
+        Update: {
+          context?: Json
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          description?: string
+          id?: string
+          severity?: string
+          user_decision?: string | null
+          violation_type?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          granted_at: string
+          granted_by: string | null
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
+      zyra_conversations: {
+        Row: {
+          ai_provider: string | null
+          channel: string
+          confidence: number | null
+          created_at: string
+          estimated_cost_usd: number | null
+          id: string
+          input_tokens: number | null
+          output_tokens: number | null
+          session_id: string
+          user_challenged: boolean
+          user_id: string | null
+          user_message: string
+          was_escalated: boolean
+          zyra_response: string
+        }
+        Insert: {
+          ai_provider?: string | null
+          channel?: string
+          confidence?: number | null
+          created_at?: string
+          estimated_cost_usd?: number | null
+          id?: string
+          input_tokens?: number | null
+          output_tokens?: number | null
+          session_id: string
+          user_challenged?: boolean
+          user_id?: string | null
+          user_message: string
+          was_escalated?: boolean
+          zyra_response: string
+        }
+        Update: {
+          ai_provider?: string | null
+          channel?: string
+          confidence?: number | null
+          created_at?: string
+          estimated_cost_usd?: number | null
+          id?: string
+          input_tokens?: number | null
+          output_tokens?: number | null
+          session_id?: string
+          user_challenged?: boolean
+          user_id?: string | null
+          user_message?: string
+          was_escalated?: boolean
+          zyra_response?: string
+        }
+        Relationships: []
+      }
     }
-    Views: Record<string, never>
+    Views: {
+      [_ in never]: never
+    }
     Functions: {
-      has_role: { Args: { _user_id: string; _role: AppRole }; Returns: boolean }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
       is_team_or_admin: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
-      app_role: AppRole
-      company_type: CompanyType
-      verification_status: VerificationStatus
-      product_type: ProductType
-      user_tier: UserTier
-      relationship_role: RelationshipRole
-      intel_source: IntelSource
+      app_role: "auth" | "team" | "admin"
+      company_type: "customer" | "broker" | "supplier" | "maxons_internal"
+      intel_source:
+        | "abc_position_report"
+        | "abc_shipment"
+        | "abc_forecast"
+        | "abc_almanac"
+        | "usda_nass"
+        | "strata_pricing"
+        | "broker_note"
+        | "customer_indication"
+        | "supplier_offer"
+        | "news_article"
+        | "manual_entry"
+        | "ai_synthesis"
+      product_type:
+        | "inshell"
+        | "kernel"
+        | "shelled"
+        | "blanched"
+        | "sliced"
+        | "slivered"
+        | "diced"
+      relationship_role: "crm_customer" | "brm_broker" | "srm_supplier"
+      user_tier: "guest" | "registered" | "verified" | "maxons_team"
+      verification_status:
+        | "unverified"
+        | "pending_review"
+        | "verified"
+        | "rejected"
+    }
+    CompositeTypes: {
+      [_ in never]: never
     }
   }
 }
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  public: {
+    Enums: {
+      app_role: ["auth", "team", "admin"],
+      company_type: ["customer", "broker", "supplier", "maxons_internal"],
+      intel_source: [
+        "abc_position_report",
+        "abc_shipment",
+        "abc_forecast",
+        "abc_almanac",
+        "usda_nass",
+        "strata_pricing",
+        "broker_note",
+        "customer_indication",
+        "supplier_offer",
+        "news_article",
+        "manual_entry",
+        "ai_synthesis",
+      ],
+      product_type: [
+        "inshell",
+        "kernel",
+        "shelled",
+        "blanched",
+        "sliced",
+        "slivered",
+        "diced",
+      ],
+      relationship_role: ["crm_customer", "brm_broker", "srm_supplier"],
+      user_tier: ["guest", "registered", "verified", "maxons_team"],
+      verification_status: [
+        "unverified",
+        "pending_review",
+        "verified",
+        "rejected",
+      ],
+    },
+  },
+} as const
