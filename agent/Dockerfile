@@ -25,10 +25,6 @@ RUN curl -fsSL https://github.com/supabase/cli/releases/latest/download/supabase
 # Install Claude Code (Anthropic's coding agent CLI)
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install Bun (some V3 tooling prefers it; harmless to have)
-RUN curl -fsSL https://bun.sh/install | bash && \
-    ln -s /root/.bun/bin/bun /usr/local/bin/bun
-
 # Workdir is where we clone cropsintel-v3
 WORKDIR /workspace
 
