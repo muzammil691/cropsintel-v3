@@ -124,7 +124,7 @@ If extraction fails or PDF format unexpected: write `adela_runs` with status='fa
 - COPY src/, tsconfig.json
 - RUN npx tsc (compile to dist/)
 - CMD `node dist/index.js`
-- Uses env vars: `V3_SUPABASE_URL`, `V3_SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `TWILIO_*` (for WhatsApp), `ANTHROPIC_API_KEY` (fallback for extraction if Gemini fails)
+- Uses env vars: `V3_SUPABASE_URL`, `V3_SUPABASE_SECRET_KEY`, `GEMINI_API_KEY`, `TWILIO_*` (for WhatsApp), `ANTHROPIC_API_KEY` (fallback for extraction if Gemini fails)
 
 ### README (`adela/README.md`)
 Deployment guide for Muzammil:
@@ -164,7 +164,7 @@ Re-export the new tables' types after `npx supabase gen types typescript --proje
 
 - Verify `commodities` table exists with at least an `almonds` row (it does — seeded in Phase 1.2)
 - Verify `has_role()` SQL function exists (it should — Phase 1.4 RBAC adds it; if it doesn't, write a question file BEFORE proceeding)
-- Verify env vars in Railway will include `V3_SUPABASE_SERVICE_ROLE_KEY` (the user is collecting this; if it's not set when Adela first runs, the service should log a clear error rather than panicking)
+- Verify env vars in Railway will include `V3_SUPABASE_SECRET_KEY` (Supabase's NEW key format — value starts with `sb_secret_`. This replaces the legacy `service_role` JWT. When initializing the Supabase client, pass this to the `supabase-js` library's createClient with `{ global: { headers: { apikey: SECRET_KEY, Authorization: 'Bearer ' + SECRET_KEY } } }` — the JS library was built around the JWT format so older docs may show different setup; always use the apikey header pattern with sb_secret values.)
 
 ## Notes for the agent
 
