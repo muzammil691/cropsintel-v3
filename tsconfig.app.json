@@ -21,8 +21,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Path aliases for shadcn/ui */
-    "baseUrl": ".",
+    /* Path aliases for shadcn/ui — paths resolve relative to this tsconfig file */
     "paths": {
       "@/*": ["./src/*"]
     }
