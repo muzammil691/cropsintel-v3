@@ -124,17 +124,40 @@ run_task() {
   echo "" >> "$SYSTEM_PROMPT_FILE"
   cat "$IN_PROGRESS_FILE" >> "$SYSTEM_PROMPT_FILE"
 
+  # Determine model: read `model:` frontmatter from task file, default to opus
+  # For master-plan Phase 1+2 work we want Opus 4.7 (latest), fallback Opus 4.6
+  local MODEL="${AGENT_DEFAULT_MODEL:-claude-opus-4-7}"
+  local TASK_MODEL=$(grep -m1 "^model:" "$IN_PROGRESS_FILE" | sed 's/^model:[[:space:]]*//' | tr -d '"' | tr -d "'" )
+  if [ -n "$TASK_MODEL" ]; then
+    MODEL="$TASK_MODEL"
+  fi
+  echo "$LOOP_TAG using model: $MODEL"
+
   # Run Claude Code with the system prompt
   # `--print` makes it non-interactive and exit when done
   # `--max-turns` caps how many tool-use turns it gets
+  # `--model` selects the underlying Claude model
   set +e
   claude \
     --print \
+    --model "$MODEL" \
     --max-turns 200 \
     --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
     "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
     > ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
   local CLAUDE_EXIT=$?
+  # If Opus 4.7 isn't available (model error) and we used the default, retry on Opus 4.6
+  if [ $CLAUDE_EXIT -ne 0 ] && [ "$MODEL" = "claude-opus-4-7" ]; then
+    echo "$LOOP_TAG opus-4-7 failed; retrying with opus-4-6"
+    claude \
+      --print \
+      --model "claude-opus-4-6" \
+      --max-turns 200 \
+      --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
+      "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
+      >> ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
+    CLAUDE_EXIT=$?
+  fi
   set -e
 
   # Run final build to verify
