@@ -29,10 +29,32 @@ bootstrap() {
   echo "$LOOP_TAG bootstrap starting at $(date -u +%FT%TZ)"
 
   # SSH private key from env var → ~/.ssh/id_ed25519
+  # Railway env vars sometimes store the key with literal \n strings instead
+  # of real newlines, or with CRLF endings. We normalize both before writing.
   if [ -n "$AGENT_SSH_PRIVATE_KEY" ]; then
-    echo "$AGENT_SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519
+    # printf '%b' expands \n escape sequences to real newlines if present.
+    # tr -d '\r' strips any Windows-style carriage returns.
+    printf '%b' "$AGENT_SSH_PRIVATE_KEY" | tr -d '\r' > /root/.ssh/id_ed25519
+    # Ensure file ends with newline (OpenSSH requires it)
+    [ -z "$(tail -c1 /root/.ssh/id_ed25519)" ] || echo "" >> /root/.ssh/id_ed25519
     chmod 600 /root/.ssh/id_ed25519
-    echo "$LOOP_TAG SSH key written"
+
+    # Validate the key parses correctly. If not, dump diagnostics.
+    if ssh-keygen -y -f /root/.ssh/id_ed25519 > /root/.ssh/id_ed25519.pub 2>/dev/null; then
+      echo "$LOOP_TAG SSH key written and validated"
+      echo "$LOOP_TAG public key fingerprint:"
+      ssh-keygen -lf /root/.ssh/id_ed25519
+    else
+      echo "$LOOP_TAG ERROR: SSH key failed to parse" >&2
+      echo "$LOOP_TAG First line: $(head -1 /root/.ssh/id_ed25519)" >&2
+      echo "$LOOP_TAG Last line:  $(tail -1 /root/.ssh/id_ed25519)" >&2
+      echo "$LOOP_TAG Line count: $(wc -l < /root/.ssh/id_ed25519)" >&2
+      exit 1
+    fi
+
+    # Add github.com to known_hosts so ssh doesn't prompt
+    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
+    chmod 644 /root/.ssh/known_hosts
   else
     echo "$LOOP_TAG ERROR: AGENT_SSH_PRIVATE_KEY not set" >&2
     exit 1
