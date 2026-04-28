@@ -133,6 +133,42 @@ You have full Linux shell access on the Railway VPS. Useful commands:
 | Coding conventions | `V3-CODING-INSTRUCTIONS.md` section 3 + `README.md` |
 | What V1 / V2 had | `~/Documents/Claude/Projects/Cropsintel/v3-step2-v1-audit.md` and `v3-step3-v2-audit.md` |
 | Type definitions | `src/lib/types.ts` (app-level) and `src/lib/database.types.ts` (auto-gen) |
+| **Trader workflows (15 workflows, 8 departments, 3 operating models)** | **`docs/MAXONS_Workflow_v1.md` — REQUIRED reading for any Zyra/Atlas/CRM-Intelligence task** |
+| **Runtime agents architecture** | master plan section 9 + this file's section 11 below |
+
+### 11. Runtime agents you will be building (master plan section 9.2)
+
+V3 ships ELEVEN runtime agents over phases 1-4. Each agent is a separate codebase artifact (Supabase edge function, Railway service, or React-side worker) with strict AI provider routing per master plan section 10.2. When you're given a task that touches one of these agents, look up its row first.
+
+| ID | Agent | Job | AI routing | Phase | Codebase shape |
+|---|---|---|---|---|---|
+| R1 | **Zyra** | Customer-facing chat. Tier-aware. Knows 15 workflows + 8 departments. Voice via ElevenLabs. 13 defensive+behavioral modules. | Claude Sonnet 4 default; Gemini Pro fallback; Claude Haiku for prompt defense | 1.10 | Supabase edge function `zyra-chat` + 13 module files in `supabase/functions/zyra-chat/modules/` |
+| R2 | **Adela** | Runtime nervous system. Cron-driven. Scrapes ABC, USDA NASS, USDA AMS, news, IMAP email. | Gemini Pro default; Claude for monthly briefs | 1.6 | Separate Railway service in `adela/` directory |
+| R3 | **Atlas** | Self-management. AI council debates data quality issues. Phase 4 ships own fixes. | Multi-Brain (Claude + GPT + Gemini in parallel; GPT-4o judges) | 2 | Supabase edge function `atlas-debate` + admin UI in `src/pages/admin/atlas/` |
+| R4 | **CRM Intelligence Agent** | Priority outreach, next-best-action, drafts. | Claude (nuance) + Gemini (scoring) | 2 | Edge function `crm-intel` |
+| R5 | **Quote Drafting Assistant** | Drafts subscriber enquiries / admin offer responses. | Claude generates + Gemini sanity-checks | 2 | Edge function `quote-draft` |
+| R6 | **Document Classification & Extraction** | Auto-classifies docs subscribers upload (BL, phyto, COO, invoices). | Gemini (vision) + OpenAI fallback | 3 | Edge function `doc-classify` |
+| R7 | **Predictive ETA** | Confidence band on arrival for opt-in tracked shipments. | Gemini small + custom features | 3 | Edge function `eta-predict` + cron |
+| R8 | **Anomaly Detector** | Quality decline, payment slippage, freight drift, margin erosion. | Gemini (fast scan) + Claude (root cause) | 3 | Edge function `anomaly-scan` + cron |
+| R9 | **Customer Service Backup** | Human-like AI customer service for escalations. | Claude | 3 | Edge function `cs-backup` |
+| R10 | **Verified Social Network Agent** | Phase 4. Posts analytics, comments, takes corrections inside the verified-tier social network. | Claude | 4 | Edge function `social-agent` |
+| R11 | **Self-Improvement Agent / Atlas-Pro** | Phase 4. Reads master plan, proposes plan updates, runs them by admin via WhatsApp video+OTP, ships approved changes itself. | Multi-Brain | 4 | Edge function + admin UI + WhatsApp video gate |
+
+**Agent rules (apply to every agent — master plan 9.3):**
+- Single responsibility (no overlap)
+- Every agent's actions write to `<agent>_audit_log`
+- Every agent has rate limits (V1's `zyra_rate_limits` pattern)
+- Every customer-facing agent has prompt defense (V1's `zyraPromptDefense` + `zyraInputSanitizer`)
+- Every agent that touches relationship data respects information walls
+- Every agent emits a confidence score; below threshold → flag in `<agent>_escalation_queue`
+
+**AI provider strengths cheat-sheet (master plan 10.1):**
+- **Claude** — nuanced architecture, trading reasoning, multi-step plans, customer chat (empathy), long-context analysis
+- **Gemini** — fast structured extraction, large context, routine summarization, document AI/vision
+- **OpenAI** — embeddings (vector search), consensus-judging in Multi-Brain, tool-use
+- **ElevenLabs** — voice ONLY (TTS + STT)
+
+**Cost ceilings (master plan 10.3):** Anthropic $200/mo, OpenAI $50/mo, Gemini $50/mo, ElevenLabs $100/mo. Total $400/mo AI budget. Per-user rate limits enforced. Multi-Brain budgeted (council debates only on explicit request or scheduled weekly briefs).
 
 ---
 
