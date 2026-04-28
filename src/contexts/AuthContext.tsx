@@ -6,7 +6,7 @@
 import { createContext, useEffect, useState, type ReactNode } from "react"
 import type { Session, User } from "@supabase/supabase-js"
 import { supabase } from "@/lib/supabase"
-import type { AppRole, Profile, UserTier } from "@/lib/database.types"
+import type { AppRole, Profile, UserTier } from "@/lib/types"
 
 export type AuthContextValue = {
   isLoading: boolean
