@@ -14,7 +14,7 @@ max_rows = 1000
 [db]
 port = 54322
 shadow_port = 54320
-major_version = 15
+major_version = 17
 
 [db.pooler]
 enabled = false
@@ -42,7 +42,6 @@ additional_redirect_urls = [
   "https://cropsintel.com",
 ]
 jwt_expiry = 3600
-refresh_token_rotation_enabled = true
 enable_signup = true
 enable_anonymous_sign_ins = false
 
