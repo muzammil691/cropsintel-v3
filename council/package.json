@@ -1,0 +1,28 @@
+{
+  "name": "cropsintel-council",
+  "version": "1.0.0",
+  "description": "Multi-Brain Architect — parallel AI council for CropsIntel V3",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "council": "node dist/index.js cli",
+    "council:cron-once": "node dist/index.js cron",
+    "council:server": "node dist/index.js server",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@supabase/supabase-js": "^2.49.8",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "@google/generative-ai": "^0.24.0",
+    "openai": "^4.93.0",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.14.1",
+    "typescript": "^5.8.3"
+  }
+}
