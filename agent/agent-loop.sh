@@ -85,8 +85,23 @@ bootstrap() {
     cd "$REPO_DIR" && npm ci
   fi
 
-  # Notify start
-  /usr/local/bin/notify-whatsapp.sh "🤖 CropsIntel V3 agent online" || true
+  # Rate-limit bootstrap notification. If we sent one in the last hour, skip.
+  # Prevents WhatsApp spam from container restart loops.
+  local LAST_NOTIFY_FILE="/tmp/last-bootstrap-notify"
+  local NOW_TS=$(date +%s)
+  local SHOULD_NOTIFY=1
+  if [ -f "$LAST_NOTIFY_FILE" ]; then
+    local LAST_TS=$(cat "$LAST_NOTIFY_FILE")
+    local DIFF=$((NOW_TS - LAST_TS))
+    if [ $DIFF -lt 3600 ]; then
+      SHOULD_NOTIFY=0
+      echo "$LOOP_TAG skipping bootstrap notify (last sent ${DIFF}s ago, throttle=3600s)"
+    fi
+  fi
+  if [ $SHOULD_NOTIFY -eq 1 ]; then
+    /usr/local/bin/notify-whatsapp.sh "🤖 CropsIntel V3 agent online" || true
+    echo "$NOW_TS" > "$LAST_NOTIFY_FILE"
+  fi
 
   echo "$LOOP_TAG bootstrap complete"
 }
@@ -137,13 +152,18 @@ run_task() {
   # `--print` makes it non-interactive and exit when done
   # `--max-turns` caps how many tool-use turns it gets
   # `--model` selects the underlying Claude model
+  # CRITICAL: --permission-mode bypassPermissions grants Claude ALL tools (Read/Write/Edit/Bash/etc)
+  # without prompting. Without this, claude --print runs but never actually uses tools to modify files.
+  # This was the bug causing every task to ship as "0 changes" since 2026-04-29.
+  # Reference: https://docs.claude.com/en/docs/claude-code/cli-reference
   set +e
   claude \
     --print \
     --model "$MODEL" \
     --max-turns 200 \
+    --permission-mode bypassPermissions \
     --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
-    "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
+    "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have full file write/edit/bash access — USE the Read, Write, Edit, and Bash tools to actually create and modify files. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
     > ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
   local CLAUDE_EXIT=$?
   # If Opus 4.7 isn't available (model error) and we used the default, retry on Opus 4.6
@@ -153,8 +173,9 @@ run_task() {
       --print \
       --model "claude-opus-4-6" \
       --max-turns 200 \
+      --permission-mode bypassPermissions \
       --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
-      "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
+      "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have full file write/edit/bash access — USE the Read, Write, Edit, and Bash tools to actually create and modify files. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
       >> ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
     CLAUDE_EXIT=$?
   fi
@@ -177,12 +198,16 @@ run_task() {
   fi
 
   if [ $BUILD_EXIT -eq 0 ] && [ $QUESTION_EXISTS -eq 0 ]; then
-    # Success: commit + push + move to done
     echo "$LOOP_TAG task $TASK_NAME succeeded in ${DURATION}s"
     cd "$REPO_DIR"
     git add -A
+
+    # Detect REAL work vs empty commit. Count meaningful changes (not just task file moves).
+    local CHANGED_FILES=$(git diff --cached --name-only | grep -v '^\.agent/tasks/' | wc -l | tr -d ' ')
+    echo "$LOOP_TAG meaningful files changed: $CHANGED_FILES"
+
     if ! git diff --cached --quiet; then
-      git commit -m "feat: $TASK_NAME (autonomous agent, ${DURATION}s)"
+      git commit -m "feat: $TASK_NAME (autonomous agent, ${DURATION}s, $CHANGED_FILES files)"
       git push origin main || {
         echo "$LOOP_TAG push failed"
         /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
@@ -194,7 +219,14 @@ run_task() {
     git add .agent/
     git commit -m "chore(agent): $TASK_NAME → done" || true
     git push origin main || true
-    /usr/local/bin/notify-whatsapp.sh "✅ Agent shipped: $TASK_NAME (${DURATION}s)" || true
+
+    # Only notify if real work was shipped. An empty-commit run is a BUG, not a success.
+    if [ "$CHANGED_FILES" -gt 0 ]; then
+      /usr/local/bin/notify-whatsapp.sh "✅ Agent shipped: $TASK_NAME (${DURATION}s, $CHANGED_FILES files)" || true
+    else
+      echo "$LOOP_TAG SUSPICIOUS: $TASK_NAME marked done but ZERO meaningful files changed"
+      /usr/local/bin/notify-whatsapp.sh "⚠️ $TASK_NAME marked done but produced 0 file changes — agent likely failed silently. Investigate." || true
+    fi
   else
     # Failure or question raised
     echo "$LOOP_TAG task $TASK_NAME stopped (build_exit=$BUILD_EXIT, question=$QUESTION_EXISTS)"
