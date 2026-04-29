@@ -52,3 +52,4 @@ echo "[memory-entrypoint] REPO_ROOT=$REPO_ROOT"
 cd /app
 echo "[memory-entrypoint] starting memory: ${@:-server}"
 exec node dist/index.js "${@:-server}"
+
