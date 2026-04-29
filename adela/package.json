@@ -1,0 +1,26 @@
+{
+  "name": "cropsintel-adela",
+  "version": "1.0.0",
+  "description": "Adela — CropsIntel V3 runtime nervous system (cron scraper service)",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.0",
+    "@supabase/supabase-js": "^2.49.4",
+    "cheerio": "^1.0.0",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cheerio": "^0.22.35",
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "typescript": "^5.7.3"
+  }
+}
