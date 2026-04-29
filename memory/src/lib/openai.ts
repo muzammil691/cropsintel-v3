@@ -13,8 +13,12 @@ export function getOpenAIClient(): OpenAI {
 }
 
 // text-embedding-3-large: $0.00013 per 1K tokens
+// Native dim is 3072 but we matryoshka-reduce to 1536 because pgvector
+// HNSW indexes max out at 2000 dimensions. text-embedding-3-large supports
+// passing `dimensions: 1536` to OpenAI which truncates server-side while
+// preserving most semantic quality (matryoshka representation learning).
 export const EMBEDDING_MODEL = 'text-embedding-3-large'
-export const EMBEDDING_DIMENSIONS = 3072
+export const EMBEDDING_DIMENSIONS = 1536
 export const COST_PER_1K_TOKENS = 0.00013
 
 export function estimateTokens(text: string): number {
