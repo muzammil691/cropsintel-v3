@@ -134,37 +134,45 @@ run_task() {
   fi
   echo "$LOOP_TAG using model: $MODEL"
 
-  # CRITICAL: combine MULTIPLE permission strategies because the bug previously
-  # was that claude --print silently produced 0 file changes for every task.
-  # Belt + suspenders: explicit --allowedTools list + --permission-mode +
-  # --dangerously-skip-permissions (legacy). At least one should grant tool access.
+  # DIAGNOSTIC PASS: dump claude version + help BEFORE the actual run.
+  # Tasks completing in 2-7s post-fix #1 means flags were rejected. We need to
+  # SEE what flags this version of claude-code accepts. Output goes to log file.
+  local LOG=".agent/tasks/in-progress/$TASK_NAME.log"
+  {
+    echo "=== AGENT-LOOP DIAGNOSTIC for $TASK_NAME at $(date -u +%FT%TZ) ==="
+    echo "--- claude --version ---"
+    claude --version 2>&1
+    echo ""
+    echo "--- claude --help ---"
+    claude --help 2>&1
+    echo ""
+    echo "--- node --version ---"
+    node --version 2>&1
+    echo ""
+    echo "--- which claude ---"
+    which claude 2>&1
+    echo ""
+    echo "--- npm root -g ---"
+    npm root -g 2>&1
+    echo ""
+    echo "=== END DIAGNOSTIC ==="
+    echo ""
+  } > "$LOG"
+
+  # MINIMAL invocation. Removed --permission-mode (suspected invalid in this version).
+  # Use only --dangerously-skip-permissions (well-documented in claude-code docs since v0.x).
+  # This is the same flag Anthropic recommends for CI/CD use of claude-code.
   set +e
   claude \
     --print \
     --model "$MODEL" \
     --max-turns 200 \
-    --permission-mode bypassPermissions \
     --dangerously-skip-permissions \
-    --allowedTools "Read,Write,Edit,Bash,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task" \
     --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
-    "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have FULL file write/edit/bash access. You MUST use the Write tool to create files, the Edit tool to modify files, and the Bash tool to run commands. Do NOT just produce text output — actually invoke tools. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
-    > ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
+    "Read .agent/tasks/in-progress/$TASK_NAME.md and execute the task spec FULLY. Use the Write tool to create new files. Use the Edit tool to modify existing files. Use the Bash tool to run commands. When the task spec says 'create file X', actually call Write with that filename. When done, run 'npm run build' via Bash to verify. If green, exit. If errors, fix up to 5 times." \
+    >> "$LOG" 2>&1
   local CLAUDE_EXIT=$?
-  # If Opus 4.7 isn't available (model error) and we used the default, retry on Opus 4.6
-  if [ $CLAUDE_EXIT -ne 0 ] && [ "$MODEL" = "claude-opus-4-7" ]; then
-    echo "$LOOP_TAG opus-4-7 failed; retrying with opus-4-6"
-    claude \
-      --print \
-      --model "claude-opus-4-6" \
-      --max-turns 200 \
-      --permission-mode bypassPermissions \
-      --dangerously-skip-permissions \
-      --allowedTools "Read,Write,Edit,Bash,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task" \
-      --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
-      "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have FULL file write/edit/bash access. You MUST use the Write tool to create files, the Edit tool to modify files, and the Bash tool to run commands. Do NOT just produce text output — actually invoke tools. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
-      >> ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
-    CLAUDE_EXIT=$?
-  fi
+  echo "$LOOP_TAG claude exit code: $CLAUDE_EXIT" >> "$LOG"
   set -e
 
   # CRITICAL DEBUG: persist the log file to git so we can see what Claude actually said
