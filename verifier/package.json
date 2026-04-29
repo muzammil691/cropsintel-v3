@@ -1,0 +1,28 @@
+{
+  "name": "cropsintel-v3-verifier",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automated quality gate for CropsIntel V3 agent-delivered tasks",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "audit": "node dist/index.js audit",
+    "audit:all": "node dist/index.js audit-all",
+    "gate": "node dist/index.js gate",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "npx ts-node --esm src/index.ts"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.0",
+    "@supabase/supabase-js": "^2.105.1",
+    "commander": "^12.1.0",
+    "openai": "^4.103.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^2.0.0"
+  }
+}
