@@ -44,3 +44,4 @@ echo "[verifier-entrypoint] REPO_ROOT=$REPO_ROOT"
 cd /app
 echo "[verifier-entrypoint] starting verifier: ${@:-audit-all}"
 exec node dist/index.js "${@:-audit-all}"
+
