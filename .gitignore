@@ -7,6 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Whitelist: agent execution logs (we WANT these in git for debugging)
+!.agent/tasks/logs/
+!.agent/tasks/logs/*.log
+
 node_modules
 dist
 dist-ssr

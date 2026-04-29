@@ -85,25 +85,11 @@ bootstrap() {
     cd "$REPO_DIR" && npm ci
   fi
 
-  # Rate-limit bootstrap notification. If we sent one in the last hour, skip.
-  # Prevents WhatsApp spam from container restart loops.
-  local LAST_NOTIFY_FILE="/tmp/last-bootstrap-notify"
-  local NOW_TS=$(date +%s)
-  local SHOULD_NOTIFY=1
-  if [ -f "$LAST_NOTIFY_FILE" ]; then
-    local LAST_TS=$(cat "$LAST_NOTIFY_FILE")
-    local DIFF=$((NOW_TS - LAST_TS))
-    if [ $DIFF -lt 3600 ]; then
-      SHOULD_NOTIFY=0
-      echo "$LOOP_TAG skipping bootstrap notify (last sent ${DIFF}s ago, throttle=3600s)"
-    fi
-  fi
-  if [ $SHOULD_NOTIFY -eq 1 ]; then
-    /usr/local/bin/notify-whatsapp.sh "🤖 CropsIntel V3 agent online" || true
-    echo "$NOW_TS" > "$LAST_NOTIFY_FILE"
-  fi
-
-  echo "$LOOP_TAG bootstrap complete"
+  # Bootstrap notification REMOVED. Railway containers can restart frequently
+  # (deploy churn, idle timeout, OOM), and ephemeral /tmp + /root mean no persistent
+  # rate-limit works. WhatsApp spam during restart loops is worse than missing
+  # a startup ping. We only notify on task ship/fail/question now.
+  echo "$LOOP_TAG bootstrap complete (no startup whatsapp — see logs only)"
 }
 
 # -----------------------------------------------------------------------------
@@ -148,22 +134,20 @@ run_task() {
   fi
   echo "$LOOP_TAG using model: $MODEL"
 
-  # Run Claude Code with the system prompt
-  # `--print` makes it non-interactive and exit when done
-  # `--max-turns` caps how many tool-use turns it gets
-  # `--model` selects the underlying Claude model
-  # CRITICAL: --permission-mode bypassPermissions grants Claude ALL tools (Read/Write/Edit/Bash/etc)
-  # without prompting. Without this, claude --print runs but never actually uses tools to modify files.
-  # This was the bug causing every task to ship as "0 changes" since 2026-04-29.
-  # Reference: https://docs.claude.com/en/docs/claude-code/cli-reference
+  # CRITICAL: combine MULTIPLE permission strategies because the bug previously
+  # was that claude --print silently produced 0 file changes for every task.
+  # Belt + suspenders: explicit --allowedTools list + --permission-mode +
+  # --dangerously-skip-permissions (legacy). At least one should grant tool access.
   set +e
   claude \
     --print \
     --model "$MODEL" \
     --max-turns 200 \
     --permission-mode bypassPermissions \
+    --dangerously-skip-permissions \
+    --allowedTools "Read,Write,Edit,Bash,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task" \
     --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
-    "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have full file write/edit/bash access — USE the Read, Write, Edit, and Bash tools to actually create and modify files. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
+    "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have FULL file write/edit/bash access. You MUST use the Write tool to create files, the Edit tool to modify files, and the Bash tool to run commands. Do NOT just produce text output — actually invoke tools. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
     > ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
   local CLAUDE_EXIT=$?
   # If Opus 4.7 isn't available (model error) and we used the default, retry on Opus 4.6
@@ -174,12 +158,28 @@ run_task() {
       --model "claude-opus-4-6" \
       --max-turns 200 \
       --permission-mode bypassPermissions \
+      --dangerously-skip-permissions \
+      --allowedTools "Read,Write,Edit,Bash,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task" \
       --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
-      "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have full file write/edit/bash access — USE the Read, Write, Edit, and Bash tools to actually create and modify files. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
+      "Read .agent/tasks/in-progress/$TASK_NAME.md and execute it. You have FULL file write/edit/bash access. You MUST use the Write tool to create files, the Edit tool to modify files, and the Bash tool to run commands. Do NOT just produce text output — actually invoke tools. When done, run 'npm run build' to verify. If green, stop. If errors, fix and retry up to 5 times. If you hit an architectural decision you can't make, write a question file to .agent/questions/$TASK_NAME-q.md describing the question, then stop." \
       >> ".agent/tasks/in-progress/$TASK_NAME.log" 2>&1
     CLAUDE_EXIT=$?
   fi
   set -e
+
+  # CRITICAL DEBUG: persist the log file to git so we can see what Claude actually said
+  mkdir -p .agent/tasks/logs
+  cp ".agent/tasks/in-progress/$TASK_NAME.log" ".agent/tasks/logs/$TASK_NAME-$(date +%s).log" 2>/dev/null
+  # Truncate huge logs (keep first + last 50KB)
+  if [ -f ".agent/tasks/logs/$TASK_NAME-$(date +%s).log" ]; then
+    local LOGFILE=".agent/tasks/logs/$TASK_NAME-$(date +%s).log"
+    if [ $(stat -c%s "$LOGFILE" 2>/dev/null || stat -f%z "$LOGFILE") -gt 100000 ]; then
+      head -c 50000 "$LOGFILE" > "$LOGFILE.tmp"
+      echo "...[TRUNCATED]..." >> "$LOGFILE.tmp"
+      tail -c 50000 "$LOGFILE" >> "$LOGFILE.tmp"
+      mv "$LOGFILE.tmp" "$LOGFILE"
+    fi
+  fi
 
   # Run final build to verify
   echo "$LOOP_TAG verifying build for $TASK_NAME"
