@@ -34,27 +34,27 @@ bootstrap() {
   if [ -n "$AGENT_SSH_PRIVATE_KEY" ]; then
     # printf '%b' expands \n escape sequences to real newlines if present.
     # tr -d '\r' strips any Windows-style carriage returns.
-    printf '%b' "$AGENT_SSH_PRIVATE_KEY" | tr -d '\r' > /root/.ssh/id_ed25519
+    printf '%b' "$AGENT_SSH_PRIVATE_KEY" | tr -d '\r' > /home/claudeagent/.ssh/id_ed25519
     # Ensure file ends with newline (OpenSSH requires it)
-    [ -z "$(tail -c1 /root/.ssh/id_ed25519)" ] || echo "" >> /root/.ssh/id_ed25519
-    chmod 600 /root/.ssh/id_ed25519
+    [ -z "$(tail -c1 /home/claudeagent/.ssh/id_ed25519)" ] || echo "" >> /home/claudeagent/.ssh/id_ed25519
+    chmod 600 /home/claudeagent/.ssh/id_ed25519
 
     # Validate the key parses correctly. If not, dump diagnostics.
-    if ssh-keygen -y -f /root/.ssh/id_ed25519 > /root/.ssh/id_ed25519.pub 2>/dev/null; then
+    if ssh-keygen -y -f /home/claudeagent/.ssh/id_ed25519 > /home/claudeagent/.ssh/id_ed25519.pub 2>/dev/null; then
       echo "$LOOP_TAG SSH key written and validated"
       echo "$LOOP_TAG public key fingerprint:"
-      ssh-keygen -lf /root/.ssh/id_ed25519
+      ssh-keygen -lf /home/claudeagent/.ssh/id_ed25519
     else
       echo "$LOOP_TAG ERROR: SSH key failed to parse" >&2
-      echo "$LOOP_TAG First line: $(head -1 /root/.ssh/id_ed25519)" >&2
-      echo "$LOOP_TAG Last line:  $(tail -1 /root/.ssh/id_ed25519)" >&2
-      echo "$LOOP_TAG Line count: $(wc -l < /root/.ssh/id_ed25519)" >&2
+      echo "$LOOP_TAG First line: $(head -1 /home/claudeagent/.ssh/id_ed25519)" >&2
+      echo "$LOOP_TAG Last line:  $(tail -1 /home/claudeagent/.ssh/id_ed25519)" >&2
+      echo "$LOOP_TAG Line count: $(wc -l < /home/claudeagent/.ssh/id_ed25519)" >&2
       exit 1
     fi
 
     # Add github.com to known_hosts so ssh doesn't prompt
-    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
-    chmod 644 /root/.ssh/known_hosts
+    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /home/claudeagent/.ssh/known_hosts 2>/dev/null
+    chmod 644 /home/claudeagent/.ssh/known_hosts
   else
     echo "$LOOP_TAG ERROR: AGENT_SSH_PRIVATE_KEY not set" >&2
     exit 1
@@ -159,15 +159,19 @@ run_task() {
     echo ""
   } > "$LOG"
 
-  # MINIMAL invocation. Removed --permission-mode (suspected invalid in this version).
-  # Use only --dangerously-skip-permissions (well-documented in claude-code docs since v0.x).
-  # This is the same flag Anthropic recommends for CI/CD use of claude-code.
+  # Now running as non-root (UID 1001 'claudeagent') — safe to use --dangerously-skip-permissions.
+  # Triple-redundant tool grants:
+  #   --dangerously-skip-permissions = bypass all permission checks (now allowed since non-root)
+  #   --permission-mode bypassPermissions = backup permission mode
+  #   --tools default = explicit "use all built-in tools"
   set +e
   claude \
     --print \
     --model "$MODEL" \
     --max-turns 200 \
     --dangerously-skip-permissions \
+    --permission-mode bypassPermissions \
+    --tools default \
     --append-system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
     "Read .agent/tasks/in-progress/$TASK_NAME.md and execute the task spec FULLY. Use the Write tool to create new files. Use the Edit tool to modify existing files. Use the Bash tool to run commands. When the task spec says 'create file X', actually call Write with that filename. When done, run 'npm run build' via Bash to verify. If green, exit. If errors, fix up to 5 times." \
     >> "$LOG" 2>&1
