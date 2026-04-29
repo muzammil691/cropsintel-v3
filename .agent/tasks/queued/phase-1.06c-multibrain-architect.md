@@ -57,16 +57,27 @@ council/
 Write `supabase/migrations/20260429xxxxxx_council.sql`:
 
 ```sql
--- Audit log for every council invocation
+-- Audit log for every council invocation (BOTH quick and deep modes)
 CREATE TABLE IF NOT EXISTS public.council_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   mode text NOT NULL CHECK (mode IN ('cli','auto-task-writer','runtime')),
+  depth text NOT NULL CHECK (depth IN ('quick','deep')),
   question text NOT NULL,
   context jsonb DEFAULT '{}'::jsonb,
-  claude_response jsonb,
-  gpt_response jsonb,
-  gemini_response jsonb,
-  judge_response jsonb,
+  -- Quick mode columns (null for deep)
+  quick_claude jsonb,
+  quick_gpt jsonb,
+  quick_gemini jsonb,
+  quick_judge jsonb,
+  -- Deep mode columns (null for quick)
+  pair_session_1 jsonb,    -- {pair: ['claude','gpt'], reviewer: 'gemini', dialogue: [...], solution, review}
+  pair_session_2 jsonb,
+  pair_session_3 jsonb,
+  tri_council jsonb,        -- {round1, round2, round3, votes, decision}
+  validation_claude jsonb,
+  validation_gpt jsonb,
+  validation_gemini jsonb,
+  -- Common
   final_decision text NOT NULL,
   confidence numeric,
   cost_usd numeric NOT NULL DEFAULT 0,
@@ -113,19 +124,24 @@ ALTER TABLE public.council_budget ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Team can read budget" ON public.council_budget FOR SELECT USING (public.has_role(auth.uid(), 'team'));
 ```
 
-### Core dispatcher (`council/src/council.ts`)
+### Core dispatcher — TWO modes (`council/src/council.ts`)
+
+The Council supports two modes per user instruction 2026-04-29:
+
+**Mode 1 — Quick (Parallel + Judge):** ~$0.50 per call, ~30s wall time. For routine task-spec generation, simple architectural questions.
+
+**Mode 2 — Deep (Round-Robin Pair Sessions + Tri-Council + Research):** ~$3-5 per call, ~5-8 min wall time. For genuine architectural decisions, hard problems where blindspots matter.
 
 ```typescript
-import { askClaude } from './providers/claude'
-import { askOpenAI } from './providers/openai'
-import { askGemini } from './providers/gemini'
-import { judgeWithGPT4o } from './providers/openai'
-import { recordRun, checkBudget } from './lib/audit'
+import { askClaude, pairSession_Claude } from './providers/claude'
+import { askOpenAI, judgeWithGPT4o, pairSession_GPT } from './providers/openai'
+import { askGemini, pairSession_Gemini } from './providers/gemini'
 
 export interface CouncilInput {
   question: string
   context?: Record<string, unknown>
   mode: 'cli' | 'auto-task-writer' | 'runtime'
+  depth: 'quick' | 'deep'   // NEW — defaults: cli/runtime=quick, --deep flag = deep
   invokedBy?: string
 }
 
@@ -134,65 +150,218 @@ export interface CouncilOutput {
   confidence: number
   costUsd: number
   durationMs: number
-  responses: { claude: string; gpt: string; gemini: string; judge: string }
+  depth: 'quick' | 'deep'
+  trace: QuickTrace | DeepTrace
   runId: string
 }
 
-export async function council(input: CouncilInput): Promise<CouncilOutput> {
-  await checkBudget()  // throws if over $50/mo cap
-  const startedAt = Date.now()
-
-  // STEP 1: Parallel calls to all 3 AIs
+// ─── QUICK MODE (parallel + judge) ───────────────────────────────────
+async function quickCouncil(input: CouncilInput): Promise<CouncilOutput> {
   const [claudeRes, gptRes, geminiRes] = await Promise.allSettled([
     askClaude(input.question, input.context),
     askOpenAI(input.question, input.context),
     askGemini(input.question, input.context),
   ])
+  const judgeRes = await judgeWithGPT4o({ ... })
+  return { ..., depth: 'quick' }
+}
 
-  // STEP 2: GPT-4o synthesizes
-  const judgeRes = await judgeWithGPT4o({
+// ─── DEEP MODE (round-robin pair sessions per user's 2026-04-29 design) ──
+async function deepCouncil(input: CouncilInput): Promise<CouncilOutput> {
+  // PHASE 1 — Three rotating pair sessions
+  // Each pair session = 5-7 turn dialogue between 2 AIs
+  // Then the 3rd AI reviews the resulting solution
+  const session1 = await pairSession({
+    pair: ['claude', 'gpt'],
+    reviewer: 'gemini',
     question: input.question,
-    claudeResponse: claudeRes.status === 'fulfilled' ? claudeRes.value : `(failed: ${claudeRes.reason})`,
-    gptResponse:    gptRes.status    === 'fulfilled' ? gptRes.value    : `(failed: ${gptRes.reason})`,
-    geminiResponse: geminiRes.status === 'fulfilled' ? geminiRes.value : `(failed: ${geminiRes.reason})`,
+    context: input.context,
+    maxTurns: 6,
+  })
+  const session2 = await pairSession({
+    pair: ['claude', 'gemini'],
+    reviewer: 'gpt',
+    question: input.question,
+    context: input.context,
+    maxTurns: 6,
+  })
+  const session3 = await pairSession({
+    pair: ['gpt', 'gemini'],
+    reviewer: 'claude',
+    question: input.question,
+    context: input.context,
+    maxTurns: 6,
   })
 
-  const out: CouncilOutput = {
-    finalDecision: judgeRes.synthesized,
-    confidence: judgeRes.confidence,
-    costUsd: judgeRes.totalCostUsd,
-    durationMs: Date.now() - startedAt,
-    responses: {
-      claude: claudeRes.status === 'fulfilled' ? claudeRes.value : '',
-      gpt:    gptRes.status    === 'fulfilled' ? gptRes.value    : '',
-      gemini: geminiRes.status === 'fulfilled' ? geminiRes.value : '',
-      judge:  judgeRes.synthesized,
-    },
-    runId: '',
-  }
+  // PHASE 2 — Tri-council
+  // All 3 AIs see all 3 solutions + all 3 reviews
+  // Each AI proposes synthesis; iterate up to 3 negotiation rounds
+  const triCouncilResult = await triCouncil({
+    sessions: [session1, session2, session3],
+    maxNegotiationRounds: 3,
+  })
 
-  // STEP 3: Audit
-  out.runId = await recordRun(input, out)
-  return out
+  // PHASE 3 — Research validation
+  // Each AI independently researches the chosen approach
+  // Validates assumptions, finds known anti-patterns, suggests refinements
+  const validation = await Promise.all([
+    askClaude(`Validate this approach: ${triCouncilResult.decision}`, { ...input.context, role: 'validator' }),
+    askOpenAI(`Validate this approach: ${triCouncilResult.decision}`, { ...input.context, role: 'validator' }),
+    askGemini(`Validate this approach: ${triCouncilResult.decision}`, { ...input.context, role: 'validator' }),
+  ])
+
+  return {
+    finalDecision: triCouncilResult.decision,
+    confidence: triCouncilResult.confidence,
+    costUsd: ...,
+    durationMs: ...,
+    depth: 'deep',
+    trace: {
+      pairSessions: [session1, session2, session3],
+      triCouncil: triCouncilResult,
+      validation,
+    },
+    runId: ...,
+  }
+}
+
+// Public entry point — routes by depth
+export async function council(input: CouncilInput): Promise<CouncilOutput> {
+  await checkBudget()
+  const startedAt = Date.now()
+
+  const result = input.depth === 'deep'
+    ? await deepCouncil(input)
+    : await quickCouncil(input)
+
+  result.durationMs = Date.now() - startedAt
+  result.runId = await recordRun(input, result)
+  return result
 }
 ```
 
-(Provider files implement `askClaude/askOpenAI/askGemini` using their respective SDKs. Each returns a string answer + cost estimate.)
+### Pair session protocol (the core of Deep mode)
+
+Each pair session runs a 5-7 turn dialogue between 2 AIs. The system orchestrates by alternating speaker:
+
+```
+Turn 1: AI-A proposes initial solution given the question + context
+Turn 2: AI-B critiques + offers improvements
+Turn 3: AI-A revises based on AI-B's feedback
+Turn 4: AI-B critiques the revision
+Turn 5: AI-A finalizes
+Turn 6: AI-B confirms or pushes for one more iteration
+[max 7 turns]
+
+Output: a single "solution doc" representing the joint conclusion
+```
+
+The orchestrator (a function in `pair-session.ts`) maintains the conversation history and feeds each AI the cumulative dialogue + a clear prompt about whose turn it is. NO AI sees the other pair's session until Phase 2.
+
+### Reviewer (3rd AI per session)
+
+After each pair session completes, the 3rd AI reads the solution doc and writes a structured review:
+
+```
+{
+  strengths: string[],            // what the pair got right
+  weaknesses: string[],           // gaps or risks
+  blindspots: string[],           // things the pair didn't consider
+  alternatives_to_consider: string[],
+  overall_quality_score: 0-1,
+  detailed_critique: string       // free-form analysis
+}
+```
+
+The reviewer does NOT propose a competing solution — that role is reserved for the tri-council in Phase 2.
+
+### Tri-council (Phase 2 of Deep mode)
+
+All 3 AIs receive: 3 solution docs + 3 reviews. Each AI is asked to:
+
+1. Pick its favorite solution + reasoning
+2. Identify common ground across all 3
+3. Identify disagreements worth resolving (and how)
+4. Propose synthesis combining best parts
+
+The orchestrator runs up to 3 "negotiation rounds":
+- Round 1: each AI submits initial position
+- Round 2: each AI sees the others' positions; can revise
+- Round 3: each AI casts final vote
+
+If 2+ AIs converge on the same synthesis, that's the decision. If not, GPT-4o serves as tiebreaker (NOT a decider — only invoked on deadlock).
+
+### Research validation (Phase 3 of Deep mode)
+
+Each AI independently researches the chosen decision:
+- Validates technical assumptions (e.g., "does Supabase actually support X feature?")
+- Searches for known anti-patterns / past mistakes
+- Cross-references with cropsintel-v3-master-plan.md and docs/MAXONS_Workflow_v1.md
+- Suggests refinements
+
+The 3 validation passes are appended to the ADR.
+
+### Output: ADR markdown
+
+Final output is an Architecture Decision Record:
+
+```markdown
+# ADR-NNN: <decision title>
+
+**Status:** Proposed | Accepted | Rejected
+**Date:** 2026-04-29
+**Council depth:** Deep
+**Confidence:** 0.87
+**Total cost:** $4.12
+**Wall time:** 6m 23s
+
+## Context
+<the question + relevant context>
+
+## Decision
+<the synthesized final decision>
+
+## Pair session results
+- Session 1 (Claude+GPT, reviewed by Gemini): summary + review summary
+- Session 2 (Claude+Gemini, reviewed by GPT): summary + review summary
+- Session 3 (GPT+Gemini, reviewed by Claude): summary + review summary
+
+## Tri-council synthesis
+<how the three pair-results converged into the final decision>
+
+## Research validation
+- Claude's validation findings
+- GPT's validation findings
+- Gemini's validation findings
+
+## Consequences
+<what changes when this decision is implemented>
+
+## Full audit trail
+council_runs.id = <uuid> in V3 Supabase
+```
+
+(Provider files implement `askClaude/askOpenAI/askGemini` for one-shot calls, plus `pairSession_*` for multi-turn dialogue using each SDK's chat/messages API.)
 
 ### Mode 1: CLI
 - `package.json` script: `"council": "node dist/index.js cli"`
-- Usage: `cd council && npm run council "Should we use Tailwind v4 or v3 for V3?"`
+- Usage:
+  - Quick: `cd council && npm run council "Should we use Tailwind v4 or v3?"`
+  - Deep: `cd council && npm run council "How should we architect Zyra's 13 modules?" --deep`
 - Outputs: ADR markdown to stdout + writes to `architecture_decisions` table
-- Exit code: 0 if council succeeded; 1 if any AI failed but judge still produced an answer; 2 if catastrophic
+- Exit code: 0 if council succeeded; 1 if any AI failed but final decision still produced; 2 if catastrophic
+- Deep mode prints progress: "Session 1/3 (Claude+GPT vs Gemini-reviewer)... done [82s]" so the user can watch live
 
-### Mode 2: Auto-task-writer (cron)
+### Mode 2: Auto-task-writer (cron) — uses QUICK mode for cost control
 - Reads `master-plan.md` (mounted into container) + parses section 11.2 phase rows
 - Cross-references against `.agent/tasks/done/` and `.agent/tasks/queued/`
-- For each phase that's NOT done and NOT queued, generates a task spec via Council
+- For each phase that's NOT done and NOT queued, generates a task spec via **Quick Council**
 - Writes file to `.agent/tasks/queued/phase-X.YY-name.md`
 - Commits + pushes (uses agent SSH key)
 - Schedule: `0 4 * * *` (daily 04:00 UTC, before agent's main loop wakes)
 - LIMIT: max 1 new task spec per day to avoid flooding (review window for Muzammil)
+- Cost: ~$0.50/day = ~$15/month
+- IF a generated task contains an architectural decision (e.g. "should X use library A or B?"), the auto-task-writer marks the spec with a flag that triggers Deep Council on the first agent execution of that task
 
 ### Mode 3: HTTP server (for V3 runtime use later)
 - Express server on port 8080
@@ -238,13 +407,15 @@ export async function council(input: CouncilInput): Promise<CouncilOutput> {
    - `@anthropic-ai/sdk`
    - `openai`
    - `@google/generative-ai`
-4. The `council()` function works end-to-end with a test question — produces output where all 4 AI responses are real (not mocked)
-5. Cost tracking: each call records spent_usd correctly; budget table updated
-6. Migration creates `council_runs`, `architecture_decisions`, `council_budget` tables with RLS
-7. README.md is detailed enough for user to deploy as 2nd Railway service without follow-up questions
-8. The first run of auto-task-writer (manual trigger via `npm run council:cron-once`) generates a task spec for one of the master plan's pending phases (e.g., 1.7 Position reports analytics layer)
-9. `npm run build` (V3 root) still passes
-10. Conventional commits: ~6 commits (schema, providers, council core, modes, README, e2e test)
+4. **Quick mode** works end-to-end with a test question (4 AI calls, ~30s, ADR written)
+5. **Deep mode** works end-to-end with a test question. All three pair sessions execute (verifiable in `pair_session_*` jsonb columns). Tri-council converges. Validation runs. ADR includes full trace.
+6. Cost tracking: each call records spent_usd correctly; budget table updated; alerts at 80% and 100%
+7. Migration creates `council_runs`, `architecture_decisions`, `council_budget` tables with RLS
+8. README.md is detailed enough for user to deploy as 2nd Railway service without follow-up questions
+9. The first run of auto-task-writer (manual trigger via `npm run council:cron-once`) generates a task spec for one of the master plan's pending phases using QUICK mode
+10. The Deep mode test produces a real ADR with all phases visible — user can read the dialogue from each pair session and see how the tri-council reached consensus
+11. `npm run build` (V3 root) still passes
+12. Conventional commits: ~8 commits (schema, providers, quick mode, deep mode, pair sessions, tri-council, modes/CLI/cron/server, README + e2e tests)
 
 ## Foundation check (BEFORE starting)
 
