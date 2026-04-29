@@ -10,7 +10,7 @@
 **Model for BUILDING this verifier code:** claude-opus-4-7
 **Model that the verifier USES at runtime:** OpenAI o3 + Gemini 2.5 Pro (NEVER Claude)
 
-model: claude-opus-4-7
+model: claude-sonnet-4-6
 
 ---
 

@@ -6,7 +6,7 @@
 **Estimated effort:** ~10-15 hours
 **Model:** claude-opus-4-7
 
-model: claude-opus-4-7
+model: claude-sonnet-4-6
 
 ---
 

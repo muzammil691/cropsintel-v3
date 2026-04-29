@@ -5,7 +5,7 @@
 **Estimated effort:** ~12-18 hours of agent work; iterate. Multiple Claude Code invocations expected.
 **Model:** claude-opus-4-7
 
-model: claude-opus-4-7
+model: claude-sonnet-4-6
 
 ---
 
