@@ -112,6 +112,9 @@ run_task() {
 
   cd "$REPO_DIR"
 
+  # Capture HEAD before claude runs so we can detect commits made during the task
+  local HEAD_BEFORE=$(git rev-parse HEAD)
+
   # Move task to in-progress
   mkdir -p .agent/tasks/in-progress
   mv "$TASK_FILE" ".agent/tasks/in-progress/$TASK_NAME.md"
@@ -214,9 +217,17 @@ run_task() {
     cd "$REPO_DIR"
     git add -A
 
-    # Detect REAL work vs empty commit. Count meaningful changes (not just task file moves).
-    local CHANGED_FILES=$(git diff --cached --name-only | grep -v '^\.agent/tasks/' | wc -l | tr -d ' ')
-    echo "$LOOP_TAG meaningful files changed: $CHANGED_FILES"
+    # Detect REAL work vs empty commit. Compare HEAD before vs after — Claude often
+    # commits + pushes within its own session, so the staged-changes check after
+    # Claude returns is empty (everything already committed). Compare HEAD instead.
+    local HEAD_AFTER=$(git rev-parse HEAD)
+    if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
+      local CHANGED_FILES=$(git diff --name-only "$HEAD_BEFORE" "$HEAD_AFTER" | grep -v '^\.agent/tasks/' | wc -l | tr -d ' ')
+      echo "$LOOP_TAG claude pushed $((CHANGED_FILES)) meaningful files between $HEAD_BEFORE and $HEAD_AFTER"
+    else
+      local CHANGED_FILES=$(git diff --cached --name-only | grep -v '^\.agent/tasks/' | wc -l | tr -d ' ')
+      echo "$LOOP_TAG no commits made by claude; staged files: $CHANGED_FILES"
+    fi
 
     if ! git diff --cached --quiet; then
       git commit -m "feat: $TASK_NAME (autonomous agent, ${DURATION}s, $CHANGED_FILES files)"
