@@ -30,6 +30,12 @@ export type AgentAuditLog = Database["public"]["Tables"]["agent_audit_log"]["Row
 export type AgentRateLimit = Database["public"]["Tables"]["agent_rate_limits"]["Row"]
 export type ScopeViolation = Database["public"]["Tables"]["scope_violations"]["Row"]
 
+// Adela runtime tables
+export type PositionReport = Database["public"]["Tables"]["position_reports"]["Row"]
+export type PositionReportInsert = Database["public"]["Tables"]["position_reports"]["Insert"]
+export type AdelaRun = Database["public"]["Tables"]["adela_runs"]["Row"]
+export type AdelaRunInsert = Database["public"]["Tables"]["adela_runs"]["Insert"]
+
 // Insert / Update variants — use when writing to the DB
 export type CommodityInsert = Database["public"]["Tables"]["commodities"]["Insert"]
 export type CompanyInsert = Database["public"]["Tables"]["companies"]["Insert"]

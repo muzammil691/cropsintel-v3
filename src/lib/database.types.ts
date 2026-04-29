@@ -497,6 +497,98 @@ export type Database = {
         }
         Relationships: []
       }
+      adela_runs: {
+        Row: {
+          id: string
+          scraper: string
+          started_at: string
+          finished_at: string | null
+          status: string
+          rows_inserted: number | null
+          rows_skipped: number | null
+          error_message: string | null
+          metadata: Json
+        }
+        Insert: {
+          id?: string
+          scraper: string
+          started_at?: string
+          finished_at?: string | null
+          status?: string
+          rows_inserted?: number | null
+          rows_skipped?: number | null
+          error_message?: string | null
+          metadata?: Json
+        }
+        Update: {
+          id?: string
+          scraper?: string
+          started_at?: string
+          finished_at?: string | null
+          status?: string
+          rows_inserted?: number | null
+          rows_skipped?: number | null
+          error_message?: string | null
+          metadata?: Json
+        }
+        Relationships: []
+      }
+      position_reports: {
+        Row: {
+          id: string
+          commodity_id: string
+          source: string
+          report_date: string
+          report_url: string
+          raw_pdf_storage_path: string | null
+          extracted: Json
+          total_shipments_lbs: number | null
+          total_inventory_lbs: number | null
+          domestic_shipments_lbs: number | null
+          export_shipments_lbs: number | null
+          ingested_at: string
+          ingested_by: string
+        }
+        Insert: {
+          id?: string
+          commodity_id: string
+          source?: string
+          report_date: string
+          report_url: string
+          raw_pdf_storage_path?: string | null
+          extracted: Json
+          total_shipments_lbs?: number | null
+          total_inventory_lbs?: number | null
+          domestic_shipments_lbs?: number | null
+          export_shipments_lbs?: number | null
+          ingested_at?: string
+          ingested_by?: string
+        }
+        Update: {
+          id?: string
+          commodity_id?: string
+          source?: string
+          report_date?: string
+          report_url?: string
+          raw_pdf_storage_path?: string | null
+          extracted?: Json
+          total_shipments_lbs?: number | null
+          total_inventory_lbs?: number | null
+          domestic_shipments_lbs?: number | null
+          export_shipments_lbs?: number | null
+          ingested_at?: string
+          ingested_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "position_reports_commodity_id_fkey"
+            columns: ["commodity_id"]
+            isOneToOne: false
+            referencedRelation: "commodities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           granted_at: string
