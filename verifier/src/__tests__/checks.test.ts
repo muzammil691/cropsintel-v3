@@ -9,6 +9,7 @@ import { checkRoutesWired } from '../checks/routes-wired'
 import { checkTestsExist } from '../checks/tests-exist'
 import { checkDepsInstalled } from '../checks/deps-installed'
 import { checkComponentsImplemented } from '../checks/components-implemented'
+import { parseTaskSpec } from '../lib/spec-parser'
 import { TaskSpec } from '../types'
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -355,5 +356,104 @@ export default function Auth() {
   it('skips missing files (files-exist handles that)', () => {
     const spec = makeSpec({ filesRequired: ['src/pages/DoesNotExist.tsx'] })
     expect(checkComponentsImplemented(spec)).toHaveLength(0)
+  })
+})
+
+// ── False-positive regression tests ──────────────────────────────────────────
+
+// FP-1: checkFilesExist skips home-directory paths
+describe('checkFilesExist — external path filtering', () => {
+  it('ignores paths starting with ~/ (home-dir read-only references)', () => {
+    // These paths live outside the repo — the agent only reads them, never creates them
+    const spec = makeSpec({
+      filesRequired: [
+        '~/Documents/Claude/Projects/Cropsintel/cropsintel-v3-master-plan.md',
+        '~/Documents/Claude/Projects/Cropsintel/v3-step2-v1-audit.md',
+      ],
+    })
+    const gaps = checkFilesExist(spec)
+    expect(gaps).toHaveLength(0)
+  })
+
+  it('ignores paths with unrecognized prefix (V2 source, external repos, etc.)', () => {
+    const spec = makeSpec({
+      filesRequired: ['some-unknown-dir/runner.js', 'external/lib/util.ts'],
+    })
+    const gaps = checkFilesExist(spec)
+    expect(gaps).toHaveLength(0)
+  })
+
+  it('strips cropsintel-v3/ prefix and checks the normalized path', () => {
+    writeFile('src/lib/supabase.ts', 'export const supabase = null')
+
+    const spec = makeSpec({ filesRequired: ['cropsintel-v3/src/lib/supabase.ts'] })
+    const gaps = checkFilesExist(spec)
+    // After stripping the prefix, the file exists — no gap
+    expect(gaps).toHaveLength(0)
+  })
+})
+
+// FP-2: spec-parser drops placeholder filenames
+describe('parseTaskSpec — placeholder path filtering', () => {
+  it('does not include xxxxxx-timestamp placeholder migration files', () => {
+    const md = `## Schema additions\n- \`supabase/migrations/20260429xxxxxx_verifier.sql\`\n`
+    const spec = parseTaskSpec(md, 'test')
+    expect(spec.filesRequired).toHaveLength(0)
+  })
+
+  it('does not include <task-id> placeholder paths', () => {
+    const md = `## Deliverables\n- \`.agent/tasks/queued/<task-id>-remediation-NNN.md\`\n`
+    const spec = parseTaskSpec(md, 'test')
+    expect(spec.filesRequired).toHaveLength(0)
+  })
+
+  it('does not include phase-X.YY example path patterns', () => {
+    const md = `## Example\n- \`.agent/tasks/queued/phase-X.YY-name.md\`\n`
+    const spec = parseTaskSpec(md, 'test')
+    expect(spec.filesRequired).toHaveLength(0)
+  })
+
+  it('does not include .agent/questions/ paths (optional fallback artifacts)', () => {
+    const md = `## Deliverables\n- \`.agent/questions/phase-1.00a-q.md\`\n`
+    const spec = parseTaskSpec(md, 'test')
+    expect(spec.filesRequired).toHaveLength(0)
+  })
+
+  it('normalizes paths — strips leading ./ and / and cropsintel-v3/ prefix', () => {
+    const md = [
+      '## Files',
+      '- `./src/pages/Auth.tsx`',
+      '- `/src/lib/supabase.ts`',
+      '- `cropsintel-v3/src/lib/types.ts`',
+    ].join('\n')
+    const spec = parseTaskSpec(md, 'test')
+    expect(spec.filesRequired).toContain('src/pages/Auth.tsx')
+    expect(spec.filesRequired).toContain('src/lib/supabase.ts')
+    expect(spec.filesRequired).toContain('src/lib/types.ts')
+    // Should not contain the prefixed versions
+    expect(spec.filesRequired).not.toContain('./src/pages/Auth.tsx')
+    expect(spec.filesRequired).not.toContain('/src/lib/supabase.ts')
+    expect(spec.filesRequired).not.toContain('cropsintel-v3/src/lib/types.ts')
+  })
+})
+
+// FP-3: stub-detector excludes self-reflexive files
+describe('checkStubDetector — self-exclusion', () => {
+  it('does not flag verifier/src/checks/stub-detector.ts for containing stub pattern literals', () => {
+    // The stub-detector source file contains stub patterns as string literals — it would
+    // always match itself. The exclusion list prevents this false positive.
+    writeFile('verifier/src/checks/stub-detector.ts', `// STUB\nexport const STUB_PATTERNS = [/\\/\\/ STUB\\b/i]`)
+
+    const spec = makeSpec({ filesRequired: ['verifier/src/checks/stub-detector.ts'] })
+    const gaps = checkStubDetector(spec)
+    expect(gaps).toHaveLength(0)
+  })
+
+  it('does not flag verifier test files', () => {
+    writeFile('verifier/src/__tests__/checks.test.ts', `// STUB\nimport { describe } from 'vitest'`)
+
+    const spec = makeSpec({ filesRequired: ['verifier/src/__tests__/checks.test.ts'] })
+    const gaps = checkStubDetector(spec)
+    expect(gaps).toHaveLength(0)
   })
 })

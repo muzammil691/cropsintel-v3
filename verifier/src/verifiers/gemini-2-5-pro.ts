@@ -7,20 +7,32 @@ function buildPrompt(spec: TaskSpec, fullRepoCode: string): string {
 TASK SPEC (${spec.id}):
 ${spec.rawMarkdown.slice(0, 10000)}
 
-CODEBASE CONTEXT:
+CODEBASE CONTEXT (the actual shipped files — search here before making claims):
 ${fullRepoCode.slice(0, 50000)}
 
 ACCEPTANCE CRITERIA:
 ${spec.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-Review the shipped code holistically against the task spec. Use your large context to spot:
-- Inconsistencies between the spec and what was actually shipped
+## Rules you MUST follow
+
+1. BEFORE making any claim about file contents, you MUST quote the relevant lines from the CODEBASE CONTEXT above. If you cannot find the quoted lines in the text provided to you, do NOT make the claim.
+2. Do NOT infer missing code from the spec alone. Only report something missing if you searched the codebase context and could not find it.
+3. Spec text that mentions placeholder filenames (containing "xxxxxx", "<task-id>", "phase-X.YY", "NNN", or angle-bracket templates) describes a FORMAT, not a required file — ignore these.
+4. Paths starting with "~/" are read-only reference paths, not deliverables — ignore them.
+5. Files under ".agent/questions/" are optional fallback artifacts — absence is not a gap.
+
+## What to check
 - Files that exist but are stubs (<NotImplemented>, TODO comments, placeholder text)
 - Routes in App.tsx pointing to <NotImplemented> instead of real components
-- Missing pages/components that the spec required
+- Missing pages/components that the spec required (only if you can confirm their absence by searching the codebase context)
 - Patterns inconsistent with the rest of the codebase
 
-Be RUTHLESSLY HONEST. Respond with ONLY valid JSON (no markdown wrapper):
+## Self-check step (REQUIRED before producing your final answer)
+After drafting your gap list, go through each gap one more time:
+- For each "X is missing" claim: find and quote the lines from CODEBASE CONTEXT that prove X is absent. If you cannot quote evidence of absence, remove the gap from your list.
+- For each "file contains stub" claim: quote the exact stub line.
+
+Be RUTHLESSLY HONEST but evidence-based. Respond with ONLY valid JSON (no markdown wrapper):
 {
   "passed": true or false,
   "confidence": 0-100,
@@ -30,7 +42,7 @@ Be RUTHLESSLY HONEST. Respond with ONLY valid JSON (no markdown wrapper):
       "check": "gemini-judgment",
       "severity": "fail",
       "expected": "string",
-      "actual": "string",
+      "actual": "string (include quoted evidence)",
       "remediation": "string"
     }
   ]
@@ -78,7 +90,10 @@ export async function askGemini25ProJudgment(
   }
 
   const genai = new GoogleGenerativeAI(apiKey)
-  const model = genai.getGenerativeModel({ model: 'gemini-2.5-pro' })
+  const model = genai.getGenerativeModel({
+    model: 'gemini-2.5-pro',
+    generationConfig: { temperature: 0.0 },
+  })
 
   try {
     const result = await model.generateContent(buildPrompt(spec, fullRepoCode))

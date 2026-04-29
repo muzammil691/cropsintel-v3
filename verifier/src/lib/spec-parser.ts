@@ -6,6 +6,27 @@ const FILE_EXT_RE = /\.(ts|tsx|js|jsx|json|sql|md|sh|yaml|yml|html|css)$/
 // Paths found in these sections are excluded from filesRequired.
 const DELETE_SECTION_RE = /delete|remove|uninstall|clean\s*slate|clean-slate|clean_slate/i
 
+// Patterns that mark a path as a placeholder/template, not a real required file.
+// e.g. `supabase/migrations/20260429xxxxxx_verifier.sql` or `.agent/tasks/queued/<task-id>-remediation-NNN.md`
+const PLACEHOLDER_PATTERN_RE = /xxxxxx|<[^>]+>|phase-X\.YY|remediation-NNN/
+
+function normalizePath(p: string): string {
+  return p
+    .replace(/^\.\//, '')     // strip leading ./
+    .replace(/^\//, '')       // strip leading /
+    .replace(/^cropsintel-v3\//, '') // strip project-prefix
+}
+
+function isPlaceholderPath(p: string): boolean {
+  return PLACEHOLDER_PATTERN_RE.test(p)
+}
+
+// Question files are optional artifacts created only when the agent is blocked.
+// Absence of a question file is success, not a gap.
+function isQuestionFilePath(p: string): boolean {
+  return normalizePath(p).startsWith('.agent/questions/')
+}
+
 function splitIntoSections(markdown: string): Array<{ header: string; body: string }> {
   const sections: Array<{ header: string; body: string }> = []
   const parts = markdown.split(/\n(?=##\s)/)
@@ -65,7 +86,15 @@ function extractFilePaths(text: string): string[] {
   // Remove any path that appeared in a delete section to avoid false positives
   for (const p of deleted) required.delete(p)
 
-  return Array.from(required).filter(p => !p.startsWith('//') && p.split('/').length >= 2)
+  // Normalize, deduplicate, and filter out placeholders and optional question files
+  const normalized = new Set(
+    Array.from(required)
+      .filter(p => !p.startsWith('//') && p.split('/').length >= 2)
+      .map(normalizePath)
+      .filter(p => !isPlaceholderPath(p))
+      .filter(p => !isQuestionFilePath(p)),
+  )
+  return Array.from(normalized)
 }
 
 function extractTableNames(text: string): string[] {
