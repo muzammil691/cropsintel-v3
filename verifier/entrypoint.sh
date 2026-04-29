@@ -63,3 +63,4 @@ echo "[verifier-entrypoint] starting verifier: ${@:-audit-all}"
 exec node dist/index.js "${@:-audit-all}"
 
 
+
