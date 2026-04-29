@@ -54,3 +54,4 @@ echo "[memory-entrypoint] starting memory: ${@:-server}"
 exec node dist/index.js "${@:-server}"
 
 # trigger deploy Wed Apr 29 20:05:56 +04 2026
+
