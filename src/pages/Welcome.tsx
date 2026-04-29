@@ -1,9 +1,3 @@
-// CropsIntel V3 — Welcome (public landing) — STUB for Phase 1.5
-//
-// Phase 1.5 in master plan: "Public landing + market-insight pages."
-// This stub establishes the page exists and is reachable. Real content lands
-// in Phase 1.5 work — copy + market-data hero + Zyra preview.
-
 import { Helmet } from "react-helmet-async"
 import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
@@ -20,6 +14,10 @@ export default function Welcome() {
       </Helmet>
 
       <main className="min-h-screen flex flex-col items-center justify-center px-6 py-12 text-center">
+        <div className="mb-8 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          V3 Phase 1 — agent infrastructure deploying. Full product after Phase 1.30+ ships.
+        </div>
+
         <h1 className="text-5xl font-semibold tracking-tight mb-4">CropsIntel</h1>
         <p className="text-xl text-muted-foreground max-w-2xl mb-8">
           Almond market intelligence for the global trade. Pricing, position reports,

@@ -6,6 +6,7 @@
 import { Routes, Route, Navigate } from "react-router-dom"
 import { lazy, Suspense } from "react"
 import { RouteGuard } from "@/components/RouteGuard"
+import NotImplemented from "@/components/NotImplemented"
 
 // Lazy-loaded pages (master plan calls for lazy routing per V1 pattern)
 const Welcome = lazy(() => import("./pages/Welcome"))
@@ -29,6 +30,12 @@ export default function App() {
         <Route path="/" element={<Navigate to="/welcome" replace />} />
         <Route path="/welcome" element={<Welcome />} />
         <Route path="/auth" element={<Auth />} />
+
+        {/* Public surface — pending real build in Phase 1.50 */}
+        <Route path="/insights" element={<NotImplemented phase="1.50-landing-real" />} />
+        <Route path="/news" element={<NotImplemented phase="1.50-landing-real" />} />
+        <Route path="/about" element={<NotImplemented phase="1.50-landing-real" />} />
+        <Route path="/pricing" element={<NotImplemented phase="1.50-landing-real" />} />
 
         {/* Auth-required */}
         <Route
