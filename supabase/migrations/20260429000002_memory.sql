@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.memory_chunks (
   content        text        NOT NULL,
   chunk_index    int         NOT NULL,
   metadata       jsonb       NOT NULL DEFAULT '{}'::jsonb,
-  embedding      vector(3072),
+  embedding      vector(1536),  -- matryoshka-reduced from text-embedding-3-large (max for HNSW index)
   ingested_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (source, source_path, chunk_index)
 );
