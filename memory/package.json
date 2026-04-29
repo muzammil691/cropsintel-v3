@@ -1,0 +1,36 @@
+{
+  "name": "cropsintel-v3-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Memory Agent — institutional knowledge ingestion and semantic search for CropsIntel V3",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js server",
+    "dev": "npx ts-node --esm src/index.ts",
+    "ingest:all": "node dist/index.js ingest --source all",
+    "ingest:master-plan": "node dist/index.js ingest --source master-plan",
+    "ingest:workflow-doc": "node dist/index.js ingest --source workflow-doc",
+    "ingest:audits": "node dist/index.js ingest --source audits",
+    "ingest:v2-codebase": "node dist/index.js ingest --source v2-codebase",
+    "ingest:v1-codebase": "node dist/index.js ingest --source v1-codebase",
+    "ingest:conversations": "node dist/index.js ingest --source conversations",
+    "ingest:github-history": "node dist/index.js ingest --source github-history",
+    "ingest:adrs": "node dist/index.js ingest --source adrs",
+    "search": "node dist/index.js search",
+    "reindex": "node dist/index.js reindex"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@google/generative-ai": "^0.24.0",
+    "@supabase/supabase-js": "^2.105.1",
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.3",
+    "openai": "^4.103.0",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
