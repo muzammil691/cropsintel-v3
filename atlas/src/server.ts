@@ -1,8 +1,41 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http'
+import Anthropic from '@anthropic-ai/sdk'
 import { validateEnv } from './lib/env'
+import { dispatch } from './lib/dispatch'
+import { TOOLS, ToolName } from './lib/tools'
+import { getSupabaseClient } from './lib/supabase'
+import { TrustMode } from './types'
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
 const ATLAS_API_TOKEN = process.env.ATLAS_API_TOKEN
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+const TOOL_DEFINITIONS = Object.entries(TOOLS).map(([name, t]) => ({
+  name: name.replace('.', '_'),
+  description: t.description,
+  input_schema: { type: 'object' as const, properties: {}, additionalProperties: true },
+}))
+
+const SYSTEM_PROMPT = `You are Atlas, the conductor of the CropsIntel V3 production house.
+
+Your job: orchestrate the build of CropsIntel by reading state, querying institutional memory, and dispatching the right agent at the right time. You speak with Muzammil Akhtar (founder).
+
+Capabilities — call tools to do anything beyond pure conversation:
+- memory_search: query the master plan, audits, V1/V2 codebases
+- builder_queue_spec / builder_list_queue / builder_cancel_task: manage the build queue
+- verifier_audit / verifier_recent_runs: check audit results
+- council_write_spec: ask Council to decompose a phase
+- adela_trigger_scrape: trigger a scrape
+- whatsapp_send: ping someone
+- status_snapshot: fresh project state
+
+Style: concise, decisive, no fluff. If you don't know something, call a tool. Never make up project state.
+
+Trust mode: ${process.env.ATLAS_TRUST_MODE ?? 'passive'}.
+- passive/chat: read-only tools only.
+- confirm: ask before dispatching write tools (builder_queue_spec, etc.)
+- auto: dispatch freely under cost cap.`
 
 function authenticate(req: IncomingMessage): boolean {
   if (!ATLAS_API_TOKEN) return true
@@ -14,6 +47,148 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
   res.end(payload)
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
+    req.on('error', reject)
+  })
+}
+
+export async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!authenticate(req)) {
+    json(res, 401, { error: 'Unauthorized' })
+    return
+  }
+
+  const body = await readBody(req)
+  let payload: { thread_id: string; channel: string; message: string }
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' })
+    return
+  }
+
+  if (!payload.thread_id || !payload.message) {
+    json(res, 400, { error: 'thread_id and message are required' })
+    return
+  }
+
+  const sb = getSupabaseClient()
+  if (sb) {
+    await sb.from('atlas_conversations').insert({
+      thread_id: payload.thread_id,
+      channel: payload.channel || 'web',
+      role: 'user',
+      content: payload.message,
+    })
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+
+  const sendEvent = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`)
+    res.write(`data: ${JSON.stringify(data)}\n\n`)
+  }
+
+  // Load recent conversation history (last 20 messages)
+  let messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
+  if (sb) {
+    const { data: history } = await sb
+      .from('atlas_conversations')
+      .select('role, content')
+      .eq('thread_id', payload.thread_id)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    messages = (history ?? []).reverse().map(m => ({
+      role: m.role === 'atlas' ? 'assistant' as const : 'user' as const,
+      content: m.content as string,
+    }))
+  }
+
+  const trustMode = (process.env.ATLAS_TRUST_MODE ?? 'passive') as TrustMode
+  let totalCostUsd = 0
+  let assistantText = ''
+  let iteration = 0
+
+  try {
+    while (iteration < 8) {
+      iteration++
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
+        tools: TOOL_DEFINITIONS as Parameters<typeof anthropic.messages.create>[0]['tools'],
+        messages: messages as Parameters<typeof anthropic.messages.create>[0]['messages'],
+      })
+
+      const inputCost = (response.usage.input_tokens / 1_000_000) * 3
+      const outputCost = (response.usage.output_tokens / 1_000_000) * 15
+      totalCostUsd += inputCost + outputCost
+
+      const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+
+      for (const block of textBlocks) {
+        sendEvent('message', { role: 'atlas', content: block.text })
+        assistantText += block.text
+      }
+
+      if (toolUseBlocks.length === 0) {
+        break
+      }
+
+      const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = []
+      for (const toolUse of toolUseBlocks) {
+        // Translate underscore-form back to dot-form used by TOOLS registry
+        const toolName = toolUse.name.replace('_', '.') as ToolName
+        sendEvent('tool_call', { tool: toolName, arguments: toolUse.input })
+
+        const dispatchResult = await dispatch({
+          tool: toolName,
+          arguments: toolUse.input as Record<string, unknown>,
+          initiatedBy: `chat:${payload.thread_id}`,
+          trustMode,
+        })
+
+        sendEvent('tool_result', { tool: toolName, ...dispatchResult })
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify(dispatchResult.result ?? dispatchResult.error ?? null),
+        })
+      }
+
+      messages.push({ role: 'assistant', content: response.content as unknown })
+      messages.push({ role: 'user', content: toolResults as unknown })
+    }
+
+    if (assistantText && sb) {
+      await sb.from('atlas_conversations').insert({
+        thread_id: payload.thread_id,
+        channel: payload.channel || 'web',
+        role: 'atlas',
+        content: assistantText,
+        metadata: { totalCostUsd, iterations: iteration },
+      })
+    }
+
+    sendEvent('done', { thread_id: payload.thread_id, totalCostUsd })
+    res.end()
+  } catch (err) {
+    sendEvent('error', { error: err instanceof Error ? err.message : String(err) })
+    res.end()
+  }
 }
 
 export function startServer(): void {
@@ -34,12 +209,17 @@ export function startServer(): void {
       return
     }
 
+    if (url === '/atlas/chat' && method === 'POST') {
+      await handleChat(req, res)
+      return
+    }
+
     if (!authenticate(req)) {
       json(res, 401, { error: 'Unauthorized' })
       return
     }
 
-    json(res, 404, { error: 'Not found — endpoint will be added in subsequent tasks' })
+    json(res, 404, { error: 'Not found' })
   })
 
   server.listen(PORT, () => {
