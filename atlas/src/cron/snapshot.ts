@@ -14,7 +14,7 @@ export function startSnapshotCron(): void {
   setInterval(() => void runSnapshot(), INTERVAL_MS)
 }
 
-async function runSnapshot(): Promise<void> {
+export async function runSnapshot(): Promise<void> {
   const sb = getSupabaseClient()
   if (!sb) {
     console.warn('[atlas-cron] Supabase not configured — skipping snapshot')

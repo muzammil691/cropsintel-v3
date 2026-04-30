@@ -7,6 +7,7 @@ import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
 import { startSnapshotCron } from './cron/snapshot'
+import { startConductorLoop } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
 import { TrustMode } from './types'
 
@@ -353,6 +354,7 @@ export async function startServer(): Promise<void> {
   })
 
   startSnapshotCron()
+  startConductorLoop()
 
   server.listen(PORT, () => {
     console.log(`[atlas-server] Listening on :${PORT}`)
