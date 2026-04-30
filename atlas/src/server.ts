@@ -4,6 +4,7 @@ import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
 import { TOOLS, ToolName } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
+import { getBurnRate } from './lib/cost-gate'
 import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
 import { TrustMode } from './types'
 
@@ -63,9 +64,10 @@ export async function runChatTurn(params: {
   threadId: string
   channel: string
   message: string
+  overrideToken?: string
   onEvent?: (event: string, data: unknown) => void
 }): Promise<string> {
-  const { threadId, channel, message, onEvent } = params
+  const { threadId, channel, message, overrideToken, onEvent } = params
   const sb = getSupabaseClient()
   const trustMode = (process.env.ATLAS_TRUST_MODE ?? 'passive') as TrustMode
 
@@ -130,6 +132,7 @@ export async function runChatTurn(params: {
         arguments: toolUse.input as Record<string, unknown>,
         initiatedBy: `${channel}:${threadId}`,
         trustMode,
+        overrideToken,
       })
 
       onEvent?.('tool_result', { tool: toolName, ...dispatchResult })
@@ -200,11 +203,14 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
     res.write(`data: ${JSON.stringify(data)}\n\n`)
   }
 
+  const overrideToken = req.headers['x-budget-override'] as string | undefined
+
   try {
     const assistantText = await runChatTurn({
       threadId: payload.thread_id,
       channel: payload.channel || 'web',
       message: payload.message,
+      overrideToken,
       onEvent: sendEvent,
     })
 
@@ -290,6 +296,12 @@ export function startServer(): void {
 
     if (url === '/atlas/chat' && method === 'POST') {
       await handleChat(req, res)
+      return
+    }
+
+    if (url === '/atlas/costs' && method === 'GET') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      json(res, 200, await getBurnRate())
       return
     }
 

@@ -1,5 +1,6 @@
 import { TOOLS, ToolName } from './tools'
 import { getSupabaseClient } from './supabase'
+import { checkBudget } from './cost-gate'
 import { TrustMode } from '../types'
 
 export interface DispatchRequest {
@@ -7,6 +8,7 @@ export interface DispatchRequest {
   arguments: Record<string, unknown>
   initiatedBy: string // 'cron' | 'chat:<thread_id>' | 'auto'
   trustMode: TrustMode
+  overrideToken?: string
 }
 
 export interface DispatchResult {
@@ -35,7 +37,25 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
     return { dispatchId: '', status: 'blocked', error: `Atlas is in chat mode; tool '${req.tool}' is write-capable. Switch to confirm/auto.`, durationMs: 0 }
   }
   // 'confirm' mode: caller is expected to have already obtained user consent before calling dispatch()
-  // 'auto' mode: cost gatekeeper applies (see future 1.10g task)
+  // 'auto' mode: cost gatekeeper applies
+  const AI_COST_ESTIMATES: Partial<Record<ToolName, number>> = {
+    'council.write_spec': 0.10,
+    'memory.search':      0.001,
+    'memory.ingest':      0.001,
+    'adela.trigger_scrape': 0.001,
+  }
+  const estimatedCost = AI_COST_ESTIMATES[req.tool] ?? 0
+  if (estimatedCost > 0) {
+    const overrideToken = req.overrideToken
+    const budgetCheck = await checkBudget(estimatedCost, { overrideToken })
+    if (!budgetCheck.allow) {
+      return {
+        dispatchId: '', status: 'blocked',
+        error: `Budget gate: ${budgetCheck.reason ?? budgetCheck.status}`,
+        durationMs: Date.now() - start,
+      }
+    }
+  }
 
   const sb = getSupabaseClient()
   if (!sb) {
