@@ -57,10 +57,10 @@ fi
 export REPO_ROOT="$REPO_DIR"
 echo "[verifier-entrypoint] REPO_ROOT=$REPO_ROOT"
 
-# 4. Run the verifier with whatever args were passed (default: audit-all)
+# 4. Run the verifier with whatever args were passed (default: server)
 cd /app
-echo "[verifier-entrypoint] starting verifier: ${@:-audit-all}"
-exec node dist/index.js "${@:-audit-all}"
+echo "[verifier-entrypoint] starting verifier: ${*:-server}"
+exec node dist/index.js "${@:-server}"
 
 
 

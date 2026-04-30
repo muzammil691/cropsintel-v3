@@ -6,6 +6,7 @@ import { writeVerifierRun } from './lib/audit'
 import { notifyWhatsApp } from './lib/notify'
 import { createRemediationTask, getCurrentCommitSha } from './lib/git'
 import { VerificationResult } from './types'
+import { startServer } from './server'
 
 const REPO_ROOT = process.env.REPO_ROOT ?? join(__dirname, '..', '..')
 const DONE_DIR = join(REPO_ROOT, '.agent', 'tasks', 'done')
@@ -210,5 +211,13 @@ async function runGateCron(commitSha: string): Promise<void> {
     }
   }
 }
+
+// ── server ────────────────────────────────────────────────────────────────────
+program
+  .command('server')
+  .description('Start HTTP server exposing POST /audit for agent-loop gating')
+  .action(() => {
+    startServer()
+  })
 
 program.parse()

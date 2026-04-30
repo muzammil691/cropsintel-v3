@@ -22,6 +22,13 @@ REPO_DIR="/workspace/cropsintel-v3"
 SLEEP_SECONDS="${SLEEP_SECONDS:-300}" # 5 minutes default
 LOOP_TAG="[agent-loop]"
 
+# Verifier gate configuration
+VERIFIER_URL="${VERIFIER_URL:-https://rare-happiness-production.up.railway.app}"
+VERIFIER_API_TOKEN="${VERIFIER_API_TOKEN:-}"
+VERIFIER_GATE_ENABLED="${VERIFIER_GATE_ENABLED:-true}"
+VERIFIER_FAIL_CONFIDENCE_THRESHOLD="${VERIFIER_FAIL_CONFIDENCE_THRESHOLD:-0.7}"
+VERIFIER_TIMEOUT_SECONDS="${VERIFIER_TIMEOUT_SECONDS:-60}"
+
 # -----------------------------------------------------------------------------
 # 0. Bootstrap: SSH key, clone repo
 # -----------------------------------------------------------------------------
@@ -101,7 +108,84 @@ pick_next_task() {
 }
 
 # -----------------------------------------------------------------------------
-# 2. Run Claude Code on a task
+# 2a. Verifier gate — call before pushing a committed task
+# -----------------------------------------------------------------------------
+run_verifier_gate() {
+  local task_id="$1"
+  local head_before="$2"
+  local head_after="$3"
+
+  if [ "$VERIFIER_GATE_ENABLED" != "true" ]; then
+    echo "$LOOP_TAG verifier gate disabled, pushing without audit"
+    return 0
+  fi
+
+  echo "$LOOP_TAG calling verifier for task $task_id ($head_before..$head_after)"
+
+  local response
+  response=$(curl -sS -m "$VERIFIER_TIMEOUT_SECONDS" \
+    -X POST "$VERIFIER_URL/audit" \
+    -H "Authorization: Bearer $VERIFIER_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"task_id\":\"$task_id\",\"head_before\":\"$head_before\",\"head_after\":\"$head_after\"}" \
+    2>&1) || {
+    echo "$LOOP_TAG WARN: verifier unreachable, pushing anyway: $response" >&2
+    return 0
+  }
+
+  local verdict
+  verdict=$(echo "$response" | jq -r '.verdict // "unknown"')
+  local confidence
+  confidence=$(echo "$response" | jq -r '.confidence // 0')
+
+  echo "$LOOP_TAG verifier verdict: $verdict (confidence $confidence)"
+
+  if [ "$verdict" = "pass" ]; then
+    return 0
+  fi
+
+  if [ "$verdict" = "fail" ]; then
+    local should_block
+    should_block=$(awk -v c="$confidence" -v t="$VERIFIER_FAIL_CONFIDENCE_THRESHOLD" 'BEGIN { print (c >= t) ? "true" : "false" }')
+
+    if [ "$should_block" = "true" ]; then
+      echo "$LOOP_TAG verifier BLOCKED push (fail conf=$confidence >= $VERIFIER_FAIL_CONFIDENCE_THRESHOLD)"
+      git reset --hard "$head_before"
+
+      # Queue remediation task
+      local rem_count
+      rem_count=$(ls .agent/tasks/queued/ 2>/dev/null | grep -c "^${task_id}-remediation-" || echo 0)
+      local rem_num
+      rem_num=$(printf "%03d" $((rem_count + 1)))
+      local rem_file=".agent/tasks/queued/${task_id}-remediation-${rem_num}.md"
+
+      cat > "$rem_file" <<EOF
+# Task: ${task_id} remediation ${rem_num}
+
+**Reason:** Verifier blocked push at $(date -u +%FT%TZ). Confidence: $confidence
+**Original task:** .agent/tasks/failed/${task_id}.md
+**Verifier feedback:** see verifier_runs row at $head_after
+
+$(echo "$response" | jq -r '.gaps[] | "- " + .description' 2>/dev/null || echo "$response")
+
+## Action
+
+Re-attempt the original task addressing the gaps above.
+EOF
+      git add "$rem_file" && git commit -m "verifier: queue remediation for $task_id (conf=$confidence)" && git push origin main || true
+      return 1
+    else
+      echo "$LOOP_TAG verifier FAIL but confidence $confidence < $VERIFIER_FAIL_CONFIDENCE_THRESHOLD, pushing with warning"
+      return 0
+    fi
+  fi
+
+  echo "$LOOP_TAG verifier returned unknown verdict '$verdict', pushing anyway"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# 2b. Run Claude Code on a task
 # -----------------------------------------------------------------------------
 run_task() {
   local TASK_FILE="$1"
@@ -231,22 +315,47 @@ run_task() {
 
     if ! git diff --cached --quiet; then
       git commit -m "feat: $TASK_NAME (autonomous agent, ${DURATION}s, $CHANGED_FILES files)"
-      git push origin main || {
-        echo "$LOOP_TAG push failed"
-        /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
-        return 1
-      }
     fi
-    mkdir -p .agent/tasks/done
-    mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
-    git add .agent/
-    git commit -m "chore(agent): $TASK_NAME → done" || true
-    git push origin main || true
 
-    # Only notify if real work was shipped. An empty-commit run is a BUG, not a success.
-    if [ "$CHANGED_FILES" -gt 0 ]; then
-      /usr/local/bin/notify-whatsapp.sh "✅ Agent shipped: $TASK_NAME (${DURATION}s, $CHANGED_FILES files)" || true
+    # Re-read HEAD_AFTER after any staged-change commit above
+    HEAD_AFTER=$(git rev-parse HEAD)
+
+    if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
+      # Gate on verifier verdict before pushing
+      if run_verifier_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER"; then
+        git push origin main || {
+          echo "$LOOP_TAG push failed"
+          /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
+          return 1
+        }
+        mkdir -p .agent/tasks/done
+        mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
+        git add .agent/
+        git commit -m "chore(agent): $TASK_NAME → done" || true
+        git push origin main || true
+
+        if [ "$CHANGED_FILES" -gt 0 ]; then
+          /usr/local/bin/notify-whatsapp.sh "✅ Agent shipped: $TASK_NAME (${DURATION}s, $CHANGED_FILES files)" || true
+        else
+          echo "$LOOP_TAG SUSPICIOUS: $TASK_NAME marked done but ZERO meaningful files changed"
+          /usr/local/bin/notify-whatsapp.sh "⚠️ $TASK_NAME marked done but produced 0 file changes — agent likely failed silently. Investigate." || true
+        fi
+      else
+        echo "$LOOP_TAG verifier blocked push — moving task to failed/"
+        mkdir -p .agent/tasks/failed
+        mv "$IN_PROGRESS_FILE" ".agent/tasks/failed/$TASK_NAME.md" 2>/dev/null || true
+        git add .agent/ 2>/dev/null || true
+        git commit -m "chore(agent): $TASK_NAME → failed (verifier blocked)" 2>/dev/null || true
+        git push origin main 2>/dev/null || true
+        /usr/local/bin/notify-whatsapp.sh "🔍 Verifier blocked: $TASK_NAME — remediation queued" || true
+      fi
     else
+      # No commits at all — suspicious but mark done anyway
+      mkdir -p .agent/tasks/done
+      mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
+      git add .agent/
+      git commit -m "chore(agent): $TASK_NAME → done (no code changes)" || true
+      git push origin main || true
       echo "$LOOP_TAG SUSPICIOUS: $TASK_NAME marked done but ZERO meaningful files changed"
       /usr/local/bin/notify-whatsapp.sh "⚠️ $TASK_NAME marked done but produced 0 file changes — agent likely failed silently. Investigate." || true
     fi
