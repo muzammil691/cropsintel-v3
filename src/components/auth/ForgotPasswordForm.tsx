@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { sendPasswordReset } from '@/lib/auth-email'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -60,9 +61,9 @@ export function ForgotPasswordForm() {
         {loading ? 'Sending…' : 'Send reset link'}
       </Button>
       <div className="text-sm text-center text-slate-500">
-        <a href="/cropsintel-v3/login" className="hover:underline">
+        <Link to="/login" className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1 rounded-sm">
           Back to sign in
-        </a>
+        </Link>
       </div>
     </form>
   )

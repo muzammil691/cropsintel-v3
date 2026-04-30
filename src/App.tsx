@@ -15,6 +15,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 const Welcome = lazy(() => import("./pages/Welcome"))
 const Auth = lazy(() => import("./pages/Auth"))
 const AuthCallback = lazy(() => import("./pages/AuthCallback"))
+const Login = lazy(() => import("./pages/Login"))
+const SignUp = lazy(() => import("./pages/SignUp"))
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"))
+const ResetPassword = lazy(() => import("./pages/ResetPassword"))
+const Upgrade = lazy(() => import("./pages/Upgrade"))
 const Dashboard = lazy(() => import("./pages/Dashboard"))
 const Atlas = lazy(() => import("./pages/Atlas"))
 const NotFound = lazy(() => import("./pages/NotFound"))
@@ -57,6 +62,11 @@ export default function App() {
         <Route path="/welcome" element={<Welcome />} />
         <Route path="/auth" element={<Auth />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/upgrade" element={<Upgrade />} />
 
         {/* Public surface — pending real build in Phase 1.50 */}
         <Route path="/insights" element={<NotImplemented phase="1.50-landing-real" />} />

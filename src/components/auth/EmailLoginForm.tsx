@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { signInWithEmail } from '@/lib/auth-email'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -64,9 +64,9 @@ export function EmailLoginForm() {
         {loading ? 'Signing in…' : 'Sign in'}
       </Button>
       <div className="text-sm text-center text-slate-500">
-        <a href="/cropsintel-v3/forgot-password" className="hover:underline">
+        <Link to="/forgot-password" className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1 rounded-sm">
           Forgot password?
-        </a>
+        </Link>
       </div>
     </form>
   )

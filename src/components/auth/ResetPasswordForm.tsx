@@ -39,7 +39,7 @@ export function ResetPasswordForm() {
     setLoading(true)
     try {
       await updatePassword(password)
-      navigate('/auth', { replace: true })
+      navigate('/login', { replace: true })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Password update failed')
     } finally {
