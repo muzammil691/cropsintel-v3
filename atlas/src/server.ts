@@ -4,6 +4,7 @@ import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
 import { TOOLS, ToolName } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
+import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
 import { TrustMode } from './types'
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -58,6 +59,105 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
+export async function runChatTurn(params: {
+  threadId: string
+  channel: string
+  message: string
+  onEvent?: (event: string, data: unknown) => void
+}): Promise<string> {
+  const { threadId, channel, message, onEvent } = params
+  const sb = getSupabaseClient()
+  const trustMode = (process.env.ATLAS_TRUST_MODE ?? 'passive') as TrustMode
+
+  // Load recent conversation history (last 20 messages)
+  let messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
+  if (sb) {
+    const { data: history } = await sb
+      .from('atlas_conversations')
+      .select('role, content')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    messages = (history ?? []).reverse().map(m => ({
+      role: m.role === 'atlas' ? ('assistant' as const) : ('user' as const),
+      content: m.content as string,
+    }))
+  }
+
+  // Ensure the current message is appended if not already persisted
+  const lastMsg = messages[messages.length - 1]
+  if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content !== message) {
+    messages.push({ role: 'user', content: message })
+  }
+
+  let totalCostUsd = 0
+  let assistantText = ''
+  let iteration = 0
+
+  while (iteration < 8) {
+    iteration++
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      tools: TOOL_DEFINITIONS as Parameters<typeof anthropic.messages.create>[0]['tools'],
+      messages: messages as Parameters<typeof anthropic.messages.create>[0]['messages'],
+    })
+
+    const inputCost = (response.usage.input_tokens / 1_000_000) * 3
+    const outputCost = (response.usage.output_tokens / 1_000_000) * 15
+    totalCostUsd += inputCost + outputCost
+
+    const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+
+    for (const block of textBlocks) {
+      onEvent?.('message', { role: 'atlas', content: block.text })
+      assistantText += block.text
+    }
+
+    if (toolUseBlocks.length === 0) {
+      break
+    }
+
+    const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = []
+    for (const toolUse of toolUseBlocks) {
+      const toolName = toolUse.name.replace('_', '.') as ToolName
+      onEvent?.('tool_call', { tool: toolName, arguments: toolUse.input })
+
+      const dispatchResult = await dispatch({
+        tool: toolName,
+        arguments: toolUse.input as Record<string, unknown>,
+        initiatedBy: `${channel}:${threadId}`,
+        trustMode,
+      })
+
+      onEvent?.('tool_result', { tool: toolName, ...dispatchResult })
+
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: JSON.stringify(dispatchResult.result ?? dispatchResult.error ?? null),
+      })
+    }
+
+    messages.push({ role: 'assistant', content: response.content as unknown })
+    messages.push({ role: 'user', content: toolResults as unknown })
+  }
+
+  if (assistantText && sb) {
+    await sb.from('atlas_conversations').insert({
+      thread_id: threadId,
+      channel,
+      role: 'atlas',
+      content: assistantText,
+      metadata: { totalCostUsd, iterations: iteration },
+    })
+  }
+
+  return assistantText
+}
+
 export async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!authenticate(req)) {
     json(res, 401, { error: 'Unauthorized' })
@@ -100,94 +200,73 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
     res.write(`data: ${JSON.stringify(data)}\n\n`)
   }
 
-  // Load recent conversation history (last 20 messages)
-  let messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
-  if (sb) {
-    const { data: history } = await sb
-      .from('atlas_conversations')
-      .select('role, content')
-      .eq('thread_id', payload.thread_id)
-      .order('created_at', { ascending: false })
-      .limit(20)
-    messages = (history ?? []).reverse().map(m => ({
-      role: m.role === 'atlas' ? 'assistant' as const : 'user' as const,
-      content: m.content as string,
-    }))
-  }
-
-  const trustMode = (process.env.ATLAS_TRUST_MODE ?? 'passive') as TrustMode
-  let totalCostUsd = 0
-  let assistantText = ''
-  let iteration = 0
-
   try {
-    while (iteration < 8) {
-      iteration++
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
-        tools: TOOL_DEFINITIONS as Parameters<typeof anthropic.messages.create>[0]['tools'],
-        messages: messages as Parameters<typeof anthropic.messages.create>[0]['messages'],
-      })
+    const assistantText = await runChatTurn({
+      threadId: payload.thread_id,
+      channel: payload.channel || 'web',
+      message: payload.message,
+      onEvent: sendEvent,
+    })
 
-      const inputCost = (response.usage.input_tokens / 1_000_000) * 3
-      const outputCost = (response.usage.output_tokens / 1_000_000) * 15
-      totalCostUsd += inputCost + outputCost
-
-      const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
-
-      for (const block of textBlocks) {
-        sendEvent('message', { role: 'atlas', content: block.text })
-        assistantText += block.text
-      }
-
-      if (toolUseBlocks.length === 0) {
-        break
-      }
-
-      const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = []
-      for (const toolUse of toolUseBlocks) {
-        // Translate underscore-form back to dot-form used by TOOLS registry
-        const toolName = toolUse.name.replace('_', '.') as ToolName
-        sendEvent('tool_call', { tool: toolName, arguments: toolUse.input })
-
-        const dispatchResult = await dispatch({
-          tool: toolName,
-          arguments: toolUse.input as Record<string, unknown>,
-          initiatedBy: `chat:${payload.thread_id}`,
-          trustMode,
-        })
-
-        sendEvent('tool_result', { tool: toolName, ...dispatchResult })
-
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(dispatchResult.result ?? dispatchResult.error ?? null),
-        })
-      }
-
-      messages.push({ role: 'assistant', content: response.content as unknown })
-      messages.push({ role: 'user', content: toolResults as unknown })
-    }
-
-    if (assistantText && sb) {
-      await sb.from('atlas_conversations').insert({
-        thread_id: payload.thread_id,
-        channel: payload.channel || 'web',
-        role: 'atlas',
-        content: assistantText,
-        metadata: { totalCostUsd, iterations: iteration },
-      })
-    }
-
-    sendEvent('done', { thread_id: payload.thread_id, totalCostUsd })
+    sendEvent('done', { thread_id: payload.thread_id })
     res.end()
+
+    void assistantText // already persisted inside runChatTurn
   } catch (err) {
     sendEvent('error', { error: err instanceof Error ? err.message : String(err) })
     res.end()
+  }
+}
+
+async function handleWhatsAppInbound(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readBody(req)
+  const params = new URLSearchParams(body)
+
+  const from = params.get('From')
+  const messageBody = params.get('Body')
+  const messageSid = params.get('MessageSid')
+
+  if (!from || !messageBody) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' })
+    res.end('Missing From or Body')
+    return
+  }
+
+  // Acknowledge to Twilio immediately (within 10s SLA)
+  res.writeHead(200, { 'Content-Type': 'text/xml' })
+  res.end('<?xml version="1.0" encoding="UTF-8"?><Response></Response>')
+
+  // Process async — don't block the webhook
+  processWhatsAppMessage(from, messageBody, messageSid).catch(err =>
+    console.error('[whatsapp-inbound] processing error:', err),
+  )
+}
+
+async function processWhatsAppMessage(
+  from: string,
+  body: string,
+  messageSid: string | null,
+): Promise<void> {
+  const threadId = phoneToThreadId(from)
+  const sb = getSupabaseClient()
+
+  if (sb) {
+    await sb.from('atlas_conversations').insert({
+      thread_id: threadId,
+      channel: 'whatsapp',
+      role: 'user',
+      content: body,
+      metadata: { from, messageSid },
+    })
+  }
+
+  const assistantText = await runChatTurn({ threadId, channel: 'whatsapp', message: body })
+
+  const reply = await sendWhatsAppReply(from, assistantText)
+  if ('error' in reply) {
+    console.error('[whatsapp-inbound] reply failed:', reply.error)
+  } else {
+    console.log(`[whatsapp-inbound] replied with sid=${reply.sid}`)
   }
 }
 
@@ -211,6 +290,11 @@ export function startServer(): void {
 
     if (url === '/atlas/chat' && method === 'POST') {
       await handleChat(req, res)
+      return
+    }
+
+    if (url === '/whatsapp/inbound' && method === 'POST') {
+      await handleWhatsAppInbound(req, res)
       return
     }
 
