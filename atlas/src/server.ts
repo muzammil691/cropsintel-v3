@@ -289,6 +289,17 @@ export async function startServer(): Promise<void> {
     const url = req.url ?? '/'
     const method = req.method ?? 'GET'
 
+    // ─── CORS — allow browser clients (Atlas dashboard at github.io) to reach this API
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With')
+    res.setHeader('Access-Control-Max-Age', '86400')
+    if (method === 'OPTIONS') {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+
     if (url === '/health' && method === 'GET') {
       json(res, 200, {
         status: 'ok',
