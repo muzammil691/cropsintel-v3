@@ -6,6 +6,7 @@ import { TOOLS, ToolName } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
+import { startSnapshotCron } from './cron/snapshot'
 import { TrustMode } from './types'
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -305,6 +306,15 @@ export function startServer(): void {
       return
     }
 
+    if (url === '/atlas/status' && method === 'GET') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      const sbStatus = getSupabaseClient()
+      if (!sbStatus) { json(res, 503, { error: 'Supabase not configured' }); return }
+      const { data } = await sbStatus.from('atlas_snapshots').select('*').order('taken_at', { ascending: false }).limit(1).maybeSingle()
+      json(res, 200, data ?? { error: 'No snapshot yet — try again in 5 minutes' })
+      return
+    }
+
     if (url === '/whatsapp/inbound' && method === 'POST') {
       await handleWhatsAppInbound(req, res)
       return
@@ -317,6 +327,8 @@ export function startServer(): void {
 
     json(res, 404, { error: 'Not found' })
   })
+
+  startSnapshotCron()
 
   server.listen(PORT, () => {
     console.log(`[atlas-server] Listening on :${PORT}`)
