@@ -270,6 +270,57 @@ export type Database = {
           },
         ]
       }
+      legacy_users: {
+        Row: {
+          company_id: string | null
+          display_name: string | null
+          email: string | null
+          id: string
+          imported_at: string
+          legacy_created_at: string | null
+          legacy_user_id: string
+          migrated_at: string | null
+          migrated_to_v3_user_id: string | null
+          phone: string | null
+          preferred_language: string
+          raw_legacy_record: Json | null
+          source: string
+          tier: string
+        }
+        Insert: {
+          company_id?: string | null
+          display_name?: string | null
+          email?: string | null
+          id?: string
+          imported_at?: string
+          legacy_created_at?: string | null
+          legacy_user_id: string
+          migrated_at?: string | null
+          migrated_to_v3_user_id?: string | null
+          phone?: string | null
+          preferred_language?: string
+          raw_legacy_record?: Json | null
+          source: string
+          tier?: string
+        }
+        Update: {
+          company_id?: string | null
+          display_name?: string | null
+          email?: string | null
+          id?: string
+          imported_at?: string
+          legacy_created_at?: string | null
+          legacy_user_id?: string
+          migrated_at?: string | null
+          migrated_to_v3_user_id?: string | null
+          phone?: string | null
+          preferred_language?: string
+          raw_legacy_record?: Json | null
+          source?: string
+          tier?: string
+        }
+        Relationships: []
+      }
       market_intelligence: {
         Row: {
           ai_summary: string | null

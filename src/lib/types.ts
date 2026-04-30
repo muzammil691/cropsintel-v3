@@ -36,6 +36,9 @@ export type PositionReportInsert = Database["public"]["Tables"]["position_report
 export type AdelaRun = Database["public"]["Tables"]["adela_runs"]["Row"]
 export type AdelaRunInsert = Database["public"]["Tables"]["adela_runs"]["Insert"]
 
+export type LegacyUser = Database["public"]["Tables"]["legacy_users"]["Row"]
+export type LegacyUserInsert = Database["public"]["Tables"]["legacy_users"]["Insert"]
+
 // Insert / Update variants — use when writing to the DB
 export type CommodityInsert = Database["public"]["Tables"]["commodities"]["Insert"]
 export type CompanyInsert = Database["public"]["Tables"]["companies"]["Insert"]

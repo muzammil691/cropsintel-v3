@@ -6,6 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react"
 import type { Session, User } from "@supabase/supabase-js"
 import { supabase } from "@/lib/supabase"
+import { checkLegacyMigration } from "@/lib/auth-migration"
 import type { AppRole, Profile, UserTier } from "@/lib/types"
 
 export type AuthContextValue = {
@@ -18,6 +19,9 @@ export type AuthContextValue = {
   isAuthenticated: boolean
   isTeam: boolean
   isAdmin: boolean
+  /** Non-null after a successful V1/V2 migration; cleared by clearMigrationNotice. */
+  migrationNotice: string | null
+  clearMigrationNotice: () => void
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
@@ -32,6 +36,8 @@ const defaultContext: AuthContextValue = {
   isAuthenticated: false,
   isTeam: false,
   isAdmin: false,
+  migrationNotice: null,
+  clearMigrationNotice: () => {},
   signOut: async () => {},
   refreshProfile: async () => {},
 }
@@ -43,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [roles, setRoles] = useState<AppRole[]>([])
+  const [migrationNotice, setMigrationNotice] = useState<string | null>(null)
 
   const loadProfileAndRoles = useCallback(async (userId: string) => {
     const [profileRes, rolesRes] = await Promise.all([
@@ -72,11 +79,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadInitialSession()
 
     const { data: subscription } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
+      async (event, newSession) => {
         if (cancelled) return
         setSession(newSession)
         if (newSession?.user) {
           await loadProfileAndRoles(newSession.user.id)
+          // On fresh sign-in, check for a V1/V2 legacy record and migrate if found
+          if (event === 'SIGNED_IN') {
+            const { migrated, legacy_source } = await checkLegacyMigration()
+            if (migrated) {
+              // Reload profile so the migrated tier/display_name are reflected
+              await loadProfileAndRoles(newSession.user.id)
+              setMigrationNotice(
+                `Welcome back! Your ${legacy_source?.toUpperCase() ?? 'legacy'} account was imported.`
+              )
+            }
+          }
         } else {
           setProfile(null)
           setRoles([])
@@ -100,6 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (s?.user) await loadProfileAndRoles(s.user.id)
   }, [loadProfileAndRoles])
 
+  const clearMigrationNotice = useCallback(() => setMigrationNotice(null), [])
+
   const user = session?.user ?? null
   const isAuthenticated = !!session
   const isAdmin = roles.includes("admin")
@@ -118,6 +138,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated,
         isTeam,
         isAdmin,
+        migrationNotice,
+        clearMigrationNotice,
         signOut,
         refreshProfile,
       }}
