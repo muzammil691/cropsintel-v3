@@ -19,7 +19,14 @@ set -e
 
 REPO_URL="${REPO_URL:-git@github.com:muzammil691/cropsintel-v3.git}"
 REPO_DIR="/workspace/cropsintel-v3"
-SLEEP_SECONDS="${SLEEP_SECONDS:-300}" # 5 minutes default
+# Two sleeps: short when we just finished a task (fast pickup of next), long when idle.
+# The active sleep is also a soft floor for git rate-limit hygiene.
+ACTIVE_SLEEP_SECONDS="${ACTIVE_SLEEP_SECONDS:-30}"
+IDLE_SLEEP_SECONDS="${IDLE_SLEEP_SECONDS:-300}"
+# Back-compat: SLEEP_SECONDS still respected if someone sets it (overrides idle).
+if [ -n "$SLEEP_SECONDS" ]; then
+  IDLE_SLEEP_SECONDS="$SLEEP_SECONDS"
+fi
 LOOP_TAG="[agent-loop]"
 
 # Verifier gate configuration
@@ -574,9 +581,12 @@ while true; do
 
   if [ -n "$TASK_FILE" ]; then
     run_task "$TASK_FILE" || echo "$LOOP_TAG run_task returned non-zero"
+    # Just finished work — sleep briefly so the next queued spec starts ASAP
+    echo "$LOOP_TAG cycle done; active sleep ${ACTIVE_SLEEP_SECONDS}s before next pick"
+    sleep "$ACTIVE_SLEEP_SECONDS"
   else
-    echo "$LOOP_TAG no queued tasks; sleeping ${SLEEP_SECONDS}s"
+    # Queue empty — relax to a long sleep so we don't hammer git fetch
+    echo "$LOOP_TAG no queued tasks; idle sleep ${IDLE_SLEEP_SECONDS}s"
+    sleep "$IDLE_SLEEP_SECONDS"
   fi
-
-  sleep "$SLEEP_SECONDS"
 done
