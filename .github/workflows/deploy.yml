@@ -37,6 +37,16 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_ATLAS_URL: ${{ secrets.VITE_ATLAS_URL }}
+          VITE_ATLAS_API_TOKEN: ${{ secrets.VITE_ATLAS_API_TOKEN }}
+
+      - name: Add SPA fallback for GitHub Pages
+        run: |
+          # GitHub Pages serves static files. Copy index.html to 404.html
+          # so any unknown path falls through to the React app shell, which
+          # then routes client-side. Without this, /atlas returns hard 404.
+          cp dist/index.html dist/404.html
+          echo "SPA fallback: dist/404.html created"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
