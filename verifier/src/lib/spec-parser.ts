@@ -38,12 +38,18 @@ function splitIntoSections(markdown: string): Array<{ header: string; body: stri
 }
 
 function extractFilePathsFromText(text: string): Set<string> {
+  // Strip lines marked "(optional)" — those artifacts must not fail the audit
+  const filteredText = text
+    .split('\n')
+    .filter(line => !/\(optional\)/i.test(line))
+    .join('\n')
+
   const paths = new Set<string>()
   let m: RegExpExecArray | null
 
   // Paths in backtick inline code: `src/pages/Auth.tsx`
   const backtickRe = /`([^`\s]+)`/g
-  while ((m = backtickRe.exec(text)) !== null) {
+  while ((m = backtickRe.exec(filteredText)) !== null) {
     const c = m[1].trim()
     if (FILE_EXT_RE.test(c) && c.includes('/') && !c.includes(' ') && !c.includes('..')) {
       paths.add(c)
@@ -52,14 +58,14 @@ function extractFilePathsFromText(text: string): Set<string> {
 
   // Paths in table cells: | src/pages/Auth.tsx |
   const tableCellRe = /\|\s*([a-zA-Z0-9._\-/]+\.[a-z]+)\s*[|]/g
-  while ((m = tableCellRe.exec(text)) !== null) {
+  while ((m = tableCellRe.exec(filteredText)) !== null) {
     const c = m[1].trim()
     if (FILE_EXT_RE.test(c) && c.includes('/')) paths.add(c)
   }
 
   // Bullet list paths: "- src/pages/Auth.tsx" or "- `src/pages/Auth.tsx`"
   const bulletRe = /^[\t ]*[-*]\s+`?((?:src|supabase|agent|verifier|adela)\/[a-zA-Z0-9._\-/]+\.[a-z]+)`?/gm
-  while ((m = bulletRe.exec(text)) !== null) {
+  while ((m = bulletRe.exec(filteredText)) !== null) {
     paths.add(m[1].trim())
   }
 
@@ -119,13 +125,14 @@ function extractFunctionNames(text: string): string[] {
 
 function extractRoutes(text: string): string[] {
   const routes = new Set<string>()
-  // Match URL route paths in backticks: `/dashboard`, `/auth`
-  const re = /`(\/[a-zA-Z][a-zA-Z0-9\-/]*)`/g
+  // Only extract routes explicitly defined as React Router <Route path="..."> syntax.
+  // This prevents backend API paths (e.g. /atlas/mode, /api/...) from being treated
+  // as frontend routes just because they appear as backtick URLs in the spec text.
+  const routeTagRe = /<Route\s+[^>]*path=["']([^"']+)["']/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
+  while ((m = routeTagRe.exec(text)) !== null) {
     const c = m[1]
-    // Exclude file paths (contain a dot) and SSH-style paths
-    if (!c.includes('.') && !c.includes('//')) routes.add(c)
+    if (!c.includes('..')) routes.add(c)
   }
   return Array.from(routes)
 }

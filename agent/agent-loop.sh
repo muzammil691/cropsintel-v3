@@ -26,7 +26,7 @@ LOOP_TAG="[agent-loop]"
 VERIFIER_URL="${VERIFIER_URL:-https://rare-happiness-production.up.railway.app}"
 VERIFIER_API_TOKEN="${VERIFIER_API_TOKEN:-}"
 VERIFIER_GATE_ENABLED="${VERIFIER_GATE_ENABLED:-true}"
-VERIFIER_FAIL_CONFIDENCE_THRESHOLD="${VERIFIER_FAIL_CONFIDENCE_THRESHOLD:-0.7}"
+VERIFIER_FAIL_CONFIDENCE_THRESHOLD="${VERIFIER_FAIL_CONFIDENCE_THRESHOLD:-0.3}"
 VERIFIER_TIMEOUT_SECONDS="${VERIFIER_TIMEOUT_SECONDS:-60}"
 
 # Designer gate configuration (UI tasks only — runs after Verifier passes)
@@ -140,11 +140,8 @@ run_verifier_gate() {
     return 0
   }
 
-  local verdict
-  verdict=$(echo "$response" | jq -r '.verdict // "unknown"')
-  local confidence
-  confidence=$(echo "$response" | jq -r '.confidence // 0')
-
+  local verdict=$(echo "$response" | jq -r '.verdict // "unknown"')
+  local confidence=$(echo "$response" | jq -r '.confidence // 0')
   echo "$LOOP_TAG verifier verdict: $verdict (confidence $confidence)"
 
   if [ "$verdict" = "pass" ]; then
@@ -152,37 +149,61 @@ run_verifier_gate() {
   fi
 
   if [ "$verdict" = "fail" ]; then
-    local should_block
-    should_block=$(awk -v c="$confidence" -v t="$VERIFIER_FAIL_CONFIDENCE_THRESHOLD" 'BEGIN { print (c >= t) ? "true" : "false" }')
+    # Lowered threshold to 0.3 (was 0.7) — any moderately-confident fail blocks
+    local STRICT_THRESHOLD="${VERIFIER_FAIL_CONFIDENCE_THRESHOLD:-0.3}"
+    local should_block=$(awk -v c="$confidence" -v t="$STRICT_THRESHOLD" 'BEGIN { print (c >= t) ? "true" : "false" }')
 
     if [ "$should_block" = "true" ]; then
-      echo "$LOOP_TAG verifier BLOCKED push (fail conf=$confidence >= $VERIFIER_FAIL_CONFIDENCE_THRESHOLD)"
-      git reset --hard "$head_before"
+      echo "$LOOP_TAG verifier BLOCKED push (fail conf=$confidence >= $STRICT_THRESHOLD)"
 
-      # Queue remediation task
-      local rem_count
-      rem_count=$(ls .agent/tasks/queued/ 2>/dev/null | grep -c "^${task_id}-remediation-" || echo 0)
-      local rem_num
-      rem_num=$(printf "%03d" $((rem_count + 1)))
+      # Count existing remediation attempts for this task across ALL directories
+      local rem_count=$(ls .agent/tasks/{queued,in-progress,failed,done}/ 2>/dev/null | grep -c "^${task_id}-remediation-" || echo 0)
+      local MAX_REMEDIATION_ATTEMPTS="${MAX_REMEDIATION_ATTEMPTS:-3}"
+
+      if [ "$rem_count" -ge "$MAX_REMEDIATION_ATTEMPTS" ]; then
+        echo "$LOOP_TAG max remediation attempts ($MAX_REMEDIATION_ATTEMPTS) reached for $task_id — escalating to user"
+        # Revert and escalate — no more remediation queued
+        git reset --hard "$head_before"
+        /usr/local/bin/notify-whatsapp.sh "🚨 $task_id failed $MAX_REMEDIATION_ATTEMPTS remediation attempts. Verifier confidence: $confidence. NEEDS YOUR EYES — see verifier_runs and .agent/tasks/failed/" || true
+        return 1
+      fi
+
+      # Queue remediation with rich context
+      git reset --hard "$head_before"
+      local rem_num=$(printf "%03d" $((rem_count + 1)))
       local rem_file=".agent/tasks/queued/${task_id}-remediation-${rem_num}.md"
 
       cat > "$rem_file" <<EOF
-# Task: ${task_id} remediation ${rem_num}
+# Task: ${task_id} remediation ${rem_num} of ${MAX_REMEDIATION_ATTEMPTS}
 
-**Reason:** Verifier blocked push at $(date -u +%FT%TZ). Confidence: $confidence
-**Original task:** .agent/tasks/failed/${task_id}.md
-**Verifier feedback:** see verifier_runs row at $head_after
+**Reason:** Verifier blocked push at $(date -u +%FT%TZ)
+**Original task:** ${task_id}
+**Verifier verdict:** fail (confidence: $confidence)
+**Attempt:** $((rem_count + 1)) of $MAX_REMEDIATION_ATTEMPTS
 
-$(echo "$response" | jq -r '.gaps[] | "- " + .description' 2>/dev/null || echo "$response")
+## Gaps Verifier identified
+
+$(echo "$response" | jq -r '.gaps[] | "### \(.severity // "medium"): \(.check // "general")\n- **Description:** \(.description)\n- **Fix:** \(.fix // "")\n"' 2>/dev/null || echo "$response")
+
+## AI Judgment context
+
+$(echo "$response" | jq -r '.ai_judgment // "" | if type == "object" then to_entries[] | "**\(.key):** \(.value | tostring | .[0:500])" else . end' 2>/dev/null)
 
 ## Action
 
-Re-attempt the original task addressing the gaps above.
+Re-attempt the original task spec at \`.agent/tasks/done/${task_id}.md\` (or wherever it landed), addressing EACH gap above. Do not skip any.
+
+After fixes, the new commit will be re-audited by Verifier. If gaps remain, this task will spawn another remediation. If $MAX_REMEDIATION_ATTEMPTS attempts fail in a row, the cycle escalates to the user.
+
 EOF
-      git add "$rem_file" && git commit -m "verifier: queue remediation for $task_id (conf=$confidence)" && git push origin main || true
+      git add "$rem_file" && git commit -m "verifier: queue remediation $rem_num/$MAX_REMEDIATION_ATTEMPTS for $task_id (conf=$confidence)" && git push origin main || true
+
+      /usr/local/bin/notify-whatsapp.sh "🔍 Verifier blocked $task_id — remediation $rem_num/$MAX_REMEDIATION_ATTEMPTS queued (conf $confidence)" || true
       return 1
     else
-      echo "$LOOP_TAG verifier FAIL but confidence $confidence < $VERIFIER_FAIL_CONFIDENCE_THRESHOLD, pushing with warning"
+      # Sub-threshold fail: push through but flag for review
+      echo "$LOOP_TAG verifier soft-fail (conf $confidence < $STRICT_THRESHOLD) — pushing but flagging for review"
+      /usr/local/bin/notify-whatsapp.sh "⚠️ $task_id pushed despite verifier soft-fail (conf $confidence). Review verifier_runs." || true
       return 0
     fi
   fi

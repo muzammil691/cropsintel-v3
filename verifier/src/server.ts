@@ -102,9 +102,12 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
       verdict,
       confidence,
       gaps: result.gaps.map(g => ({
+        check: g.check,
         description: `${g.check}: ${g.actual}`,
         severity: g.severity === 'fail' ? 'high' : 'medium',
+        fix: g.remediation,
       })),
+      ai_judgment: result.judgmentCallNotes || undefined,
       audit_run_id: randomUUID(),
     })
   } catch (err) {
