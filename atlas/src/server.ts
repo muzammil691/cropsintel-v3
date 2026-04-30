@@ -10,6 +10,7 @@ import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
 import { buildHonestyPrompt } from './lib/system-prompt'
+import { detectIntent, buildIntentHint } from './lib/intent-detect'
 import { TrustMode } from './types'
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -80,6 +81,16 @@ export async function runChatTurn(params: {
     messages.push({ role: 'user', content: message })
   }
 
+  // ─── Intent-detection hint (advisory, no LLM call) ────────────────────────
+  // Runs BEFORE Claude — if a high-confidence pattern matches, we append a hidden
+  // user-role message guiding the LLM toward the relevant tool. The LLM remains free
+  // to ignore it.
+  const intent = detectIntent(message)
+  if (intent && intent.confidence >= 0.75) {
+    onEvent?.('intent_hint', { tool: intent.tool, reason: intent.reason, confidence: intent.confidence, matched: intent.matched })
+    messages.push({ role: 'user', content: buildIntentHint(intent) })
+  }
+
   let totalCostUsd = 0
   let assistantText = ''
   let iteration = 0
@@ -115,15 +126,52 @@ export async function runChatTurn(params: {
       const toolName = toolUse.name.replace('_', '.') as ToolName
       onEvent?.('tool_call', { tool: toolName, arguments: toolUse.input })
 
+      // Inject thread_id for spec-authorship tools so they can persist pending-spec rows
+      // (preserved insertion order: phase, goal, then thread_id at the end).
+      let toolArgs = toolUse.input as Record<string, unknown>
+      if (toolName === 'atlas.propose_and_queue' && !('thread_id' in toolArgs)) {
+        toolArgs = { ...toolArgs, thread_id: threadId }
+      }
+
       const dispatchResult = await dispatch({
         tool: toolName,
-        arguments: toolUse.input as Record<string, unknown>,
+        arguments: toolArgs,
         initiatedBy: `${channel}:${threadId}`,
         trustMode,
         overrideToken,
       })
 
       onEvent?.('tool_result', { tool: toolName, ...dispatchResult })
+
+      // Emit spec_drafted SSE for ChatPanel preview when an Atlas spec authorship tool
+      // returns successfully with markdown content.
+      if (
+        (toolName === 'atlas.draft_spec' || toolName === 'atlas.propose_and_queue') &&
+        dispatchResult.status !== 'failed' && dispatchResult.status !== 'blocked'
+      ) {
+        const r = dispatchResult.result as {
+          filename?: string
+          markdown?: string
+          spec_markdown?: string
+          action?: string
+          validation?: { ok: boolean; missing: string[] }
+          cost_usd?: number
+          queue?: { sha: string; queue_position: number; queue_size: number }
+          review_verdict?: string
+        } | null
+        if (r) {
+          onEvent?.('spec_drafted', {
+            tool: toolName,
+            filename: r.filename ?? null,
+            markdown: r.markdown ?? r.spec_markdown ?? '',
+            action: r.action ?? 'drafted',
+            validation: r.validation ?? null,
+            cost_usd: r.cost_usd ?? null,
+            queue: r.queue ?? null,
+            review_verdict: r.review_verdict ?? null,
+          })
+        }
+      }
 
       if (dispatchResult.verified) {
         onEvent?.('tool_verified', {

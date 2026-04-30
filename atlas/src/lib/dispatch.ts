@@ -25,6 +25,13 @@ export interface DispatchResult {
 const READ_ONLY_TOOLS = new Set<ToolName>([
   'memory.search', 'builder.list_queue', 'verifier.recent_runs', 'status.snapshot',
   'designer.review_spec', 'designer.audit_commit',
+  // atlas.draft_spec produces markdown only — no filesystem/git side effects.
+  'atlas.draft_spec',
+  // atlas.propose_and_queue is mode-aware: it queues only when trust_mode === 'auto'
+  // (and only after passing invariants). In chat/passive/confirm it returns a draft
+  // and stays passive. We allow it in all non-stopped modes; the tool itself enforces
+  // the mode-specific queueing decision.
+  'atlas.propose_and_queue',
 ])
 
 export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
@@ -49,6 +56,10 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
     'adela.trigger_scrape':  0.001,
     'designer.audit_commit': 0.05,
     'designer.review_spec':  0.05,
+    // atlas.draft_spec = Council ($0.10) + multi-brain debate ($0.20) ≈ $0.30
+    'atlas.draft_spec':       0.35,
+    // atlas.propose_and_queue = draft pipeline + invariant check + (auto) queue
+    'atlas.propose_and_queue': 0.40,
   }
   const estimatedCost = AI_COST_ESTIMATES[req.tool] ?? 0
   if (estimatedCost > 0) {

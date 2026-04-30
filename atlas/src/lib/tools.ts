@@ -3,6 +3,9 @@ import { writeFile, readdir, rename } from 'fs/promises'
 import { resolve } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { draftSpec, type DraftResult } from './spec-draft'
+import { getCurrentMode } from './trust-mode'
+import { checkInvariants } from './invariants'
 
 const execFileP = promisify(execFile)
 
@@ -254,6 +257,192 @@ export async function statusSnapshot(): Promise<unknown> {
   }
 }
 
+// ─── Atlas spec authorship ───────────────────────────────────────────────────
+
+export interface AtlasDraftSpecResult {
+  filename: string
+  markdown: string
+  validation: { ok: boolean; missing: string[] }
+  cost_usd: number
+  review_verdict: DraftResult['reviewVerdict']
+  review_rationale?: string
+  council: { used: boolean; error?: string }
+  steps: DraftResult['steps']
+}
+
+export async function atlasDraftSpec(phase: string, goal: string): Promise<AtlasDraftSpecResult> {
+  if (!phase || typeof phase !== 'string') throw new Error('atlas.draft_spec: `phase` is required (e.g. "1.7c")')
+  if (!goal || typeof goal !== 'string') throw new Error('atlas.draft_spec: `goal` is required (freeform feature description)')
+  const result = await draftSpec(phase, goal)
+  return {
+    filename: result.filename,
+    markdown: result.markdown,
+    validation: result.validation,
+    cost_usd: result.costUsd,
+    review_verdict: result.reviewVerdict,
+    review_rationale: result.reviewRationale,
+    council: result.council,
+    steps: result.steps,
+  }
+}
+
+export interface AtlasProposeAndQueueResult {
+  action: 'queued' | 'awaiting_confirmation' | 'draft_only' | 'invariant_blocked' | 'validation_failed'
+  filename: string
+  spec_markdown: string
+  validation: { ok: boolean; missing: string[] }
+  trust_mode: string
+  cost_usd: number
+  review_verdict: DraftResult['reviewVerdict']
+  council: { used: boolean; error?: string }
+  steps: DraftResult['steps']
+  // Populated when action === 'queued'
+  queue?: { sha: string; pushed: boolean; queue_position: number; queue_size: number; path: string }
+  // Populated when action === 'invariant_blocked'
+  invariant_violations?: Array<{ rule_id: string; description: string; severity: string }>
+  // Populated when action !== 'queued'
+  next_step?: string
+}
+
+export async function atlasProposeAndQueue(
+  phase: string,
+  goal: string,
+  threadId?: string,
+): Promise<AtlasProposeAndQueueResult> {
+  if (!phase || typeof phase !== 'string') throw new Error('atlas.propose_and_queue: `phase` is required (e.g. "1.7c")')
+  if (!goal || typeof goal !== 'string') throw new Error('atlas.propose_and_queue: `goal` is required (freeform feature description)')
+
+  const trustMode = getCurrentMode()
+  const draft = await draftSpec(phase, goal)
+
+  // Validation gate — surface to caller without queueing if missing sections.
+  if (!draft.validation.ok) {
+    return {
+      action: 'validation_failed',
+      filename: draft.filename,
+      spec_markdown: draft.markdown,
+      validation: draft.validation,
+      trust_mode: trustMode,
+      cost_usd: draft.costUsd,
+      review_verdict: draft.reviewVerdict,
+      council: draft.council,
+      steps: draft.steps,
+      next_step: `Spec failed structural validation after retries. Missing: ${draft.validation.missing.join(', ')}. Show the user the draft + missing sections and ask how to proceed.`,
+    }
+  }
+
+  // Master-plan invariants — applied to the draft body BEFORE we let any queue happen.
+  // (invariants.ts type-imports DispatchRequest from dispatch.ts, which is erased at
+  // runtime; no real cycle.)
+  const invariantCheck = await checkInvariants({
+    tool: 'builder.queue_spec',
+    arguments: { filename: draft.filename, body: draft.markdown },
+    initiatedBy: threadId ? `chat:${threadId}` : 'atlas.propose_and_queue',
+    trustMode,
+  })
+  if (!invariantCheck.allow) {
+    return {
+      action: 'invariant_blocked',
+      filename: draft.filename,
+      spec_markdown: draft.markdown,
+      validation: draft.validation,
+      trust_mode: trustMode,
+      cost_usd: draft.costUsd,
+      review_verdict: draft.reviewVerdict,
+      council: draft.council,
+      steps: draft.steps,
+      invariant_violations: invariantCheck.violations,
+      next_step: `Master plan invariants blocked the draft: ${invariantCheck.violations.map(v => `[${v.rule_id}] ${v.description}`).join('; ')}. Either revise the goal or refuse the request.`,
+    }
+  }
+
+  // Persist to atlas_pending_specs (best-effort) so the user can confirm later, even
+  // after the chat session rotates.
+  try {
+    const sb = getSupabaseClient()
+    if (sb && threadId) {
+      await sb.from('atlas_pending_specs').insert({
+        thread_id: threadId,
+        spec_markdown: draft.markdown,
+        filename: draft.filename,
+      })
+    }
+  } catch (err) {
+    console.warn('[atlas-pending-specs] insert failed (non-fatal):', err)
+  }
+
+  // ─── Mode-aware queueing ────────────────────────────────────────────────────
+  if (trustMode === 'auto') {
+    const queueResult = await builderQueueSpec(draft.filename, draft.markdown)
+    let queueList: string[] = []
+    try {
+      const list = await builderListQueue()
+      queueList = list.specs
+    } catch (err) {
+      console.warn('[atlas-propose] list_queue verification failed:', err)
+    }
+    const position = queueList.indexOf(draft.filename) + 1 // 1-based; 0 if not found
+    // Mark pending row resolved
+    try {
+      const sb = getSupabaseClient()
+      if (sb && threadId) {
+        await sb.from('atlas_pending_specs').update({
+          resolved_at: new Date().toISOString(),
+          resolution: 'queued',
+        }).eq('thread_id', threadId).eq('filename', draft.filename).is('resolved_at', null)
+      }
+    } catch { /* non-fatal */ }
+    return {
+      action: 'queued',
+      filename: draft.filename,
+      spec_markdown: draft.markdown,
+      validation: draft.validation,
+      trust_mode: trustMode,
+      cost_usd: draft.costUsd,
+      review_verdict: draft.reviewVerdict,
+      council: draft.council,
+      steps: draft.steps,
+      queue: {
+        sha: queueResult.sha,
+        pushed: queueResult.pushed,
+        queue_position: position,
+        queue_size: queueList.length,
+        path: queueResult.path,
+      },
+      next_step: `Queued at position ${position} of ${queueList.length}. SHA ${queueResult.sha}. Builder will pick it up on next loop.`,
+    }
+  }
+
+  if (trustMode === 'confirm') {
+    return {
+      action: 'awaiting_confirmation',
+      filename: draft.filename,
+      spec_markdown: draft.markdown,
+      validation: draft.validation,
+      trust_mode: trustMode,
+      cost_usd: draft.costUsd,
+      review_verdict: draft.reviewVerdict,
+      council: draft.council,
+      steps: draft.steps,
+      next_step: `Trust mode is confirm. Show the user the FULL drafted markdown and ask: "Approve queueing ${draft.filename}? Reply YES to ship, NO to cancel, or tell me what to tweak." On YES, call builder.queue_spec with the same filename + body.`,
+    }
+  }
+
+  // chat / passive / stopped (stopped already blocked by dispatch trust-mode gate)
+  return {
+    action: 'draft_only',
+    filename: draft.filename,
+    spec_markdown: draft.markdown,
+    validation: draft.validation,
+    trust_mode: trustMode,
+    cost_usd: draft.costUsd,
+    review_verdict: draft.reviewVerdict,
+    council: draft.council,
+    steps: draft.steps,
+    next_step: `Trust mode is ${trustMode} — drafted but NOT queued. Tell the user: "Currently in ${trustMode} mode — flip to confirm or auto to actually queue." Show them the draft.`,
+  }
+}
+
 // ─── Tool registry (for LLM function-calling) ───────────────────────────────
 
 export const TOOLS = {
@@ -265,6 +454,8 @@ export const TOOLS = {
   'verifier.audit':       { fn: verifierAudit,      description: 'Trigger Verifier to audit a task by ID and HEAD range. Returns verdict + gaps.' },
   'verifier.recent_runs': { fn: verifierRecentRuns, description: 'List recent verifier audit runs.' },
   'council.write_spec':   { fn: councilWriteSpec,   description: 'Ask Council to decompose a phase into a task spec.' },
+  'atlas.draft_spec':     { fn: atlasDraftSpec,     description: 'Draft a full task spec markdown for a given phase + freeform goal. Internally runs Council first-draft + multi-brain debate review + structural validation. args=(phase, goal). Read-only — does NOT queue. Use this when the user wants a preview/critique only.' },
+  'atlas.propose_and_queue': { fn: atlasProposeAndQueue, description: 'Primary spec-authorship flow: draft (Council + multi-brain) → validate → check invariants → queue (auto mode) or stage for confirmation (confirm mode) or draft-only (chat/passive). args=(phase, goal). thread_id is auto-injected by the chat handler. Use this whenever the user says "build/ship/queue/spec" something.' },
   'adela.trigger_scrape': { fn: adelaTriggerScrape, description: 'Trigger Adela to run a scraper. Sources: usda-nass, abc-objective, news-rss, etc.' },
   'designer.audit_commit':{ fn: designerAuditCommit,description: 'Run Designer audit on a UI commit. args=(task_id, head_before, head_after, screenshot_url?). Returns verdict + gaps.' },
   'designer.review_spec': { fn: designerReviewSpec, description: 'Run Designer review on a task spec. args=(task_id, spec_markdown). Returns verdict + gaps.' },
