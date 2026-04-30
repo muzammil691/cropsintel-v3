@@ -48,6 +48,8 @@ const COUNCIL_URL = process.env.COUNCIL_URL ?? 'https://just-reflection-producti
 const COUNCIL_TOKEN = process.env.COUNCIL_API_TOKEN
 const ADELA_URL = process.env.ADELA_URL ?? 'https://believable-warmth-production.up.railway.app'
 const ADELA_TOKEN = process.env.ADELA_API_TOKEN
+const DESIGNER_URL = process.env.DESIGNER_URL ?? ''
+const DESIGNER_TOKEN = process.env.DESIGNER_API_TOKEN
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN
 const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER ?? '+12345622692' // Maxons; swap when Atlas has dedicated number
@@ -155,6 +157,43 @@ export async function adelaTriggerScrape(source: string): Promise<unknown> {
   return res.json()
 }
 
+// ─── Designer ───────────────────────────────────────────────────────────────
+
+export async function designerAuditCommit(
+  taskId: string,
+  headBefore: string,
+  headAfter: string,
+  screenshotUrl?: string,
+): Promise<unknown> {
+  if (!DESIGNER_URL) {
+    return { verdict: 'unknown', error: 'DESIGNER_URL not configured', gaps: [] }
+  }
+  const res = await fetch(`${DESIGNER_URL}/designer/audit-commit`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${DESIGNER_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_id: taskId, head_before: headBefore, head_after: headAfter, screenshot_url: screenshotUrl }),
+  })
+  if (!res.ok) {
+    return { verdict: 'unknown', error: `designer audit-commit ${res.status}`, gaps: [] }
+  }
+  return res.json()
+}
+
+export async function designerReviewSpec(taskId: string, specMarkdown: string): Promise<unknown> {
+  if (!DESIGNER_URL) {
+    return { verdict: 'unknown', error: 'DESIGNER_URL not configured', gaps: [] }
+  }
+  const res = await fetch(`${DESIGNER_URL}/designer/review-spec`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${DESIGNER_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_id: taskId, spec_markdown: specMarkdown }),
+  })
+  if (!res.ok) {
+    return { verdict: 'unknown', error: `designer review-spec ${res.status}`, gaps: [] }
+  }
+  return res.json()
+}
+
 // ─── Notification (WhatsApp via Twilio direct API) ──────────────────────────
 
 export async function whatsappSend(to: string, body: string): Promise<{ sid: string }> {
@@ -227,6 +266,8 @@ export const TOOLS = {
   'verifier.recent_runs': { fn: verifierRecentRuns, description: 'List recent verifier audit runs.' },
   'council.write_spec':   { fn: councilWriteSpec,   description: 'Ask Council to decompose a phase into a task spec.' },
   'adela.trigger_scrape': { fn: adelaTriggerScrape, description: 'Trigger Adela to run a scraper. Sources: usda-nass, abc-objective, news-rss, etc.' },
+  'designer.audit_commit':{ fn: designerAuditCommit,description: 'Run Designer audit on a UI commit. args=(task_id, head_before, head_after, screenshot_url?). Returns verdict + gaps.' },
+  'designer.review_spec': { fn: designerReviewSpec, description: 'Run Designer review on a task spec. args=(task_id, spec_markdown). Returns verdict + gaps.' },
   'whatsapp.send':        { fn: whatsappSend,       description: 'Send a WhatsApp message to a number. to=E.164 format like +971501234567.' },
   'status.snapshot':      { fn: statusSnapshot,     description: 'Compute and return a fresh project status snapshot.' },
 } as const

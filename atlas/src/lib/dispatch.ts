@@ -22,6 +22,7 @@ export interface DispatchResult {
 
 const READ_ONLY_TOOLS = new Set<ToolName>([
   'memory.search', 'builder.list_queue', 'verifier.recent_runs', 'status.snapshot',
+  'designer.review_spec', 'designer.audit_commit',
 ])
 
 export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
@@ -40,10 +41,12 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   // 'confirm' mode: caller is expected to have already obtained user consent before calling dispatch()
   // 'auto' mode: cost gatekeeper applies
   const AI_COST_ESTIMATES: Partial<Record<ToolName, number>> = {
-    'council.write_spec': 0.10,
-    'memory.search':      0.001,
-    'memory.ingest':      0.001,
-    'adela.trigger_scrape': 0.001,
+    'council.write_spec':    0.10,
+    'memory.search':         0.001,
+    'memory.ingest':         0.001,
+    'adela.trigger_scrape':  0.001,
+    'designer.audit_commit': 0.05,
+    'designer.review_spec':  0.05,
   }
   const estimatedCost = AI_COST_ESTIMATES[req.tool] ?? 0
   if (estimatedCost > 0) {
