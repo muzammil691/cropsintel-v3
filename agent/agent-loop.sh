@@ -251,8 +251,26 @@ run_task() {
   #   --dangerously-skip-permissions = bypass all permission checks (now allowed since non-root)
   #   --permission-mode bypassPermissions = backup permission mode
   #   --tools default = explicit "use all built-in tools"
+
+  # Background heartbeat — emits "still running" every 60s to STDOUT so Railway logs
+  # show the loop is alive even though Claude's output goes to a separate log file.
+  # Without this, Builder LOOKS idle from Railway's perspective for 15-30+ min.
+  (
+    while true; do
+      sleep 60
+      echo "$LOOP_TAG heartbeat: claude running on $TASK_NAME for $(($(date +%s) - START_TIME))s (model=$MODEL)"
+    done
+  ) &
+  local HEARTBEAT_PID=$!
+
+  # Watchdog timeout: 30 min. If Claude doesn't finish in 30 min, kill it.
+  # This is the PERMANENT fix for "Builder appears wedged" — agent-loop now
+  # self-recovers by timing out hung Claude executions, then handles the
+  # exit code as a normal task failure (moves to failed/, queues remediation).
+  local CLAUDE_TIMEOUT_SECONDS="${CLAUDE_TIMEOUT_SECONDS:-1800}"
+
   set +e
-  claude \
+  timeout "$CLAUDE_TIMEOUT_SECONDS" claude \
     --print \
     --model "$MODEL" \
     --max-turns 200 \
@@ -265,6 +283,15 @@ run_task() {
   local CLAUDE_EXIT=$?
   echo "$LOOP_TAG claude exit code: $CLAUDE_EXIT" >> "$LOG"
   set -e
+
+  # Kill the heartbeat now that Claude finished (or timed out)
+  kill "$HEARTBEAT_PID" 2>/dev/null || true
+
+  # Detect timeout (exit code 124 = standard `timeout` SIGTERM)
+  if [ "$CLAUDE_EXIT" = "124" ]; then
+    echo "$LOOP_TAG TIMEOUT: claude on $TASK_NAME exceeded ${CLAUDE_TIMEOUT_SECONDS}s — killing and treating as failed"
+    /usr/local/bin/notify-whatsapp.sh "⏰ Builder timed out on $TASK_NAME after ${CLAUDE_TIMEOUT_SECONDS}s — moving to failed/, will retry next cycle" || true
+  fi
 
   # CRITICAL DEBUG: persist the log file to git so we can see what Claude actually said
   mkdir -p .agent/tasks/logs
