@@ -1,6 +1,7 @@
 import { TOOLS, ToolName } from './tools'
 import { getSupabaseClient } from './supabase'
 import { checkBudget } from './cost-gate'
+import { checkInvariants } from './invariants'
 import { TrustMode } from '../types'
 
 export interface DispatchRequest {
@@ -76,6 +77,28 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   }
 
   const dispatchId = pendingRow.id as string
+
+  // Master plan invariants check — runs before any write-tool execution
+  const invariantCheck = await checkInvariants(req)
+  if (!invariantCheck.allow) {
+    const violationSummary = invariantCheck.violations.map(v => `[${v.rule_id}] ${v.description}`).join('; ')
+    await Promise.all([
+      sb.from('atlas_dispatches').update({ status: 'blocked', error_message: `Invariant violation: ${violationSummary}`, duration_ms: Date.now() - start }).eq('id', dispatchId),
+      sb.from('atlas_decisions').insert({
+        fork_question: `Invariant check on ${req.tool}`,
+        options_considered: { proposed: req.arguments },
+        chosen_option: 'BLOCKED',
+        rationale: violationSummary,
+        decided_by: 'atlas-auto',
+      }),
+    ]).catch(() => { /* non-fatal: log best-effort */ })
+    return {
+      dispatchId,
+      status: 'blocked',
+      error: `Master plan invariants violated: ${invariantCheck.violations.map(v => v.description).join('; ')}`,
+      durationMs: Date.now() - start,
+    }
+  }
 
   // Execute the tool
   const toolEntry = (TOOLS as Record<string, { fn: (...a: unknown[]) => Promise<unknown>; description: string } | undefined>)[req.tool]
