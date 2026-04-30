@@ -1,8 +1,45 @@
 import { getSupabaseClient } from './supabase'
 import { writeFile, readdir, rename } from 'fs/promises'
 import { resolve } from 'path'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+
+const execFileP = promisify(execFile)
 
 const REPO_ROOT = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
+
+// ─── Git helper for autonomous Atlas commits ────────────────────────────────
+async function gitCommitAndPush(commitMsg: string, filesToAdd: string[]): Promise<{ sha: string; pushed: boolean }> {
+  // Pull first to avoid stale-base conflicts
+  try {
+    await execFileP('git', ['pull', '--rebase', 'origin', 'main'], { cwd: REPO_ROOT })
+  } catch (err) {
+    console.warn('[atlas-git] pull failed (continuing):', err)
+  }
+  // Stage files
+  for (const f of filesToAdd) {
+    await execFileP('git', ['add', f], { cwd: REPO_ROOT })
+  }
+  // Commit
+  try {
+    await execFileP('git', ['-c', 'user.name=Atlas', '-c', 'user.email=atlas@cropsintel.local', 'commit', '-m', commitMsg], { cwd: REPO_ROOT })
+  } catch (err) {
+    // Probably nothing to commit
+    console.warn('[atlas-git] commit produced no changes:', err)
+    return { sha: 'no-changes', pushed: false }
+  }
+  // Get sha
+  const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT })
+  const sha = stdout.trim()
+  // Push
+  try {
+    await execFileP('git', ['push', 'origin', 'main'], { cwd: REPO_ROOT })
+    return { sha, pushed: true }
+  } catch (err) {
+    console.error('[atlas-git] push failed:', err)
+    return { sha, pushed: false }
+  }
+}
 const MEMORY_URL = process.env.MEMORY_URL ?? 'https://cooperative-rejoicing-production.up.railway.app'
 const MEMORY_TOKEN = process.env.MEMORY_API_TOKEN
 const VERIFIER_URL = process.env.VERIFIER_URL ?? 'https://rare-happiness-production.up.railway.app'
@@ -39,25 +76,38 @@ export async function memoryIngest(source: string): Promise<unknown> {
 
 // ─── Builder (file-system based) ────────────────────────────────────────────
 
-export async function builderQueueSpec(filename: string, body: string): Promise<{ path: string }> {
+export async function builderQueueSpec(filename: string, body: string): Promise<{ path: string; sha: string; pushed: boolean }> {
   if (!filename.endsWith('.md')) throw new Error('builder.queue_spec: filename must end in .md')
   if (!filename.startsWith('phase-')) throw new Error('builder.queue_spec: filename must start with "phase-"')
-  const path = resolve(REPO_ROOT, '.agent/tasks/queued', filename)
-  await writeFile(path, body, 'utf-8')
-  return { path }
+  const relPath = `.agent/tasks/queued/${filename}`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  await writeFile(fullPath, body, 'utf-8')
+  // Auto-commit and push so Builder picks it up — Atlas owns the queue end-to-end
+  const result = await gitCommitAndPush(`atlas: queue ${filename.replace(/\.md$/, '')}`, [relPath])
+  return { path: fullPath, sha: result.sha, pushed: result.pushed }
 }
 
 export async function builderListQueue(): Promise<{ specs: string[] }> {
+  // Refresh to see latest
+  try {
+    await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
+    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
+  } catch (err) {
+    console.warn('[atlas-list] git refresh failed:', err)
+  }
   const dir = resolve(REPO_ROOT, '.agent/tasks/queued')
   const files = await readdir(dir)
   return { specs: files.filter(f => f.endsWith('.md') && f !== '_template.md') }
 }
 
-export async function builderCancelTask(taskId: string): Promise<{ moved_to: string }> {
-  const fromPath = resolve(REPO_ROOT, '.agent/tasks/queued', `${taskId}.md`)
-  const toPath = resolve(REPO_ROOT, '.agent/tasks/cancelled', `${taskId}.md`)
+export async function builderCancelTask(taskId: string): Promise<{ moved_to: string; sha: string; pushed: boolean }> {
+  const fromRel = `.agent/tasks/queued/${taskId}.md`
+  const toRel = `.agent/tasks/cancelled/${taskId}.md`
+  const fromPath = resolve(REPO_ROOT, fromRel)
+  const toPath = resolve(REPO_ROOT, toRel)
   await rename(fromPath, toPath)
-  return { moved_to: toPath }
+  const result = await gitCommitAndPush(`atlas: cancel ${taskId}`, [fromRel, toRel])
+  return { moved_to: toPath, sha: result.sha, pushed: result.pushed }
 }
 
 // ─── Verifier ───────────────────────────────────────────────────────────────
