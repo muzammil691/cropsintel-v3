@@ -43,8 +43,12 @@ jobs:
       - name: Add SPA fallback for GitHub Pages
         run: |
           # GitHub Pages serves static files. Copy index.html to 404.html
+<<<<<<< Updated upstream
           # so any unknown path falls through to the React app shell, which
           # then routes client-side. Without this, /atlas returns hard 404.
+=======
+          # so client-side React Router can handle /atlas, /atlas/*, etc.
+>>>>>>> Stashed changes
           cp dist/index.html dist/404.html
           echo "SPA fallback: dist/404.html created"
 
