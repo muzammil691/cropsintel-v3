@@ -12,6 +12,7 @@ import NotImplemented from "@/components/NotImplemented"
 const Welcome = lazy(() => import("./pages/Welcome"))
 const Auth = lazy(() => import("./pages/Auth"))
 const Dashboard = lazy(() => import("./pages/Dashboard"))
+const Atlas = lazy(() => import("./pages/Atlas"))
 const NotFound = lazy(() => import("./pages/NotFound"))
 
 function PageLoader() {
@@ -46,6 +47,9 @@ export default function App() {
             </RouteGuard>
           }
         />
+
+        {/* Atlas admin — single-user Muzammil; no auth guard in v0.1 */}
+        <Route path="/atlas" element={<Atlas />} />
 
         {/* Catch-all */}
         <Route path="*" element={<NotFound />} />
