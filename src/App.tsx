@@ -12,6 +12,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary"
 // Lazy-loaded pages (master plan calls for lazy routing per V1 pattern)
 const Welcome = lazy(() => import("./pages/Welcome"))
 const Auth = lazy(() => import("./pages/Auth"))
+const AuthCallback = lazy(() => import("./pages/AuthCallback"))
 const Dashboard = lazy(() => import("./pages/Dashboard"))
 const Atlas = lazy(() => import("./pages/Atlas"))
 const NotFound = lazy(() => import("./pages/NotFound"))
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/welcome" replace />} />
         <Route path="/welcome" element={<Welcome />} />
         <Route path="/auth" element={<Auth />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
 
         {/* Public surface — pending real build in Phase 1.50 */}
         <Route path="/insights" element={<NotImplemented phase="1.50-landing-real" />} />
