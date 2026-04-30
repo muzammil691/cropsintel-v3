@@ -4,7 +4,9 @@ import { Button } from '@/components/ui/button'
 import { useAtlasChat } from '@/hooks/useAtlasChat'
 import type { ChatMessage, ToolCallChip } from '@/lib/atlas-client'
 import { AudioPlayer } from '@/components/atlas/AudioPlayer'
+import { MicButton } from '@/components/atlas/MicButton'
 import type { UseTtsResult } from '@/hooks/useTts'
+import { useStt } from '@/hooks/useStt'
 
 // --- Simple markdown renderer (no external library)
 // Handles: headers, bold, italic, inline-code, code-blocks, bullets, line breaks
@@ -165,6 +167,7 @@ export function ChatPanel({ prefill, onPrefillConsumed, tts }: ChatPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const wasStreamingRef = useRef(false)
   const lastSpokenIdRef = useRef<string | null>(null)
+  const stt = useStt()
 
   // Inject prefill text (from WizardBar)
   useEffect(() => {
@@ -211,6 +214,17 @@ export function ChatPanel({ prefill, onPrefillConsumed, tts }: ChatPanelProps) {
     setInput('')
   }
 
+  function handleTranscript(text: string) {
+    // Append (with a space) to whatever the user had typed, then focus so they
+    // can review/edit before pressing send. Pre-populating preserves the
+    // "user reviews → user sends" review gate from the spec.
+    setInput((prev) => {
+      const trimmed = prev.trim()
+      return trimmed ? `${trimmed} ${text}` : text
+    })
+    textareaRef.current?.focus()
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -244,6 +258,20 @@ export function ChatPanel({ prefill, onPrefillConsumed, tts }: ChatPanelProps) {
         <div ref={bottomRef} />
       </div>
 
+      {/* Voice input status (aria-live so SR users hear recording / transcribing transitions) */}
+      <div role="status" aria-live="polite" className="sr-only">
+        {stt.recording ? 'Recording. Speak now.'
+          : stt.transcribing ? 'Transcribing audio.'
+          : ''}
+      </div>
+
+      {/* Inline error from voice input — surfaces permission denial / budget */}
+      {stt.lastError && (
+        <div className="border-t border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          {stt.lastError}
+        </div>
+      )}
+
       {/* Input bar */}
       <div className="border-t px-3 py-2 flex items-end gap-2">
         <textarea
@@ -252,11 +280,12 @@ export function ChatPanel({ prefill, onPrefillConsumed, tts }: ChatPanelProps) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask Atlas…"
+          placeholder={stt.recording ? 'Listening…' : stt.transcribing ? 'Transcribing…' : 'Ask Atlas…'}
           className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 transition max-h-40 overflow-y-auto placeholder:text-muted-foreground"
           style={{ fieldSizing: 'content' } as React.CSSProperties}
           disabled={isStreaming}
         />
+        <MicButton stt={stt} onTranscript={handleTranscript} disabled={isStreaming} />
         <Button
           size="icon"
           onClick={handleSend}

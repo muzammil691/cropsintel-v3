@@ -1,5 +1,6 @@
 import { getSupabaseClient } from './supabase'
 import { TTS_MODEL, estimateTtsCostUsd } from './elevenlabs'
+import { WHISPER_MODEL, estimateWhisperCostUsd } from './whisper'
 
 export async function recordCost(
   provider: string,
@@ -39,6 +40,22 @@ export async function recordElevenLabsTtsCost(
     null,
     costUsd,
     { voice_id: voiceId, char_count: charCount, ...(extraMetadata ?? {}) },
+  )
+}
+
+export async function recordWhisperSttCost(
+  audioSeconds: number,
+  extraMetadata?: Record<string, unknown>,
+): Promise<void> {
+  const costUsd = estimateWhisperCostUsd(audioSeconds)
+  await recordCost(
+    'openai',
+    'atlas',
+    WHISPER_MODEL,
+    Math.ceil(audioSeconds), // seconds-as-tokens for Whisper
+    null,
+    costUsd,
+    { duration_seconds: audioSeconds, ...(extraMetadata ?? {}) },
   )
 }
 

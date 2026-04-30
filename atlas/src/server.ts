@@ -12,10 +12,18 @@ import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from '.
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
 import { streamTts, listVoices, truncateForTts, VOICE_DEFAULT, estimateTtsCostUsd } from './lib/elevenlabs'
-import { recordElevenLabsTtsCost, getMonthlyProviderSpendUsd } from './lib/cost-log'
+import { recordElevenLabsTtsCost, recordWhisperSttCost, getMonthlyProviderSpendUsd } from './lib/cost-log'
+import {
+  transcribe,
+  ACCEPTED_MIME_TYPES,
+  WHISPER_MAX_BYTES,
+  estimateAudioSeconds,
+  estimateWhisperCostUsd,
+} from './lib/whisper'
 import { TrustMode } from './types'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
+const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
 const ATLAS_API_TOKEN = process.env.ATLAS_API_TOKEN
@@ -51,6 +59,88 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
     req.on('error', reject)
   })
+}
+
+function readBodyBuffer(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let total = 0
+    req.on('data', (chunk: Buffer) => {
+      total += chunk.length
+      if (total > maxBytes) {
+        reject(new Error('payload_too_large'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', reject)
+  })
+}
+
+interface ParsedMultipartFile {
+  field: string
+  filename: string
+  mimeType: string
+  data: Buffer
+}
+
+// Minimal multipart/form-data parser for a single audio file field.
+// Sufficient for browser MediaRecorder uploads where the body is a single file part.
+function parseMultipart(body: Buffer, boundary: string): ParsedMultipartFile[] {
+  const dashBoundary = Buffer.from(`--${boundary}`)
+  const crlf = Buffer.from('\r\n')
+  const files: ParsedMultipartFile[] = []
+
+  let offset = 0
+  while (offset < body.length) {
+    const start = body.indexOf(dashBoundary, offset)
+    if (start < 0) break
+    let cursor = start + dashBoundary.length
+    // Closing boundary "--boundary--"
+    if (body[cursor] === 0x2d && body[cursor + 1] === 0x2d) break
+    // Skip the trailing CRLF after boundary
+    if (body[cursor] === 0x0d && body[cursor + 1] === 0x0a) cursor += 2
+
+    // Read headers until empty line (CRLF CRLF).
+    const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), cursor)
+    if (headerEnd < 0) break
+    const headersRaw = body.slice(cursor, headerEnd).toString('utf-8')
+    const dataStart = headerEnd + 4
+
+    // Locate next boundary (data ends with CRLF preceding "--boundary").
+    const nextBoundary = body.indexOf(dashBoundary, dataStart)
+    if (nextBoundary < 0) break
+    // Strip the trailing CRLF that precedes the boundary marker.
+    let dataEnd = nextBoundary
+    if (body[dataEnd - 2] === 0x0d && body[dataEnd - 1] === 0x0a) dataEnd -= 2
+
+    const data = body.slice(dataStart, dataEnd)
+
+    // Parse Content-Disposition + Content-Type from headers.
+    let field = ''
+    let filename = ''
+    let mimeType = 'application/octet-stream'
+    for (const line of headersRaw.split('\r\n')) {
+      const lower = line.toLowerCase()
+      if (lower.startsWith('content-disposition:')) {
+        const nameMatch = line.match(/name="([^"]+)"/i)
+        const fileMatch = line.match(/filename="([^"]*)"/i)
+        if (nameMatch) field = nameMatch[1]
+        if (fileMatch) filename = fileMatch[1]
+      } else if (lower.startsWith('content-type:')) {
+        mimeType = line.slice('content-type:'.length).trim()
+      }
+    }
+
+    if (filename) {
+      files.push({ field, filename, mimeType, data })
+    }
+    offset = nextBoundary
+    void crlf
+  }
+  return files
 }
 
 export async function runChatTurn(params: {
@@ -430,6 +520,80 @@ async function handleTts(req: IncomingMessage, res: ServerResponse): Promise<voi
   void recordElevenLabsTtsCost(charCount, voiceId, { truncated: rawText.length > text.length })
 }
 
+async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+
+  const contentType = req.headers['content-type'] ?? ''
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+  if (!contentType.toLowerCase().startsWith('multipart/form-data') || !boundaryMatch) {
+    json(res, 400, { error: 'Content-Type must be multipart/form-data' })
+    return
+  }
+  const boundary = (boundaryMatch[1] ?? boundaryMatch[2] ?? '').trim()
+  if (!boundary) { json(res, 400, { error: 'Missing multipart boundary' }); return }
+
+  // Budget gate: if month-to-date OpenAI spend already at or near the cap, refuse.
+  const monthSpend = await getMonthlyProviderSpendUsd('openai')
+  if (monthSpend >= OPENAI_BUDGET_GATE_USD) {
+    json(res, 429, {
+      error: 'budget_exceeded',
+      message: 'STT disabled — monthly OpenAI cap approaching.',
+      month_to_date_usd: monthSpend,
+      gate_usd: OPENAI_BUDGET_GATE_USD,
+    })
+    return
+  }
+
+  let body: Buffer
+  try {
+    body = await readBodyBuffer(req, WHISPER_MAX_BYTES)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg === 'payload_too_large') {
+      json(res, 413, { error: 'audio_too_large', max_bytes: WHISPER_MAX_BYTES })
+      return
+    }
+    json(res, 400, { error: 'failed_to_read_body', detail: msg })
+    return
+  }
+
+  const files = parseMultipart(body, boundary)
+  const audioFile = files.find(f => f.field === 'audio') ?? files[0]
+  if (!audioFile) { json(res, 400, { error: 'No audio file in request' }); return }
+
+  const mimeBase = audioFile.mimeType.split(';')[0].trim().toLowerCase()
+  const accepted = ACCEPTED_MIME_TYPES.some(t => t.split(';')[0] === mimeBase)
+  if (!accepted) {
+    json(res, 415, { error: 'unsupported_audio_type', mime_type: audioFile.mimeType, accepted: ACCEPTED_MIME_TYPES })
+    return
+  }
+
+  let result: { text: string; durationMs: number }
+  try {
+    result = await transcribe(audioFile.data, audioFile.mimeType, audioFile.filename || 'audio.webm')
+  } catch (err) {
+    json(res, 502, { error: 'whisper_failed', detail: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  const audioSeconds = estimateAudioSeconds(audioFile.data.length)
+  const costUsd = estimateWhisperCostUsd(audioSeconds)
+
+  json(res, 200, {
+    transcript: result.text,
+    duration_ms: result.durationMs,
+    audio_seconds: audioSeconds,
+    cost_usd: costUsd,
+  })
+
+  // Log cost after responding; never block the client on the cost-log write.
+  void recordWhisperSttCost(audioSeconds, {
+    bytes: audioFile.data.length,
+    mime_type: audioFile.mimeType,
+    transcribe_latency_ms: result.durationMs,
+  })
+}
+
 export async function startServer(): Promise<void> {
   validateEnv()
   await loadTrustModeFromDb()
@@ -492,6 +656,11 @@ export async function startServer(): Promise<void> {
 
     if (url === '/atlas/tts/voices' && method === 'GET') {
       await handleTtsVoices(req, res)
+      return
+    }
+
+    if (url === '/atlas/stt' && method === 'POST') {
+      await handleStt(req, res)
       return
     }
 

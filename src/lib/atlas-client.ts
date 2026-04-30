@@ -214,6 +214,75 @@ export async function streamTts(text: string, voiceId: string): Promise<TtsResul
   return { ok: true, blob, charCount, voiceId: usedVoice }
 }
 
+export interface SttResult {
+  ok: true
+  transcript: string
+  durationMs: number
+  audioSeconds: number
+  costUsd: number
+}
+
+export interface SttError {
+  ok: false
+  status: number
+  error: string
+  budgetExceeded: boolean
+  message?: string
+}
+
+// Upload an audio blob to /atlas/stt and return the Whisper transcript.
+// Never throws — returns a discriminated union so callers can render errors inline.
+export async function uploadStt(blob: Blob): Promise<SttResult | SttError> {
+  const fd = new FormData()
+  const filename = blob.type.includes('mp4') ? 'audio.mp4'
+    : blob.type.includes('wav') ? 'audio.wav'
+    : 'audio.webm'
+  fd.append('audio', blob, filename)
+
+  let res: Response
+  try {
+    res = await fetch(`${ATLAS_URL}/atlas/stt`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: 'network_error',
+      budgetExceeded: false,
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  if (!res.ok) {
+    let parsed: { error?: string; message?: string } = {}
+    try { parsed = await res.json() as { error?: string; message?: string } } catch { /* ignore */ }
+    return {
+      ok: false,
+      status: res.status,
+      error: parsed.error ?? `HTTP ${res.status}`,
+      budgetExceeded: res.status === 429 && parsed.error === 'budget_exceeded',
+      message: parsed.message,
+    }
+  }
+
+  const data = await res.json() as {
+    transcript?: string
+    duration_ms?: number
+    audio_seconds?: number
+    cost_usd?: number
+  }
+  return {
+    ok: true,
+    transcript: data.transcript ?? '',
+    durationMs: data.duration_ms ?? 0,
+    audioSeconds: data.audio_seconds ?? 0,
+    costUsd: data.cost_usd ?? 0,
+  }
+}
+
 // SSE chat — returns a cleanup function that aborts the stream.
 export function streamChat(
   threadId: string,
