@@ -7,6 +7,7 @@ import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
 import { startSnapshotCron } from './cron/snapshot'
+import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
 import { TrustMode } from './types'
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -20,7 +21,8 @@ const TOOL_DEFINITIONS = Object.entries(TOOLS).map(([name, t]) => ({
   input_schema: { type: 'object' as const, properties: {}, additionalProperties: true },
 }))
 
-const SYSTEM_PROMPT = `You are Atlas, the conductor of the CropsIntel V3 production house.
+function getSystemPrompt(): string {
+  return `You are Atlas, the conductor of the CropsIntel V3 production house.
 
 Your job: orchestrate the build of CropsIntel by reading state, querying institutional memory, and dispatching the right agent at the right time. You speak with Muzammil Akhtar (founder).
 
@@ -35,10 +37,11 @@ Capabilities — call tools to do anything beyond pure conversation:
 
 Style: concise, decisive, no fluff. If you don't know something, call a tool. Never make up project state.
 
-Trust mode: ${process.env.ATLAS_TRUST_MODE ?? 'passive'}.
+Trust mode: ${getCurrentMode()}.
 - passive/chat: read-only tools only.
 - confirm: ask before dispatching write tools (builder_queue_spec, etc.)
 - auto: dispatch freely under cost cap.`
+}
 
 function authenticate(req: IncomingMessage): boolean {
   if (!ATLAS_API_TOKEN) return true
@@ -70,7 +73,7 @@ export async function runChatTurn(params: {
 }): Promise<string> {
   const { threadId, channel, message, overrideToken, onEvent } = params
   const sb = getSupabaseClient()
-  const trustMode = (process.env.ATLAS_TRUST_MODE ?? 'passive') as TrustMode
+  const trustMode = getCurrentMode()
 
   // Load recent conversation history (last 20 messages)
   let messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
@@ -102,7 +105,7 @@ export async function runChatTurn(params: {
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      system: getSystemPrompt(),
       tools: TOOL_DEFINITIONS as Parameters<typeof anthropic.messages.create>[0]['tools'],
       messages: messages as Parameters<typeof anthropic.messages.create>[0]['messages'],
     })
@@ -277,8 +280,9 @@ async function processWhatsAppMessage(
   }
 }
 
-export function startServer(): void {
+export async function startServer(): Promise<void> {
   validateEnv()
+  await loadTrustModeFromDb()
 
   const server = createServer(async (req, res) => {
     const url = req.url ?? '/'
@@ -289,9 +293,29 @@ export function startServer(): void {
         status: 'ok',
         service: 'cropsintel-atlas',
         version: '0.1.0',
-        trust_mode: process.env.ATLAS_TRUST_MODE ?? 'passive',
+        trust_mode: getCurrentMode(),
         ts: new Date().toISOString(),
       })
+      return
+    }
+
+    if (url === '/atlas/mode' && method === 'GET') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      json(res, 200, getModeMetadata())
+      return
+    }
+
+    if (url === '/atlas/mode' && method === 'POST') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      const body = await readBody(req)
+      let payload: { mode: TrustMode; setBy?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      try {
+        await setMode(payload.mode, payload.setBy ?? 'api')
+        json(res, 200, { ...getModeMetadata(), success: true })
+      } catch (err) {
+        json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+      }
       return
     }
 

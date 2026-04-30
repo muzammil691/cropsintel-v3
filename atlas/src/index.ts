@@ -8,7 +8,10 @@ program
   .description('Start the Atlas HTTP server')
   .action(() => {
     const { startServer } = require('./server')
-    startServer()
+    startServer().catch((err: unknown) => {
+      console.error('[atlas] startup failed:', err)
+      process.exit(1)
+    })
   })
 
 program.parse(process.argv)
