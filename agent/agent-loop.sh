@@ -387,12 +387,28 @@ while true; do
   cd "$REPO_DIR"
   echo "$LOOP_TAG tick at $(date -u +%FT%TZ)"
 
-  # Always pull latest first
-  git fetch origin main --quiet || echo "$LOOP_TAG fetch failed (will retry)"
-  git reset --hard origin/main --quiet || echo "$LOOP_TAG reset failed"
+  # Always pull latest first — VERBOSE so we see what's happening (no --quiet)
+  echo "$LOOP_TAG pre-fetch HEAD: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
+  if git fetch origin main 2>&1; then
+    echo "$LOOP_TAG fetch ok"
+  else
+    echo "$LOOP_TAG fetch FAILED — exit=$?" >&2
+  fi
+
+  if git reset --hard origin/main 2>&1; then
+    echo "$LOOP_TAG reset ok — HEAD now: $(git rev-parse HEAD)"
+  else
+    echo "$LOOP_TAG reset FAILED — exit=$?" >&2
+  fi
+
+  # Diagnostic: what does the queue look like?
+  echo "$LOOP_TAG queue contents:"
+  ls -la .agent/tasks/queued/ 2>&1 | head -15
 
   # Pick a task
   TASK_FILE=$(pick_next_task)
+  echo "$LOOP_TAG pick_next_task returned: '${TASK_FILE:-<empty>}'"
+
   if [ -n "$TASK_FILE" ]; then
     run_task "$TASK_FILE" || echo "$LOOP_TAG run_task returned non-zero"
   else
