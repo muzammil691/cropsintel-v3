@@ -173,11 +173,13 @@ After this task ships:
 
 ## Required env vars
 
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_FROM_NUMBER` (the registered Atlas business number; for now, can default to the Maxons-shared number `+12345622692`)
+- `TWILIO_ACCOUNT_SID` — same as V2's (one Maxons Twilio account)
+- `TWILIO_AUTH_TOKEN` — same as V2's
+- `TWILIO_FROM_NUMBER` — **MUST BE A NEW DEDICATED ATLAS NUMBER**, NOT the existing Maxons-registered Zyra number `+12345622692`. The V2 webhook is connected to that number for customer service via Zyra; reusing it for Atlas would hijack customer routing. The user is responsible for buying a new number on Twilio Console and registering it under the same Maxons WhatsApp Business profile, then adding it here.
 
-The Twilio creds live in V2's Supabase Edge Function secrets currently. The user needs to copy them into Atlas's Railway env. Document in `.agent/questions/phase-1.10f-q.md`.
+The Twilio creds live in V2's Supabase Edge Function secrets currently. The user needs to copy SID + Token into Atlas's Railway env, plus the NEW dedicated FROM number. Document in `.agent/questions/phase-1.10f-q.md`:
+
+> "BLOCKER: this task ships the WhatsApp webhook code, but the inbound webhook will not receive any messages until the user (a) buys a new Twilio number, (b) registers it under Maxons WhatsApp Business profile, (c) sets webhook URL to https://courteous-simplicity-production.up.railway.app/whatsapp/inbound, and (d) adds TWILIO_FROM_NUMBER env var to Atlas Railway. DO NOT default TWILIO_FROM_NUMBER to the V2 Zyra number — that would disrupt customer service."
 
 ## Out of scope
 
