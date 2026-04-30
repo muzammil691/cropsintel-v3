@@ -3,6 +3,7 @@ import { ChatPanel } from '@/components/atlas/ChatPanel'
 import { StatusGrid } from '@/components/atlas/StatusGrid'
 import { WizardBar } from '@/components/atlas/WizardBar'
 import { TrustModeBadge } from '@/components/atlas/TrustModeBadge'
+import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import type { TrustMode } from '@/lib/atlas-client'
 
@@ -21,6 +22,11 @@ export default function Atlas() {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* PWA install / offline banner */}
+      <div className="px-4 md:px-6 pt-3 empty:hidden">
+        <PwaInstallPrompt />
+      </div>
+
       {/* Header */}
       <header className="border-b px-4 md:px-6 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 shrink-0">
