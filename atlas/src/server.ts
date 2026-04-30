@@ -1,4 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http'
+import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 import Anthropic from '@anthropic-ai/sdk'
 import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
@@ -11,7 +12,15 @@ import { startConductorLoop } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
-import { streamTts, listVoices, truncateForTts, VOICE_DEFAULT, estimateTtsCostUsd } from './lib/elevenlabs'
+import {
+  streamTts,
+  listVoices,
+  truncateForTts,
+  VOICE_DEFAULT,
+  estimateTtsCostUsd,
+  buildElevenLabsStreamInputUrl,
+  getElevenLabsApiKey,
+} from './lib/elevenlabs'
 import { recordElevenLabsTtsCost, recordWhisperSttCost, getMonthlyProviderSpendUsd } from './lib/cost-log'
 import {
   transcribe,
@@ -594,6 +603,209 @@ async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<voi
   })
 }
 
+// ─── Live-mode TTS WebSocket bridge ────────────────────────────────────────
+// Browser opens its own WS to `/atlas/tts-ws` (Bearer token in Sec-WebSocket-Protocol);
+// this handler opens an upstream WS to ElevenLabs `stream-input`, pipes text → audio
+// chunks back to the dashboard, and tracks character count for cost logging.
+function authenticateWs(req: IncomingMessage): { ok: boolean; protocol?: string } {
+  if (!ATLAS_API_TOKEN) return { ok: true }
+  // Browsers can't set a Bearer header on a WebSocket; clients pass the token via
+  // Sec-WebSocket-Protocol as `bearer.<token>` (echoed back as the chosen subprotocol).
+  const proto = req.headers['sec-websocket-protocol']
+  const offers = (Array.isArray(proto) ? proto.join(',') : (proto ?? ''))
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  for (const o of offers) {
+    if (o.startsWith('bearer.') && o.slice('bearer.'.length) === ATLAS_API_TOKEN) {
+      return { ok: true, protocol: o }
+    }
+  }
+  return { ok: false }
+}
+
+interface DownstreamMessage {
+  type: 'open' | 'text' | 'flush' | 'close'
+  voiceId?: string
+  text?: string
+}
+
+function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
+  const wss = new WebSocketServer({ noServer: true })
+
+  server.on('upgrade', (req, socket, head) => {
+    if ((req.url ?? '').split('?')[0] !== '/atlas/tts-ws') {
+      socket.destroy()
+      return
+    }
+    const auth = authenticateWs(req)
+    if (!auth.ok) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+      socket.destroy()
+      return
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req, auth.protocol)
+    })
+  })
+
+  wss.on('connection', (ws: WsWebSocket, _req: IncomingMessage, protocol?: string) => {
+    void _req
+    void protocol
+    let upstream: WsWebSocket | null = null
+    let voiceId: string = VOICE_DEFAULT
+    let charCount = 0
+    let upstreamOpened = false
+    let upstreamReady = false
+    const pendingText: string[] = []
+    let pendingFlush = false
+    let closed = false
+
+    const cleanup = () => {
+      if (closed) return
+      closed = true
+      try { upstream?.close() } catch { /* ignore */ }
+      upstream = null
+      // Log cost (one row per WS session) — never block on this.
+      if (charCount > 0) {
+        void recordElevenLabsTtsCost(charCount, voiceId, { transport: 'ws_stream', live_mode: true })
+      }
+    }
+
+    const safeSend = (data: string | Buffer) => {
+      if (ws.readyState === ws.OPEN) {
+        try { ws.send(data) } catch { /* ignore */ }
+      }
+    }
+
+    const sendError = (error: string, detail?: string) => {
+      safeSend(JSON.stringify({ type: 'error', error, detail }))
+    }
+
+    const flushPending = () => {
+      if (!upstream || !upstreamReady) return
+      while (pendingText.length > 0) {
+        const text = pendingText.shift()!
+        try {
+          upstream.send(JSON.stringify({ text, try_trigger_generation: true }))
+        } catch (err) {
+          sendError('upstream_send_failed', err instanceof Error ? err.message : String(err))
+        }
+      }
+      if (pendingFlush) {
+        pendingFlush = false
+        try { upstream.send(JSON.stringify({ text: '' })) } catch { /* ignore */ }
+      }
+    }
+
+    const openUpstream = (vid: string) => {
+      if (upstreamOpened) return
+      upstreamOpened = true
+      voiceId = vid || VOICE_DEFAULT
+
+      const apiKey = getElevenLabsApiKey()
+      if (!apiKey) {
+        sendError('elevenlabs_not_configured', 'ELEVENLABS_API_KEY missing on server')
+        try { ws.close(1011) } catch { /* ignore */ }
+        return
+      }
+
+      try {
+        upstream = new WsWebSocket(buildElevenLabsStreamInputUrl(voiceId), {
+          headers: { 'xi-api-key': apiKey },
+        })
+      } catch (err) {
+        sendError('upstream_open_failed', err instanceof Error ? err.message : String(err))
+        try { ws.close(1011) } catch { /* ignore */ }
+        return
+      }
+
+      upstream.on('open', () => {
+        upstreamReady = true
+        // ElevenLabs requires an initial empty `text: " "` to prime generation.
+        try {
+          upstream?.send(JSON.stringify({
+            text: ' ',
+            voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+            xi_api_key: apiKey,
+          }))
+        } catch { /* ignore */ }
+        safeSend(JSON.stringify({ type: 'ready', voice_id: voiceId }))
+        flushPending()
+      })
+
+      upstream.on('message', (raw) => {
+        // ElevenLabs returns JSON text frames containing { audio: <base64>, isFinal, normalizedAlignment }.
+        // Forward verbatim to the browser; the browser decodes base64 → Web Audio.
+        try {
+          const txt = typeof raw === 'string' ? raw : raw.toString('utf-8')
+          safeSend(txt)
+        } catch (err) {
+          sendError('forward_failed', err instanceof Error ? err.message : String(err))
+        }
+      })
+
+      upstream.on('close', () => {
+        safeSend(JSON.stringify({ type: 'upstream_closed' }))
+      })
+
+      upstream.on('error', (err) => {
+        sendError('upstream_error', err instanceof Error ? err.message : String(err))
+      })
+    }
+
+    ws.on('message', async (raw) => {
+      let msg: DownstreamMessage
+      try {
+        msg = JSON.parse(raw.toString()) as DownstreamMessage
+      } catch {
+        sendError('invalid_json')
+        return
+      }
+
+      if (msg.type === 'open') {
+        // Budget gate before opening upstream — refuse if monthly TTS spend already past cap.
+        const monthSpend = await getMonthlyProviderSpendUsd('elevenlabs')
+        if (monthSpend >= ELEVENLABS_BUDGET_GATE_USD) {
+          safeSend(JSON.stringify({
+            type: 'budget_exceeded',
+            month_to_date_usd: monthSpend,
+            gate_usd: ELEVENLABS_BUDGET_GATE_USD,
+          }))
+          try { ws.close(1011) } catch { /* ignore */ }
+          return
+        }
+        openUpstream(msg.voiceId ?? VOICE_DEFAULT)
+        return
+      }
+
+      if (msg.type === 'text') {
+        const t = (msg.text ?? '').toString()
+        if (!t) return
+        charCount += t.length
+        pendingText.push(t)
+        flushPending()
+        return
+      }
+
+      if (msg.type === 'flush') {
+        pendingFlush = true
+        flushPending()
+        return
+      }
+
+      if (msg.type === 'close') {
+        cleanup()
+        try { ws.close(1000) } catch { /* ignore */ }
+        return
+      }
+    })
+
+    ws.on('close', cleanup)
+    ws.on('error', cleanup)
+  })
+}
+
 export async function startServer(): Promise<void> {
   validateEnv()
   await loadTrustModeFromDb()
@@ -691,6 +903,8 @@ export async function startServer(): Promise<void> {
 
     json(res, 404, { error: 'Not found' })
   })
+
+  attachTtsWebSocket(server)
 
   startSnapshotCron()
   startConductorLoop()

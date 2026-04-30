@@ -283,6 +283,153 @@ export async function uploadStt(blob: Blob): Promise<SttResult | SttError> {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Live-mode TTS WebSocket (1.10u). Browser opens a WS to Atlas; Atlas opens
+// upstream WS to ElevenLabs and pipes JSON frames back. Messages:
+//   client → server: { type: 'open', voiceId } | { type: 'text', text } | { type: 'flush' } | { type: 'close' }
+//   server → client: { type: 'ready' } | { type: 'budget_exceeded' } | { type: 'error', error, detail? }
+//                  | ElevenLabs raw JSON frame { audio: <base64>, isFinal?, alignment? }
+//                  | { type: 'upstream_closed' }
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface ElevenLabsAudioFrame {
+  audio?: string | null
+  isFinal?: boolean
+  normalizedAlignment?: unknown
+  alignment?: unknown
+}
+
+export type TtsWsEvent =
+  | { kind: 'ready'; voiceId: string }
+  | { kind: 'audio'; base64: string; isFinal: boolean }
+  | { kind: 'budget_exceeded'; monthToDateUsd: number; gateUsd: number }
+  | { kind: 'error'; error: string; detail?: string }
+  | { kind: 'closed' }
+
+export interface TtsWsHandle {
+  sendText: (text: string) => void
+  flush: () => void
+  close: () => void
+  readonly state: 'connecting' | 'open' | 'closed'
+}
+
+export function openTtsWs(
+  voiceId: string,
+  onEvent: (e: TtsWsEvent) => void,
+): TtsWsHandle {
+  const wsUrl = ATLAS_URL.replace(/^http/, 'ws') + '/atlas/tts-ws'
+  // Token is passed via Sec-WebSocket-Protocol — server validates `bearer.<token>` and echoes back.
+  const protocols = ATLAS_TOKEN ? [`bearer.${ATLAS_TOKEN}`] : undefined
+  let state: 'connecting' | 'open' | 'closed' = 'connecting'
+  let ws: WebSocket
+  try {
+    ws = new WebSocket(wsUrl, protocols)
+  } catch (err) {
+    state = 'closed'
+    onEvent({ kind: 'error', error: 'ws_construct_failed', detail: err instanceof Error ? err.message : String(err) })
+    onEvent({ kind: 'closed' })
+    return {
+      sendText: () => { /* noop */ },
+      flush: () => { /* noop */ },
+      close: () => { /* noop */ },
+      get state() { return state },
+    }
+  }
+
+  const queued: Array<{ type: string; text?: string; voiceId?: string }> = [
+    { type: 'open', voiceId },
+  ]
+  const flushQueued = () => {
+    if (ws.readyState !== ws.OPEN) return
+    while (queued.length > 0) {
+      ws.send(JSON.stringify(queued.shift()))
+    }
+  }
+
+  ws.onopen = () => {
+    state = 'open'
+    flushQueued()
+  }
+
+  ws.onmessage = (ev) => {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(typeof ev.data === 'string' ? ev.data : '')
+    } catch {
+      return
+    }
+    if (!parsed || typeof parsed !== 'object') return
+    const o = parsed as Record<string, unknown>
+    const type = typeof o.type === 'string' ? o.type : null
+
+    if (type === 'ready') {
+      onEvent({ kind: 'ready', voiceId: typeof o.voice_id === 'string' ? o.voice_id : voiceId })
+      return
+    }
+    if (type === 'budget_exceeded') {
+      onEvent({
+        kind: 'budget_exceeded',
+        monthToDateUsd: Number(o.month_to_date_usd ?? 0),
+        gateUsd: Number(o.gate_usd ?? 0),
+      })
+      return
+    }
+    if (type === 'error') {
+      onEvent({
+        kind: 'error',
+        error: typeof o.error === 'string' ? o.error : 'unknown_error',
+        detail: typeof o.detail === 'string' ? o.detail : undefined,
+      })
+      return
+    }
+    if (type === 'upstream_closed') {
+      // Stream ended cleanly — surface but don't treat as error.
+      return
+    }
+
+    // Otherwise expect an ElevenLabs audio frame: { audio, isFinal? }
+    const frame = parsed as ElevenLabsAudioFrame
+    if (typeof frame.audio === 'string' && frame.audio.length > 0) {
+      onEvent({ kind: 'audio', base64: frame.audio, isFinal: !!frame.isFinal })
+    } else if (frame.isFinal) {
+      onEvent({ kind: 'audio', base64: '', isFinal: true })
+    }
+  }
+
+  ws.onerror = () => {
+    onEvent({ kind: 'error', error: 'ws_error' })
+  }
+  ws.onclose = () => {
+    state = 'closed'
+    onEvent({ kind: 'closed' })
+  }
+
+  return {
+    sendText: (text: string) => {
+      if (!text) return
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'text', text }))
+      } else {
+        queued.push({ type: 'text', text })
+      }
+    },
+    flush: () => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'flush' }))
+      } else {
+        queued.push({ type: 'flush' })
+      }
+    },
+    close: () => {
+      try {
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'close' }))
+      } catch { /* ignore */ }
+      try { ws.close() } catch { /* ignore */ }
+    },
+    get state() { return state },
+  }
+}
+
 // SSE chat — returns a cleanup function that aborts the stream.
 export function streamChat(
   threadId: string,

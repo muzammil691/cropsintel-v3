@@ -2,6 +2,7 @@
 // API key MUST live only in atlas service env (ELEVENLABS_API_KEY); never bundled into the browser.
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1'
+const ELEVENLABS_WS_BASE = 'wss://api.elevenlabs.io/v1'
 export const VOICE_DEFAULT = 'EXAVITQu4vr4xnSDxMaL' // Bella
 export const TTS_MODEL = 'eleven_turbo_v2'          // ~$0.30 / 1K chars
 export const TTS_COST_PER_1K_CHARS_USD = 0.30
@@ -47,6 +48,19 @@ export async function streamTts(text: string, voiceId: string): Promise<Response
       voice_settings: { stability: 0.5, similarity_boost: 0.75 },
     }),
   })
+}
+
+// Open an upstream WebSocket to the ElevenLabs `stream-input` endpoint. The caller
+// is responsible for sending text chunks (`{ text, try_trigger_generation: true }`),
+// flushing with `{ text: "" }`, and forwarding base64-encoded audio chunks back to
+// the client. The xi-api-key MUST stay in this process — never echo it on the
+// downstream WS.
+export function buildElevenLabsStreamInputUrl(voiceId: string): string {
+  return `${ELEVENLABS_WS_BASE}/text-to-speech/${encodeURIComponent(voiceId)}/stream-input?model_id=${TTS_MODEL}&output_format=mp3_44100_128`
+}
+
+export function getElevenLabsApiKey(): string | null {
+  return process.env.ELEVENLABS_API_KEY ?? null
 }
 
 export async function listVoices(): Promise<ElevenLabsVoice[]> {

@@ -5,15 +5,22 @@ import { WizardBar } from '@/components/atlas/WizardBar'
 import { TrustModeBadge } from '@/components/atlas/TrustModeBadge'
 import { VoiceToggle } from '@/components/atlas/VoiceToggle'
 import { VoicePicker } from '@/components/atlas/VoicePicker'
+import { LiveModeButton } from '@/components/atlas/LiveModeButton'
+import { LiveModePanel } from '@/components/atlas/LiveModePanel'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import { useTts } from '@/hooks/useTts'
+import { useLiveMode } from '@/hooks/useLiveMode'
 import type { TrustMode } from '@/lib/atlas-client'
 
 export default function Atlas() {
   const { status, costs, loading, error } = useAtlasStatus()
   const tts = useTts()
+  const liveMode = useLiveMode({
+    threadId: 'web-default',
+    voiceId: tts.voiceId,
+  })
 
   // Chat prefill — driven by WizardBar actions
   const [prefill, setPrefill] = useState<string | undefined>()
@@ -63,6 +70,14 @@ export default function Atlas() {
               error={tts.voicesError}
             />
           )}
+          <LiveModeButton
+            active={liveMode.active}
+            disabled={tts.budgetBlocked || liveMode.budgetBlocked}
+            onClick={() => {
+              if (liveMode.active) liveMode.end()
+              else void liveMode.start()
+            }}
+          />
         </div>
         <WizardBar
           onPrefill={setPrefill}
@@ -144,6 +159,22 @@ export default function Atlas() {
           )}
         </div>
       </main>
+
+      {/* Live conversation overlay */}
+      {liveMode.active && (
+        <ErrorBoundary>
+          <LiveModePanel
+            state={liveMode.state}
+            level={liveMode.level}
+            speakingLevel={liveMode.speakingLevel}
+            errorMessage={liveMode.errorMessage}
+            budgetBlocked={liveMode.budgetBlocked}
+            sessionElapsedMs={liveMode.sessionElapsedMs}
+            transcript={liveMode.transcript}
+            onEnd={liveMode.end}
+          />
+        </ErrorBoundary>
+      )}
     </div>
   )
 }
