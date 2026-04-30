@@ -8,3 +8,18 @@ export interface Snapshot {
   doneSpecs24h: number
   failedSpecs24h: number
 }
+
+export interface ToolDispatchVerification {
+  verified: boolean
+  evidence: Record<string, unknown>
+  error?: string
+}
+
+export interface ToolDispatchResult {
+  dispatchId: string
+  status: 'success' | 'failed' | 'blocked' | 'partial'
+  result?: unknown
+  error?: string
+  durationMs: number
+  verified?: ToolDispatchVerification | null
+}

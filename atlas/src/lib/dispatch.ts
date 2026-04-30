@@ -2,7 +2,8 @@ import { TOOLS, ToolName } from './tools'
 import { getSupabaseClient } from './supabase'
 import { checkBudget } from './cost-gate'
 import { checkInvariants } from './invariants'
-import { TrustMode } from '../types'
+import { hasVerifier, verifySideEffect } from './verify-side-effects'
+import { TrustMode, ToolDispatchVerification } from '../types'
 
 export interface DispatchRequest {
   tool: ToolName
@@ -14,10 +15,11 @@ export interface DispatchRequest {
 
 export interface DispatchResult {
   dispatchId: string
-  status: 'success' | 'failed' | 'blocked'
+  status: 'success' | 'failed' | 'blocked' | 'partial'
   result?: unknown
   error?: string
   durationMs: number
+  verified?: ToolDispatchVerification | null
 }
 
 const READ_ONLY_TOOLS = new Set<ToolName>([
@@ -110,12 +112,46 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
     return { dispatchId, status: 'failed', error: `unknown tool: ${req.tool}`, durationMs: Date.now() - start }
   }
 
+  const initiatedAt = new Date(start)
   try {
     const args = Object.values(req.arguments)
     const result = await toolEntry.fn(...args)
     const duration = Date.now() - start
-    await sb.from('atlas_dispatches').update({ status: 'success', result, duration_ms: duration }).eq('id', dispatchId)
-    return { dispatchId, status: 'success', result, durationMs: duration }
+
+    // Post-condition verification — for write tools, confirm the side effect actually landed.
+    let verified: ToolDispatchVerification | null = null
+    if (hasVerifier(req.tool)) {
+      verified = await verifySideEffect({
+        tool: req.tool,
+        arguments: req.arguments,
+        result,
+        initiatedAt,
+      })
+    }
+
+    const verificationFailed = verified !== null && verified.verified === false
+    const finalStatus: 'success' | 'partial' = verificationFailed ? 'partial' : 'success'
+
+    await sb.from('atlas_dispatches').update({
+      status: finalStatus,
+      result,
+      duration_ms: duration,
+      verified_at: verified ? new Date().toISOString() : null,
+      verified_evidence: verified ? { verified: verified.verified, evidence: verified.evidence, error: verified.error ?? null } : null,
+    }).eq('id', dispatchId)
+
+    // If verification failed, surface that into the result so the LLM is forced to disclose it (honesty rule 5).
+    const llmFacingResult = verificationFailed
+      ? { ...(result as object | null), verification_failed: true, evidence_collected: verified?.evidence ?? {}, verification_error: verified?.error ?? null }
+      : result
+
+    return {
+      dispatchId,
+      status: finalStatus,
+      result: llmFacingResult,
+      durationMs: duration,
+      verified,
+    }
   } catch (err) {
     const duration = Date.now() - start
     const errorMsg = err instanceof Error ? err.message : String(err)

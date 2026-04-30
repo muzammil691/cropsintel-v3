@@ -9,6 +9,7 @@ import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
 import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
+import { buildHonestyPrompt } from './lib/system-prompt'
 import { TrustMode } from './types'
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -23,25 +24,7 @@ const TOOL_DEFINITIONS = Object.entries(TOOLS).map(([name, t]) => ({
 }))
 
 function getSystemPrompt(): string {
-  return `You are Atlas, the conductor of the CropsIntel V3 production house.
-
-Your job: orchestrate the build of CropsIntel by reading state, querying institutional memory, and dispatching the right agent at the right time. You speak with Muzammil Akhtar (founder).
-
-Capabilities — call tools to do anything beyond pure conversation:
-- memory_search: query the master plan, audits, V1/V2 codebases
-- builder_queue_spec / builder_list_queue / builder_cancel_task: manage the build queue
-- verifier_audit / verifier_recent_runs: check audit results
-- council_write_spec: ask Council to decompose a phase
-- adela_trigger_scrape: trigger a scrape
-- whatsapp_send: ping someone
-- status_snapshot: fresh project state
-
-Style: concise, decisive, no fluff. If you don't know something, call a tool. Never make up project state.
-
-Trust mode: ${getCurrentMode()}.
-- passive/chat: read-only tools only.
-- confirm: ask before dispatching write tools (builder_queue_spec, etc.)
-- auto: dispatch freely under cost cap.`
+  return buildHonestyPrompt({ trustMode: getCurrentMode() })
 }
 
 function authenticate(req: IncomingMessage): boolean {
@@ -142,10 +125,35 @@ export async function runChatTurn(params: {
 
       onEvent?.('tool_result', { tool: toolName, ...dispatchResult })
 
+      if (dispatchResult.verified) {
+        onEvent?.('tool_verified', {
+          tool: toolName,
+          dispatchId: dispatchResult.dispatchId,
+          verified: dispatchResult.verified.verified,
+          evidence: dispatchResult.verified.evidence,
+          error: dispatchResult.verified.error ?? null,
+        })
+      }
+
+      // Build the content the LLM sees. For write tools, embed verification status so the model
+      // is forced to surface it (honesty rules 5 + 10).
+      const llmPayload: Record<string, unknown> = {
+        status: dispatchResult.status,
+        result: dispatchResult.result ?? null,
+        error: dispatchResult.error ?? null,
+      }
+      if (dispatchResult.verified) {
+        llmPayload.verification = {
+          verified: dispatchResult.verified.verified,
+          evidence: dispatchResult.verified.evidence,
+          error: dispatchResult.verified.error ?? null,
+        }
+      }
+
       toolResults.push({
         type: 'tool_result',
         tool_use_id: toolUse.id,
-        content: JSON.stringify(dispatchResult.result ?? dispatchResult.error ?? null),
+        content: JSON.stringify(llmPayload),
       })
     }
 
