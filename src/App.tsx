@@ -7,6 +7,7 @@ import { Routes, Route, Navigate } from "react-router-dom"
 import { lazy, Suspense } from "react"
 import { RouteGuard } from "@/components/RouteGuard"
 import NotImplemented from "@/components/NotImplemented"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 
 // Lazy-loaded pages (master plan calls for lazy routing per V1 pattern)
 const Welcome = lazy(() => import("./pages/Welcome"))
@@ -25,8 +26,9 @@ function PageLoader() {
 
 export default function App() {
   return (
-    <Suspense fallback={<PageLoader />}>
-      <Routes>
+    <ErrorBoundary>
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
         {/* Public */}
         <Route path="/" element={<Navigate to="/welcome" replace />} />
         <Route path="/welcome" element={<Welcome />} />
@@ -55,5 +57,6 @@ export default function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Suspense>
+    </ErrorBoundary>
   )
 }

@@ -12,6 +12,25 @@ function authHeaders(): Record<string, string> {
   return ATLAS_TOKEN ? { Authorization: `Bearer ${ATLAS_TOKEN}` } : {}
 }
 
+// Centralized JSON fetch — never returns non-OK garbage as parsed JSON,
+// never throws SyntaxError on a 4xx HTML body. Callers can rely on the
+// returned promise either resolving with parsed JSON or rejecting with
+// a useful Error.
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`${init?.method ?? 'GET'} ${url} → ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`)
+  }
+  const text = await res.text()
+  if (!text) return undefined as unknown as T
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error(`${url} returned non-JSON body: ${text.slice(0, 200)}`)
+  }
+}
+
 export type TrustMode = 'passive' | 'chat' | 'confirm' | 'auto' | 'stopped'
 
 export interface Fork {
@@ -80,58 +99,66 @@ export interface ToolCallChip {
 }
 
 export async function fetchStatus(): Promise<AtlasStatus> {
-  const res = await fetch(`${ATLAS_URL}/atlas/status`, {
+  return fetchJson<AtlasStatus>(`${ATLAS_URL}/atlas/status`, {
     headers: authHeaders(),
   })
-  return res.json()
 }
 
 export async function fetchCosts(): Promise<AtlasCosts> {
-  const res = await fetch(`${ATLAS_URL}/atlas/costs`, {
+  return fetchJson<AtlasCosts>(`${ATLAS_URL}/atlas/costs`, {
     headers: authHeaders(),
   })
-  return res.json()
 }
 
 export async function fetchMode(): Promise<{ mode: TrustMode }> {
-  const res = await fetch(`${ATLAS_URL}/atlas/mode`, {
+  return fetchJson<{ mode: TrustMode }>(`${ATLAS_URL}/atlas/mode`, {
     headers: authHeaders(),
   })
-  return res.json()
 }
 
 export async function setMode(mode: TrustMode): Promise<{ mode: TrustMode }> {
-  const res = await fetch(`${ATLAS_URL}/atlas/mode`, {
+  return fetchJson<{ mode: TrustMode }>(`${ATLAS_URL}/atlas/mode`, {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode, setBy: 'web-ui' }),
   })
-  return res.json()
 }
 
 export async function fetchPendingDecisions(): Promise<AtlasDecision[]> {
-  const res = await fetch(`${ATLAS_URL}/atlas/decisions?status=pending`, {
-    headers: authHeaders(),
-  })
-  return res.json()
+  const data = await fetchJson<AtlasDecision[] | { decisions?: AtlasDecision[] }>(
+    `${ATLAS_URL}/atlas/decisions?status=pending`,
+    { headers: authHeaders() },
+  )
+  if (Array.isArray(data)) return data
+  if (data && Array.isArray((data as { decisions?: AtlasDecision[] }).decisions)) {
+    return (data as { decisions: AtlasDecision[] }).decisions
+  }
+  return []
 }
 
 export async function approveDecision(id: string): Promise<void> {
-  await fetch(`${ATLAS_URL}/atlas/decisions/${id}/approve`, {
+  const res = await fetch(`${ATLAS_URL}/atlas/decisions/${id}/approve`, {
     method: 'POST',
     headers: authHeaders(),
   })
+  if (!res.ok) {
+    throw new Error(`approve ${id} → ${res.status}`)
+  }
 }
 
 export async function fetchChatHistory(
   threadId: string,
   limit = 50,
 ): Promise<ChatMessage[]> {
-  const res = await fetch(
+  const data = await fetchJson<ChatMessage[] | { messages?: ChatMessage[] }>(
     `${ATLAS_URL}/atlas/conversations/${threadId}?limit=${limit}`,
     { headers: authHeaders() },
   )
-  return res.json()
+  if (Array.isArray(data)) return data
+  if (data && Array.isArray((data as { messages?: ChatMessage[] }).messages)) {
+    return (data as { messages: ChatMessage[] }).messages
+  }
+  return []
 }
 
 // SSE chat — returns a cleanup function that aborts the stream.
@@ -150,7 +177,10 @@ export function streamChat(
   })
     .then(async (res) => {
       if (!res.ok || !res.body) {
-        onEvent('error', { error: `HTTP ${res.status}` })
+        const body = res.body ? await res.text().catch(() => '') : ''
+        onEvent('error', {
+          error: `HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`,
+        })
         return
       }
       const reader = res.body.getReader()

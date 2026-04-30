@@ -25,10 +25,14 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
     let cancelled = false
     fetchChatHistory(threadId)
       .then((history) => {
-        if (!cancelled) setMessages(history)
+        if (cancelled) return
+        // Defensive: API may return non-array on a fresh thread or error.
+        // Always store an array so consumers can .map() safely.
+        setMessages(Array.isArray(history) ? history : [])
       })
       .catch(() => {
         // history unavailable — start fresh
+        if (!cancelled) setMessages([])
       })
       .finally(() => {
         if (!cancelled) setHistoryLoading(false)

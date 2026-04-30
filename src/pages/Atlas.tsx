@@ -4,6 +4,7 @@ import { StatusGrid } from '@/components/atlas/StatusGrid'
 import { WizardBar } from '@/components/atlas/WizardBar'
 import { TrustModeBadge } from '@/components/atlas/TrustModeBadge'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import type { TrustMode } from '@/lib/atlas-client'
 
@@ -61,27 +62,35 @@ export default function Atlas() {
         {/* Desktop grid */}
         <div className="hidden md:grid md:grid-cols-[1.5fr_1fr] gap-4">
           <section>
-            <ChatPanel
-              prefill={prefill}
-              onPrefillConsumed={() => setPrefill(undefined)}
-            />
+            <ErrorBoundary>
+              <ChatPanel
+                prefill={prefill}
+                onPrefillConsumed={() => setPrefill(undefined)}
+              />
+            </ErrorBoundary>
           </section>
           <aside className="overflow-y-auto max-h-[calc(100vh-7rem)]">
-            <StatusGrid status={status} costs={costs} loading={loading} error={error} />
+            <ErrorBoundary>
+              <StatusGrid status={status} costs={costs} loading={loading} error={error} />
+            </ErrorBoundary>
           </aside>
         </div>
 
         {/* Mobile tabs */}
         <div className="md:hidden">
           {tab === 'chat' && (
-            <ChatPanel
-              prefill={prefill}
-              onPrefillConsumed={() => setPrefill(undefined)}
-            />
+            <ErrorBoundary>
+              <ChatPanel
+                prefill={prefill}
+                onPrefillConsumed={() => setPrefill(undefined)}
+              />
+            </ErrorBoundary>
           )}
           {tab === 'status' && (
             <div className="pb-4">
-              <StatusGrid status={status} costs={costs} loading={loading} error={error} />
+              <ErrorBoundary>
+                <StatusGrid status={status} costs={costs} loading={loading} error={error} />
+              </ErrorBoundary>
             </div>
           )}
         </div>
