@@ -11,7 +11,11 @@ import { startConductorLoop } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
+import { streamTts, listVoices, truncateForTts, VOICE_DEFAULT, estimateTtsCostUsd } from './lib/elevenlabs'
+import { recordElevenLabsTtsCost, getMonthlyProviderSpendUsd } from './lib/cost-log'
 import { TrustMode } from './types'
+
+const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
 const ATLAS_API_TOKEN = process.env.ATLAS_API_TOKEN
@@ -337,6 +341,95 @@ async function processWhatsAppMessage(
   }
 }
 
+async function handleTtsVoices(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+  try {
+    const voices = await listVoices()
+    const summary = voices.map(v => ({
+      voice_id: v.voice_id,
+      name: v.name,
+      category: v.category ?? null,
+      labels: v.labels ?? null,
+      preview_url: v.preview_url ?? null,
+    }))
+    json(res, 200, { voices: summary })
+  } catch (err) {
+    json(res, 502, { error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+async function handleTts(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+
+  const body = await readBody(req)
+  let payload: { text?: string; voice_id?: string }
+  try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+
+  const rawText = (payload.text ?? '').trim()
+  if (!rawText) { json(res, 400, { error: 'text is required' }); return }
+  const voiceId = payload.voice_id || VOICE_DEFAULT
+
+  const text = truncateForTts(rawText)
+  const charCount = text.length
+
+  // Budget gate: 90% of $100 cap default. If month-to-date elevenlabs spend
+  // already exceeds the gate, refuse before calling the API.
+  const monthSpend = await getMonthlyProviderSpendUsd('elevenlabs')
+  const projected = monthSpend + estimateTtsCostUsd(charCount)
+  if (monthSpend >= ELEVENLABS_BUDGET_GATE_USD || projected >= ELEVENLABS_BUDGET_GATE_USD) {
+    json(res, 429, {
+      error: 'budget_exceeded',
+      message: 'TTS disabled — monthly cap approaching.',
+      month_to_date_usd: monthSpend,
+      gate_usd: ELEVENLABS_BUDGET_GATE_USD,
+    })
+    return
+  }
+
+  let upstream: Response
+  try {
+    upstream = await streamTts(text, voiceId)
+  } catch (err) {
+    json(res, 502, { error: err instanceof Error ? err.message : String(err) })
+    return
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    const errBody = await upstream.text().catch(() => '')
+    json(res, upstream.status || 502, {
+      error: 'elevenlabs_upstream_error',
+      status: upstream.status,
+      detail: errBody.slice(0, 500),
+    })
+    return
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'audio/mpeg',
+    'Transfer-Encoding': 'chunked',
+    'Cache-Control': 'no-store',
+    'X-Atlas-Tts-Chars': String(charCount),
+    'X-Atlas-Tts-Voice': voiceId,
+  })
+
+  // Stream upstream audio chunks straight to the client.
+  const reader = upstream.body.getReader()
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      if (value) res.write(Buffer.from(value))
+    }
+    res.end()
+  } catch (err) {
+    console.error('[atlas-tts] stream error:', err)
+    try { res.end() } catch { /* ignore */ }
+  }
+
+  // Log cost after the stream finishes (don't block the response).
+  void recordElevenLabsTtsCost(charCount, voiceId, { truncated: rawText.length > text.length })
+}
+
 export async function startServer(): Promise<void> {
   validateEnv()
   await loadTrustModeFromDb()
@@ -389,6 +482,16 @@ export async function startServer(): Promise<void> {
 
     if (url === '/atlas/chat' && method === 'POST') {
       await handleChat(req, res)
+      return
+    }
+
+    if (url === '/atlas/tts' && method === 'POST') {
+      await handleTts(req, res)
+      return
+    }
+
+    if (url === '/atlas/tts/voices' && method === 'GET') {
+      await handleTtsVoices(req, res)
       return
     }
 

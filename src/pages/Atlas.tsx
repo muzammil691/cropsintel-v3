@@ -1,15 +1,19 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChatPanel } from '@/components/atlas/ChatPanel'
 import { StatusGrid } from '@/components/atlas/StatusGrid'
 import { WizardBar } from '@/components/atlas/WizardBar'
 import { TrustModeBadge } from '@/components/atlas/TrustModeBadge'
+import { VoiceToggle } from '@/components/atlas/VoiceToggle'
+import { VoicePicker } from '@/components/atlas/VoicePicker'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
+import { useTts } from '@/hooks/useTts'
 import type { TrustMode } from '@/lib/atlas-client'
 
 export default function Atlas() {
   const { status, costs, loading, error } = useAtlasStatus()
+  const tts = useTts()
 
   // Chat prefill — driven by WizardBar actions
   const [prefill, setPrefill] = useState<string | undefined>()
@@ -21,6 +25,18 @@ export default function Atlas() {
   // Mobile tab selection
   const [tab, setTab] = useState<'chat' | 'status'>('chat')
 
+  // Surface budget-block / TTS errors as an inline banner.
+  const [ttsBanner, setTtsBanner] = useState<string | null>(null)
+  useEffect(() => {
+    if (tts.budgetBlocked) {
+      setTtsBanner('TTS disabled — monthly cap approaching.')
+    } else if (tts.lastError) {
+      setTtsBanner(tts.lastError)
+    } else {
+      setTtsBanner(null)
+    }
+  }, [tts.budgetBlocked, tts.lastError])
+
   return (
     <div className="min-h-screen bg-background">
       {/* PWA install / offline banner */}
@@ -29,10 +45,24 @@ export default function Atlas() {
       </div>
 
       {/* Header */}
-      <header className="border-b px-4 md:px-6 py-3 flex items-center justify-between gap-3">
+      <header className="border-b px-4 md:px-6 py-3 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3 shrink-0">
           <h1 className="text-xl font-semibold">Atlas</h1>
           <TrustModeBadge mode={displayMode} />
+          <VoiceToggle
+            enabled={tts.enabled}
+            onToggle={tts.setEnabled}
+            disabled={tts.budgetBlocked}
+          />
+          {tts.enabled && (
+            <VoicePicker
+              voices={tts.voices}
+              voiceId={tts.voiceId}
+              onChange={tts.setVoiceId}
+              loading={tts.voicesLoading}
+              error={tts.voicesError}
+            />
+          )}
         </div>
         <WizardBar
           onPrefill={setPrefill}
@@ -40,6 +70,23 @@ export default function Atlas() {
           onModeChange={(m) => setModeOverride(m)}
         />
       </header>
+
+      {ttsBanner && (
+        <div
+          role="status"
+          className="px-4 md:px-6 py-1.5 text-xs bg-amber-50 text-amber-800 border-b border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-800"
+        >
+          {ttsBanner}
+          <button
+            type="button"
+            onClick={() => setTtsBanner(null)}
+            className="ml-2 underline hover:no-underline"
+            aria-label="Dismiss notice"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
 
       {/* Mobile tab bar */}
       <nav className="md:hidden flex border-b text-sm font-medium">
@@ -66,6 +113,7 @@ export default function Atlas() {
               <ChatPanel
                 prefill={prefill}
                 onPrefillConsumed={() => setPrefill(undefined)}
+                tts={tts}
               />
             </ErrorBoundary>
           </section>
@@ -83,6 +131,7 @@ export default function Atlas() {
               <ChatPanel
                 prefill={prefill}
                 onPrefillConsumed={() => setPrefill(undefined)}
+                tts={tts}
               />
             </ErrorBoundary>
           )}

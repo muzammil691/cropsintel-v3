@@ -1,4 +1,5 @@
 import { getSupabaseClient } from './supabase'
+import { TTS_MODEL, estimateTtsCostUsd } from './elevenlabs'
 
 export async function recordCost(
   provider: string,
@@ -21,5 +22,41 @@ export async function recordCost(
   } catch (err) {
     // Don't fail the request just because cost logging failed
     console.error('[cost-log] failed to record:', err)
+  }
+}
+
+export async function recordElevenLabsTtsCost(
+  charCount: number,
+  voiceId: string,
+  extraMetadata?: Record<string, unknown>,
+): Promise<void> {
+  const costUsd = estimateTtsCostUsd(charCount)
+  await recordCost(
+    'elevenlabs',
+    'atlas',
+    TTS_MODEL,
+    charCount, // chars-as-tokens for ElevenLabs
+    null,
+    costUsd,
+    { voice_id: voiceId, char_count: charCount, ...(extraMetadata ?? {}) },
+  )
+}
+
+export async function getMonthlyProviderSpendUsd(provider: string): Promise<number> {
+  try {
+    const sb = getSupabaseClient()
+    if (!sb) return 0
+    const monthStart = new Date()
+    monthStart.setUTCDate(1)
+    monthStart.setUTCHours(0, 0, 0, 0)
+    const { data } = await sb
+      .from('atlas_cost_log')
+      .select('cost_usd')
+      .eq('provider', provider)
+      .gte('occurred_at', monthStart.toISOString())
+    return (data ?? []).reduce((s, r) => s + Number((r as { cost_usd: number }).cost_usd), 0)
+  } catch (err) {
+    console.error('[cost-log] failed to read monthly spend:', err)
+    return 0
   }
 }

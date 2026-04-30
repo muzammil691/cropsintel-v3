@@ -3,6 +3,8 @@ import { Send, ChevronRight, ChevronDown, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAtlasChat } from '@/hooks/useAtlasChat'
 import type { ChatMessage, ToolCallChip } from '@/lib/atlas-client'
+import { AudioPlayer } from '@/components/atlas/AudioPlayer'
+import type { UseTtsResult } from '@/hooks/useTts'
 
 // --- Simple markdown renderer (no external library)
 // Handles: headers, bold, italic, inline-code, code-blocks, bullets, line breaks
@@ -109,7 +111,7 @@ function ToolChip({ chip }: { chip: ToolCallChip }) {
 }
 
 // --- Single message bubble
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+function MessageBubble({ msg, tts }: { msg: ChatMessage; tts?: UseTtsResult }) {
   const isUser = msg.role === 'user'
   return (
     <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
@@ -133,6 +135,14 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
             ))}
           </div>
         )}
+        {/* Per-message replay control when voice is enabled */}
+        {!isUser && tts?.enabled && msg.content && (
+          <AudioPlayer
+            text={msg.content}
+            voiceId={tts.voiceId}
+            enabled={tts.enabled}
+          />
+        )}
       </div>
       <span className="text-[10px] text-muted-foreground px-1">
         {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -145,13 +155,16 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
 interface ChatPanelProps {
   prefill?: string
   onPrefillConsumed?: () => void
+  tts?: UseTtsResult
 }
 
-export function ChatPanel({ prefill, onPrefillConsumed }: ChatPanelProps) {
+export function ChatPanel({ prefill, onPrefillConsumed, tts }: ChatPanelProps) {
   const { messages, isStreaming, historyLoading, send } = useAtlasChat()
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const wasStreamingRef = useRef(false)
+  const lastSpokenIdRef = useRef<string | null>(null)
 
   // Inject prefill text (from WizardBar)
   useEffect(() => {
@@ -166,6 +179,30 @@ export function ChatPanel({ prefill, onPrefillConsumed }: ChatPanelProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isStreaming])
+
+  // Auto-play assistant reply when SSE stream closes (isStreaming: true → false)
+  // and TTS is enabled. Tracks lastSpokenIdRef to avoid replaying on rerenders.
+  useEffect(() => {
+    if (!tts?.enabled) {
+      wasStreamingRef.current = isStreaming
+      return
+    }
+    if (wasStreamingRef.current && !isStreaming) {
+      // Stream just finished — find the latest atlas message.
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (m.role === 'atlas') {
+          if (m.content && m.id !== lastSpokenIdRef.current) {
+            lastSpokenIdRef.current = m.id
+            // Fire and forget — TTS failure must never block UI.
+            void tts.speak(m.content)
+          }
+          break
+        }
+      }
+    }
+    wasStreamingRef.current = isStreaming
+  }, [isStreaming, messages, tts])
 
   function handleSend() {
     const text = input.trim()
@@ -194,7 +231,7 @@ export function ChatPanel({ prefill, onPrefillConsumed }: ChatPanelProps) {
           </p>
         )}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} />
+          <MessageBubble key={msg.id} msg={msg} tts={tts} />
         ))}
         {isStreaming && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground pl-1">

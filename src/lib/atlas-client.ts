@@ -161,6 +161,59 @@ export async function fetchChatHistory(
   return []
 }
 
+export interface TtsVoice {
+  voice_id: string
+  name: string
+  category?: string | null
+  labels?: Record<string, string> | null
+  preview_url?: string | null
+}
+
+export async function fetchVoices(): Promise<TtsVoice[]> {
+  const data = await fetchJson<{ voices?: TtsVoice[] }>(`${ATLAS_URL}/atlas/tts/voices`, {
+    headers: authHeaders(),
+  })
+  return Array.isArray(data?.voices) ? data!.voices! : []
+}
+
+export interface TtsResult {
+  ok: true
+  blob: Blob
+  charCount: number
+  voiceId: string
+}
+
+export interface TtsError {
+  ok: false
+  status: number
+  error: string
+  budgetExceeded: boolean
+  message?: string
+}
+
+export async function streamTts(text: string, voiceId: string): Promise<TtsResult | TtsError> {
+  const res = await fetch(`${ATLAS_URL}/atlas/tts`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice_id: voiceId }),
+  })
+  if (!res.ok) {
+    let parsed: { error?: string; message?: string } = {}
+    try { parsed = await res.json() as { error?: string; message?: string } } catch { /* ignore */ }
+    return {
+      ok: false,
+      status: res.status,
+      error: parsed.error ?? `HTTP ${res.status}`,
+      budgetExceeded: res.status === 429 && parsed.error === 'budget_exceeded',
+      message: parsed.message,
+    }
+  }
+  const charCount = Number(res.headers.get('X-Atlas-Tts-Chars') ?? text.length)
+  const usedVoice = res.headers.get('X-Atlas-Tts-Voice') ?? voiceId
+  const blob = await res.blob()
+  return { ok: true, blob, charCount, voiceId: usedVoice }
+}
+
 // SSE chat — returns a cleanup function that aborts the stream.
 export function streamChat(
   threadId: string,
