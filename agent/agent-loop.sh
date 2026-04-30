@@ -29,6 +29,13 @@ VERIFIER_GATE_ENABLED="${VERIFIER_GATE_ENABLED:-true}"
 VERIFIER_FAIL_CONFIDENCE_THRESHOLD="${VERIFIER_FAIL_CONFIDENCE_THRESHOLD:-0.7}"
 VERIFIER_TIMEOUT_SECONDS="${VERIFIER_TIMEOUT_SECONDS:-60}"
 
+# Designer gate configuration (UI tasks only — runs after Verifier passes)
+DESIGNER_URL="${DESIGNER_URL:-https://designer-production.up.railway.app}"
+DESIGNER_API_TOKEN="${DESIGNER_API_TOKEN:-}"
+DESIGNER_GATE_ENABLED="${DESIGNER_GATE_ENABLED:-true}"
+DESIGNER_FAIL_CONFIDENCE_THRESHOLD="${DESIGNER_FAIL_CONFIDENCE_THRESHOLD:-0.7}"
+DESIGNER_TIMEOUT_SECONDS="${DESIGNER_TIMEOUT_SECONDS:-60}"
+
 # -----------------------------------------------------------------------------
 # 0. Bootstrap: SSH key, clone repo
 # -----------------------------------------------------------------------------
@@ -181,6 +188,113 @@ EOF
   fi
 
   echo "$LOOP_TAG verifier returned unknown verdict '$verdict', pushing anyway"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# 2a-bis. Designer gate — UI tasks only, runs after Verifier passes
+# -----------------------------------------------------------------------------
+is_ui_task() {
+  local task_name="$1"
+  # Filename keywords
+  if echo "$task_name" | grep -qiE '(dashboard|page|component|ui|layout|form|modal|widget)'; then
+    return 0
+  fi
+  # Spec content (if file still around in done/ or in-progress/)
+  local spec_path=""
+  for d in .agent/tasks/done .agent/tasks/in-progress .agent/tasks/queued; do
+    if [ -f "$d/$task_name.md" ]; then
+      spec_path="$d/$task_name.md"
+      break
+    fi
+  done
+  if [ -n "$spec_path" ]; then
+    if grep -qiE '(\.tsx|tailwind|shadcn|<Button|<Card|<Input|<Dialog)' "$spec_path"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+run_designer_gate() {
+  local task_id="$1"
+  local head_before="$2"
+  local head_after="$3"
+
+  if [ "$DESIGNER_GATE_ENABLED" != "true" ]; then
+    echo "$LOOP_TAG designer gate disabled, skipping"
+    return 0
+  fi
+
+  if ! is_ui_task "$task_id"; then
+    echo "$LOOP_TAG designer gate skipped — non-UI task"
+    return 0
+  fi
+
+  echo "$LOOP_TAG calling designer for task $task_id ($head_before..$head_after)"
+
+  local response
+  response=$(curl -sS -m "$DESIGNER_TIMEOUT_SECONDS" \
+    -X POST "$DESIGNER_URL/designer/audit-commit" \
+    -H "Authorization: Bearer $DESIGNER_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"task_id\":\"$task_id\",\"head_before\":\"$head_before\",\"head_after\":\"$head_after\"}" \
+    2>&1) || {
+    echo "$LOOP_TAG WARN: designer unreachable, pushing anyway: $response" >&2
+    return 0
+  }
+
+  local verdict
+  verdict=$(echo "$response" | jq -r '.verdict // "unknown"')
+  local confidence
+  confidence=$(echo "$response" | jq -r '.confidence // 0')
+
+  echo "$LOOP_TAG designer verdict: $verdict (confidence $confidence)"
+
+  if [ "$verdict" = "pass" ]; then
+    return 0
+  fi
+
+  if [ "$verdict" = "fail" ]; then
+    local should_block
+    should_block=$(awk -v c="$confidence" -v t="$DESIGNER_FAIL_CONFIDENCE_THRESHOLD" 'BEGIN { print (c >= t) ? "true" : "false" }')
+
+    if [ "$should_block" = "true" ]; then
+      echo "$LOOP_TAG designer BLOCKED push (fail conf=$confidence >= $DESIGNER_FAIL_CONFIDENCE_THRESHOLD)"
+      git reset --hard "$head_before"
+
+      # Queue remediation task with design feedback
+      local rem_count
+      rem_count=$(ls .agent/tasks/queued/ 2>/dev/null | grep -c "^${task_id}-design-remediation-" || echo 0)
+      local rem_num
+      rem_num=$(printf "%03d" $((rem_count + 1)))
+      local rem_file=".agent/tasks/queued/${task_id}-design-remediation-${rem_num}.md"
+
+      cat > "$rem_file" <<EOF
+# Task: ${task_id} design remediation ${rem_num}
+
+**Reason:** Designer blocked push at $(date -u +%FT%TZ). Confidence: $confidence
+**Original task:** .agent/tasks/failed/${task_id}.md
+**Designer feedback:** see designer_runs row at $head_after
+
+## Design gaps to fix
+
+$(echo "$response" | jq -r '.gaps[] | "- [" + .severity + "] " + .check + ": " + .description + "\n  Fix: " + .fix' 2>/dev/null || echo "$response")
+
+## Action
+
+Re-attempt the original task addressing the design gaps above.
+Reference: .agent/design-system.md
+EOF
+      git add "$rem_file" && git commit -m "designer: queue remediation for $task_id (conf=$confidence)" && git push origin main || true
+      return 1
+    else
+      echo "$LOOP_TAG designer FAIL but confidence $confidence < $DESIGNER_FAIL_CONFIDENCE_THRESHOLD, pushing with warning"
+      return 0
+    fi
+  fi
+
+  echo "$LOOP_TAG designer returned unknown verdict '$verdict', pushing anyway"
   return 0
 }
 
@@ -348,8 +462,9 @@ run_task() {
     HEAD_AFTER=$(git rev-parse HEAD)
 
     if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
-      # Gate on verifier verdict before pushing
-      if run_verifier_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER"; then
+      # Gate on verifier verdict before pushing, then designer gate (UI tasks only)
+      if run_verifier_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER" && \
+         run_designer_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER"; then
         git push origin main || {
           echo "$LOOP_TAG push failed"
           /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true

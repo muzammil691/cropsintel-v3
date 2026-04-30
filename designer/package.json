@@ -1,0 +1,24 @@
+{
+  "name": "cropsintel-v3-designer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "UI/UX design quality gate for CropsIntel V3 agent-delivered tasks",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "server": "node dist/index.js server",
+    "review": "node dist/index.js review",
+    "audit": "node dist/index.js audit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@supabase/supabase-js": "^2.105.1",
+    "commander": "^12.1.0",
+    "openai": "^4.103.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
