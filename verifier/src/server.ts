@@ -2,10 +2,32 @@ import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { readdirSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { verify } from './verify'
 import { writeVerifierRun } from './lib/audit'
 import { runResearch, type ResearchInput } from './research'
 import type { Gap } from './types'
+
+const execFileP = promisify(execFile)
+
+// Verifier's clone of origin/main is static after container boot; without an
+// explicit fetch+reset before each audit it will check files-exist against
+// whatever HEAD it had when it started. Specs that create new files always
+// fail because the new files only exist on the just-pushed commit. Fix:
+// fetch + reset --hard to head_after at the start of every audit.
+async function syncRepoToHead(repoRoot: string, headAfter: string): Promise<void> {
+  if (!headAfter || headAfter === 'unknown') return
+  try {
+    await execFileP('git', ['fetch', 'origin', 'main', '--quiet'], { cwd: repoRoot })
+    await execFileP('git', ['reset', '--hard', headAfter], { cwd: repoRoot })
+    console.log(`[verifier-server] synced repo to ${headAfter.slice(0, 8)}`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[verifier-server] sync to ${headAfter.slice(0, 8)} failed: ${msg.slice(0, 200)}`)
+    // Fallback: stay on whatever HEAD we had; gaps will reflect that.
+  }
+}
 
 const REPO_ROOT = process.env.REPO_ROOT ?? join(__dirname, '..', '..')
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -82,6 +104,9 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   console.log(`[verifier-server] auditing ${task_id} (${head_before}..${head_after}) spec=${taskSpecPath}`)
 
   try {
+    // Sync the local clone to the commit Builder just pushed so files-exist
+    // and other fs-based checks see the new files.
+    await syncRepoToHead(REPO_ROOT, head_after)
     const result = await verify(taskSpecPath, head_after, 'gate')
     await writeVerifierRun(result, taskSpecPath, head_after, 'gate')
 
