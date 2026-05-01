@@ -6,33 +6,33 @@
 
 ## Gaps to fix
 
-1. **[high] shadcn-usage** — DecisionLogTab uses raw <button> elements for verdict filters (lines 54-73) instead of shadcn Button. These are interactive UI elements that should follow the component system.
-   Fix: Replace raw button elements with <Button variant="outline" size="sm" className={...}> from shadcn/ui, or create a FilterChip component that wraps Button.
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:54
+1. **[high] shadcn-usage** — DecisionLogTab.tsx uses raw <button> elements for filter chips (lines 55-71) instead of shadcn Button component. Design system mandates 'always shadcn/ui — never raw HTML for clickable'.
+   Fix: Replace raw <button> elements with <Button variant='outline' size='sm'> from shadcn/ui
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:55
 
-2. **[high] shadcn-usage** — ProposalsTab uses raw <button> elements for status filter chips (lines 67-87) instead of shadcn Button. These are core interactive elements.
-   Fix: Replace raw button elements with <Button variant="outline" size="sm"> from shadcn/ui to match design system requirement.
-   Where: src/components/atlas-pd/ProposalsTab.tsx:67
+2. **[high] shadcn-usage** — ProposalsTab.tsx uses raw <button> elements for status filter chips (lines 87-102) instead of shadcn Button component.
+   Fix: Replace raw <button> elements with <Button variant='outline' size='sm'> from shadcn/ui
+   Where: src/components/atlas-pd/ProposalsTab.tsx:87
 
-3. **[high] states** — Migration banner dismiss button (App.tsx line 41-46) is a raw button with hover state but missing focus-visible ring required by design system.
-   Fix: Add focus-visible:ring-2 focus-visible:ring-emerald-600/50 to the className, or replace with shadcn Button variant="ghost".
+3. **[high] shadcn-usage** — App.tsx MigrationBanner uses raw <button> for dismiss action (line 41-48) instead of shadcn Button. Violates 'never raw HTML for clickable' rule.
+   Fix: Replace with <Button variant='ghost' size='sm' onClick={clearMigrationNotice} aria-label='Dismiss'>✕</Button>
    Where: src/App.tsx:41
 
-4. **[medium] accessibility** — Date inputs in DecisionLogTab (lines 76-81) have id and aria-label but the <label> elements use htmlFor without being proper <Label> components from shadcn/ui.
-   Fix: Import Label from '@/components/ui/label' and replace <label> with <Label htmlFor="decision-from-date"> to ensure proper pairing per design system.
+4. **[high] accessibility** — DecisionLogTab.tsx date inputs (lines 76-81) use <label htmlFor> but not paired with shadcn <Label> component. Design system requires 'All form inputs: <Label htmlFor=...> paired'.
+   Fix: Import and use <Label htmlFor='decision-from-date'>From</Label> from '@/components/ui/label' instead of raw <label>
    Where: src/components/atlas-pd/DecisionLogTab.tsx:76
 
-5. **[medium] accessibility** — EvidenceTab search input (line 88) has id="evidence-search" and aria-label but no visible paired <Label> component. Design system requires Label/input pairing for all form inputs.
-   Fix: Add <Label htmlFor="evidence-search" className="sr-only">Filter evidence by proposal or description</Label> above the input, importing Label from shadcn/ui.
-   Where: src/components/atlas-pd/EvidenceTab.tsx:88
+5. **[high] accessibility** — EvidenceTab.tsx search input (line 83-89) lacks paired Label component, only has aria-label. Design system requires visual Label component paired with htmlFor.
+   Fix: Add <Label htmlFor='evidence-search' className='sr-only'>Filter evidence</Label> before the input
+   Where: src/components/atlas-pd/EvidenceTab.tsx:83
 
-6. **[medium] accessibility** — ProposalEditor input fields (lines 71-90+) have id and aria-label but use a custom Field component instead of shadcn Label. Unclear if Field wraps Label properly.
-   Fix: Verify Field component uses shadcn <Label> internally, or replace with direct <Label htmlFor=...> imports from '@/components/ui/label'.
-   Where: src/components/atlas-pd/ProposalEditor.tsx:71
+6. **[medium] shadcn-usage** — DecisionLogTab.tsx and ProposalDetailModal.tsx use raw <input type='date'> and <select> elements instead of shadcn Input and Select components.
+   Fix: Replace raw inputs with shadcn <Input type='date'> and <Select> components for consistency
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:77
 
-7. **[medium] states** — DecisionLogTab and ProposalsTab filter buttons have aria-pressed but include focus-visible:outline-none without the required focus-visible:ring-2 replacement. Design system mandates visible focus state.
-   Fix: Ensure focus-visible:ring-2 focus-visible:ring-emerald-600/50 is present in the className alongside outline-none (appears to be present in ProposalsTab line 75 but verify in DecisionLogTab).
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:54
+7. **[medium] states** — Filter chip buttons in DecisionLogTab and ProposalsTab have focus-visible:ring but missing focus-visible:outline-none to suppress default browser outline, creating double-ring effect.
+   Fix: Add 'focus-visible:outline-none' to button className alongside existing focus-visible:ring-2
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:58
 
 ## Acceptance criteria
 
