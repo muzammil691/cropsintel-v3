@@ -95,3 +95,5 @@ This file contains the original spec + the gap report. The dev-time agent picks 
 npm test
 ```
 Each of the 7 programmatic checks has both a passing and failing test case.
+
+<!-- smoke test phase-test-verifier-fix verified verifier audit path -->
