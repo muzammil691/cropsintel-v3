@@ -1,15 +1,9 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Users, FileText, Briefcase, AlertCircle, Cog } from 'lucide-react'
+import { ADMIN_NAV_ITEMS, COCKPIT_NAV_ITEMS } from '@/lib/nav-config'
 import { cn } from '@/lib/utils'
 
-const NAV_ITEMS = [
-  { to: '/admin', icon: LayoutDashboard, label: 'Overview', exact: true },
-  { to: '/admin/users', icon: Users, label: 'Users & Tiers' },
-  { to: '/admin/verifications', icon: AlertCircle, label: 'Verification queue' },
-  { to: '/admin/companies', icon: Briefcase, label: 'Companies' },
-  { to: '/admin/offers', icon: FileText, label: 'Offers' },
-  { to: '/admin/settings', icon: Cog, label: 'Settings' },
-]
+const NAV_ITEMS = ADMIN_NAV_ITEMS.map((i) => ({ to: i.to, icon: i.icon, label: i.label, exact: i.exact }))
+const COCKPIT = COCKPIT_NAV_ITEMS.map((i) => ({ to: i.to, icon: i.icon, label: i.label, exact: i.exact }))
 
 export function AdminSidebar() {
   return (
@@ -37,6 +31,27 @@ export function AdminSidebar() {
             {label}
           </NavLink>
         ))}
+        <div className="pt-4 mt-4 border-t border-slate-200 dark:border-slate-800">
+          <p className="px-3 mb-2 text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Cockpit</p>
+          {COCKPIT.map(({ to, icon: Icon, label, exact }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={exact}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+                  isActive
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 font-medium'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+                )
+              }
+            >
+              <Icon className="h-4 w-4" aria-hidden="true" />
+              {label}
+            </NavLink>
+          ))}
+        </div>
       </nav>
     </aside>
   )

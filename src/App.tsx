@@ -25,6 +25,7 @@ const Upgrade = lazy(() => import("./pages/Upgrade"))
 const Dashboard = lazy(() => import("./pages/Dashboard"))
 const Atlas = lazy(() => import("./pages/Atlas"))
 const AtlasBrain = lazy(() => import("./pages/AtlasBrain"))
+const AtlasPD = lazy(() => import("./pages/AtlasPD"))
 const NotFound = lazy(() => import("./pages/NotFound"))
 const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
@@ -120,6 +121,9 @@ export default function App() {
 
           {/* Atlas Brain — Multi-Brain debate console (admin/team only; gated inside the page) */}
           <Route path="/atlas-brain" element={<AtlasBrain />} />
+
+          {/* Atlas PD — Project Development cockpit (admin/team only; gated inside the page) */}
+          <Route path="/atlas-pd" element={<AtlasPD />} />
 
           {/* Admin — maxons_team tier required */}
           <Route path="/admin" element={<AdminLayout />}>
