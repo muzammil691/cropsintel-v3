@@ -5,6 +5,7 @@ import { simple, debate, DebateResult } from '../lib/multi-brain'
 import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
+import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { TrustMode } from '../types'
 import { readFile, writeFile, rename, mkdir, readdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
@@ -84,6 +85,8 @@ async function runHeartbeat(): Promise<void> {
     // 1.10x: queue intelligence + post-ship memory ingest.
     await reorderQueueIfPriorityInversion(trustMode)
     await memoryIngestAfterShips(trustMode)
+    // 1.10ad: workflow-trace invariants (verifier/designer/memory presence post-ship).
+    await checkWorkflowTraceAndPing(trustMode)
   } catch (err) {
     console.error('[atlas-conductor] heartbeat failed:', err)
   }
@@ -906,6 +909,47 @@ function pruneOldInversions(): void {
   const cutoff = Date.now() - INVERSION_DEBOUNCE_MS
   while (recentInversions.length > 0 && recentInversions[0].ts < cutoff) {
     recentInversions.shift()
+  }
+}
+
+// ─── 8. Workflow-trace invariants (1.10ad) ─────────────────────────────────
+//
+// Each heartbeat, verify the 7-agent choreography actually fired for recent
+// ships: verifier audit within 5 min, designer audit within 5 min for UI
+// commits, memory.ingest within 10 min. Fresh violations log to atlas_decisions
+// and ping WhatsApp so degradation surfaces fast.
+
+async function checkWorkflowTraceAndPing(trustMode: TrustMode): Promise<void> {
+  if (trustMode === 'stopped') return
+  let violations: WorkflowTraceViolation[]
+  try {
+    violations = await checkWorkflowTraceInvariants({ repoRoot: REPO_ROOT })
+  } catch (err) {
+    console.warn('[atlas-conductor] checkWorkflowTraceInvariants failed:', err)
+    return
+  }
+  const fresh = consumeNewWorkflowViolations(violations)
+  if (fresh.length === 0) return
+
+  for (const v of fresh) {
+    await logDecision({
+      fork_question: `Workflow-trace invariant violated: ${v.invariant}`,
+      options_considered: { commit_sha: v.commit_sha, commit_subject: v.commit_subject, age_minutes: v.age_minutes },
+      chosen_option: 'logged',
+      rationale: v.description,
+    })
+  }
+
+  // Single batched WhatsApp message to avoid spamming
+  if (trustMode !== 'passive' && trustMode !== 'chat') {
+    const summary = fresh.length === 1
+      ? `🚨 Workflow trace gap: ${fresh[0].invariant} on ${fresh[0].commit_sha.slice(0, 8)} (${truncate(fresh[0].commit_subject, 60)}). ${truncate(fresh[0].description, 200)}`
+      : `🚨 ${fresh.length} workflow trace gaps detected:\n${fresh.map(v => `- ${v.invariant} on ${v.commit_sha.slice(0, 8)}`).join('\n')}\nSee atlas_decisions for detail.`
+    try {
+      await sendWhatsAppReply(MUZAMMIL_WHATSAPP, summary)
+    } catch (err) {
+      console.warn('[atlas-conductor] whatsapp ping for workflow-trace violation failed:', err)
+    }
   }
 }
 

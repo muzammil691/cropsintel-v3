@@ -247,7 +247,37 @@ run_verifier_gate() {
       local rem_num=$(printf "%03d" $((rem_count + 1)))
       local rem_file=".agent/tasks/queued/${task_id}-remediation-${rem_num}.md"
 
+      # Persist the verifier response so research-remediate.sh can extract gaps + ai_judgment
+      local verifier_response_path="/tmp/verifier-response-${task_id}-${rem_num}.json"
+      printf '%s' "$response" > "$verifier_response_path"
+
+      # Run research step (Part A): memory.search + Multi-Brain debate on root cause.
+      # research-remediate.sh always exits 0 — it emits markdown for us to inline.
+      # On failure of the upstream service, it emits a degraded-mode block.
+      local research_block=""
+      if [ -x "$REPO_DIR/agent/research-remediate.sh" ]; then
+        echo "$LOOP_TAG calling research-remediate.sh for $task_id"
+        research_block=$("$REPO_DIR/agent/research-remediate.sh" "$task_id" "$head_before" "$head_after" "$verifier_response_path" 2>/dev/null || echo "")
+      else
+        echo "$LOOP_TAG WARN: research-remediate.sh not executable, skipping research step" >&2
+      fi
+
+      # Extract research confidence from the block; gate human-review escalation on it.
+      local research_confidence=$(echo "$research_block" | grep -m1 '^## Research confidence:' | sed 's/^## Research confidence: *//' | awk '{print $1}')
+      [ -z "$research_confidence" ] && research_confidence="0"
+      local needs_human_review="false"
+      if awk -v c="$research_confidence" 'BEGIN { exit !(c < 0.4) }'; then
+        needs_human_review="true"
+      fi
+      echo "$LOOP_TAG research confidence: $research_confidence (human_review=$needs_human_review)"
+
       cat > "$rem_file" <<EOF
+---
+priority: $([ "$needs_human_review" = "true" ] && echo 0 || echo 1)
+human-review: $needs_human_review
+research-confidence: $research_confidence
+---
+
 # Task: ${task_id} remediation ${rem_num} of ${MAX_REMEDIATION_ATTEMPTS}
 
 **Reason:** Verifier blocked push at $(date -u +%FT%TZ)
@@ -262,15 +292,40 @@ $(echo "$response" | jq -r '.gaps[] | "### \(.severity // "medium"): \(.check //
 ## AI Judgment context
 
 $(echo "$response" | jq -r '.ai_judgment // "" | if type == "object" then to_entries[] | "**\(.key):** \(.value | tostring | .[0:500])" else . end' 2>/dev/null)
-
+${research_block}
 ## Action
 
-Re-attempt the original task spec at \`.agent/tasks/done/${task_id}.md\` (or wherever it landed), addressing EACH gap above. Do not skip any.
+Re-attempt the original task spec at \`.agent/tasks/done/${task_id}.md\` (or wherever it landed), addressing EACH gap above. Do not skip any. **Read the research-driven root cause analysis above first** — the recommended_fix should drive the approach, not just patching the surface gaps.
 
 After fixes, the new commit will be re-audited by Verifier. If gaps remain, this task will spawn another remediation. If $MAX_REMEDIATION_ATTEMPTS attempts fail in a row, the cycle escalates to the user.
 
 EOF
-      git add "$rem_file" && git commit -m "verifier: queue remediation $rem_num/$MAX_REMEDIATION_ATTEMPTS for $task_id (conf=$confidence)" && git push origin main || true
+      rm -f "$verifier_response_path" 2>/dev/null || true
+      git add "$rem_file" && git commit -m "verifier: queue remediation $rem_num/$MAX_REMEDIATION_ATTEMPTS for $task_id (conf=$confidence, research=$research_confidence)" && git push origin main || true
+
+      # If research couldn't converge on a root cause, also write a question file
+      # so the human reviewer is paged. The remediation spec is still queued
+      # (priority=0 means it sits at the head until someone reviews), but the
+      # question file ensures WhatsApp + the .agent/questions/ surface flag it.
+      if [ "$needs_human_review" = "true" ]; then
+        mkdir -p .agent/questions
+        local question_file=".agent/questions/${task_id}-remediation-${rem_num}-q.md"
+        cat > "$question_file" <<EOF
+# Question — ${task_id} remediation ${rem_num}
+
+**Blocking:** Verifier auto-research could not converge on a root cause (confidence $research_confidence < 0.4)
+
+**Context:**
+Verifier failed the push for ${task_id} with confidence $confidence. The research helper ran memory.search + Multi-Brain debate but the three brains disagreed or returned low-confidence diagnoses. Builder should NOT auto-retry blindly.
+
+**See:** \`$rem_file\` for the full remediation spec including gaps, AI judgment, and research output.
+
+**Recommendation:** review the gaps + research block manually, then either edit the remediation spec to add direction or close the loop by deleting the spec.
+
+**Master plan reference:** §1.6 (Verifier hardening), spec phase-1.10ad
+EOF
+        git add "$question_file" && git commit -m "verifier: human-review question for ${task_id} remediation $rem_num (research conf=$research_confidence)" && git push origin main || true
+      fi
 
       /usr/local/bin/notify-whatsapp.sh "🔍 Verifier blocked $task_id — remediation $rem_num/$MAX_REMEDIATION_ATTEMPTS queued (conf $confidence)" || true
       return 1

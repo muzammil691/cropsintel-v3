@@ -2,6 +2,8 @@ import { CheckCircle2, Inbox } from 'lucide-react'
 import { PendingSpecCard } from './PendingSpecCard'
 import { DesignerAuditCard } from './DesignerAuditCard'
 import { OpenForkCard } from './OpenForkCard'
+import { WorkflowTraceCard } from '../WorkflowTraceCard'
+import { useWorkflowTraces } from '@/hooks/useWorkflowTraces'
 import type { UseArtifactsResult } from '@/hooks/useArtifacts'
 import type { DesignAudit } from '@/lib/atlas-client'
 
@@ -20,8 +22,11 @@ export function ArtifactsPane({ artifacts }: ArtifactsPaneProps) {
     dismissSpec,
     dismissAudit,
   } = artifacts
+  // 1.10ad: surface the most recent shipped commits with their full 7-agent trace.
+  // Pulls from the atlas_workflow_trace view (view migration in 20260501080000).
+  const { traces: workflowTraces } = useWorkflowTraces(30000, 5)
 
-  const total = pendingSpecs.length + designAudits.length + openForks.length
+  const total = pendingSpecs.length + designAudits.length + openForks.length + workflowTraces.length
 
   function handleRemediate(audit: DesignAudit) {
     // Builder-side remediation flow lives in 1.10p. Surfacing the audit details
@@ -95,6 +100,14 @@ export function ArtifactsPane({ artifacts }: ArtifactsPaneProps) {
           <ArtifactGroup title="Open forks" count={openForks.length}>
             {openForks.map((fork) => (
               <OpenForkCard key={fork.id} fork={fork} onResolve={resolveFork} />
+            ))}
+          </ArtifactGroup>
+        )}
+
+        {workflowTraces.length > 0 && (
+          <ArtifactGroup title="Workflow traces" count={workflowTraces.length}>
+            {workflowTraces.map((trace) => (
+              <WorkflowTraceCard key={trace.sha || trace.task_id + trace.shipped_at} trace={trace} />
             ))}
           </ArtifactGroup>
         )}

@@ -1,9 +1,11 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http'
-import { readdirSync, existsSync } from 'fs'
+import { readdirSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { verify } from './verify'
 import { writeVerifierRun } from './lib/audit'
+import { runResearch, type ResearchInput } from './research'
+import type { Gap } from './types'
 
 const REPO_ROOT = process.env.REPO_ROOT ?? join(__dirname, '..', '..')
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
@@ -123,10 +125,85 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 }
 
+async function handleResearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const auth = req.headers['authorization'] ?? ''
+  if (API_TOKEN && auth !== `Bearer ${API_TOKEN}`) {
+    send(res, 401, { error: 'unauthorized' })
+    return
+  }
+
+  const rawBody = await readBody(req)
+  let payload: {
+    task_id?: string
+    head_before?: string
+    head_after?: string
+    gaps?: Gap[]
+    ai_judgment?: string
+    verifier_confidence?: number
+  }
+  try {
+    payload = JSON.parse(rawBody) as typeof payload
+  } catch {
+    send(res, 400, { error: 'invalid JSON' })
+    return
+  }
+
+  const { task_id, head_before = 'unknown', head_after = 'unknown', gaps = [], ai_judgment, verifier_confidence } = payload
+  if (!task_id) {
+    send(res, 400, { error: 'task_id required' })
+    return
+  }
+
+  const taskSpecPath = findTaskSpec(task_id)
+  let specBody: string | undefined
+  if (taskSpecPath) {
+    try {
+      specBody = readFileSync(taskSpecPath, 'utf-8')
+    } catch {
+      specBody = undefined
+    }
+  }
+
+  const input: ResearchInput = {
+    task_id,
+    head_before,
+    head_after,
+    gaps,
+    ai_judgment,
+    spec_path: taskSpecPath ?? undefined,
+    spec_body: specBody,
+    verifier_confidence,
+  }
+
+  console.log(`[verifier-server] research request for ${task_id} (${gaps.length} gaps, verifier_conf=${verifier_confidence ?? '?'})`)
+
+  try {
+    const result = await runResearch(input)
+    send(res, 200, { ...result, run_id: randomUUID() })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[verifier-server] research error:', msg)
+    send(res, 200, {
+      root_cause: `Research helper crashed: ${msg}`,
+      recommended_fix: 'Builder should retry with the original gap list — research unavailable.',
+      related_specs_to_check: [],
+      confidence: 0,
+      similar_failures: [],
+      brains: [],
+      run_id: randomUUID(),
+    })
+  }
+}
+
 export function startServer(): void {
   const server = createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/audit') {
       handleAudit(req, res).catch(err => {
+        console.error('[verifier-server] unhandled error:', err)
+        send(res, 500, { error: 'internal server error' })
+      })
+    } else if (req.method === 'POST' && (req.url === '/research' || req.url === '/verifier/research')) {
+      handleResearch(req, res).catch(err => {
         console.error('[verifier-server] unhandled error:', err)
         send(res, 500, { error: 'internal server error' })
       })
