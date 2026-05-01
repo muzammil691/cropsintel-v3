@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { useAuth } from '@/contexts/AuthContext'
 import { createProposal, updateProposal, type PdProposal } from '@/lib/pd-client'
 
@@ -98,14 +99,16 @@ export function ProposalEditor({ mode, open, initial, onOpenChange, onSaved }: P
               />
             </Field>
             <Field label="Status">
-              <input
+              <div
                 id="proposal-status"
-                type="text"
-                value={initial?.status ?? 'draft'}
-                disabled
-                aria-label="Proposal status (read-only)"
-                className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-sm text-slate-500"
-              />
+                role="status"
+                aria-label="Proposal status"
+                className="w-full h-9 px-3 flex items-center"
+              >
+                <Badge variant="secondary" className="capitalize">
+                  {(initial?.status ?? 'draft').replace('-', ' ')}
+                </Badge>
+              </div>
             </Field>
           </div>
 

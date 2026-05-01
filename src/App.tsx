@@ -12,6 +12,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { DrAtlasAssistant } from "@/components/atlas/DrAtlasAssistant"
 import { useAuth } from "@/contexts/AuthContext"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 
 // Lazy-loaded pages (master plan calls for lazy routing per V1 pattern)
 const Landing = lazy(() => import("./pages/Landing"))
@@ -37,13 +38,15 @@ function MigrationBanner() {
     <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md px-4">
       <Alert className="flex items-center justify-between gap-2 shadow-md border-green-500 bg-green-50 text-green-900">
         <AlertDescription className="flex-1">{migrationNotice}</AlertDescription>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={clearMigrationNotice}
-          className="shrink-0 text-green-700 hover:text-green-900 font-medium text-xs transition-colors duration-200"
           aria-label="Dismiss"
+          className="shrink-0 h-7 w-7 p-0 text-green-700 hover:text-green-900 hover:bg-green-100"
         >
           ✕
-        </button>
+        </Button>
       </Alert>
     </div>
   )

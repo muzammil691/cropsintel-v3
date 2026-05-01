@@ -145,7 +145,7 @@ function Row({ item }: { item: PdEvidence }) {
       <span className="flex-1 min-w-0 truncate">{item.description ?? item.artefact_url ?? '(no description)'}</span>
       <span className="text-slate-500 text-[10px] shrink-0">{new Date(item.created_at).toLocaleDateString()}</span>
       {href && (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline shrink-0 transition-colors duration-200">
+        <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline shrink-0 transition-colors duration-200 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50">
           Open
         </a>
       )}

@@ -43,44 +43,52 @@ export function DecisionLogTab() {
         Append-only history of every PD decision. Cannot be edited.
       </p>
 
-      <div className="flex flex-wrap gap-2 mb-4 items-center">
-        <button
-          type="button"
-          onClick={() => setVerdict(undefined)}
-          aria-pressed={verdict == null}
-          className={cn(
-            'h-7 px-2.5 rounded-full text-[11px] font-medium border',
-            verdict == null
-              ? 'bg-emerald-600 text-white border-emerald-600'
-              : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700',
-          )}
-        >
-          All verdicts
-        </button>
-        {VERDICTS.map((v) => (
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 mb-4 sm:items-center">
+        <div className="flex flex-wrap gap-2 items-center">
           <button
-            key={v}
             type="button"
-            onClick={() => setVerdict(v)}
-            aria-pressed={verdict === v}
+            onClick={() => setVerdict(undefined)}
+            aria-pressed={verdict == null}
             className={cn(
-              'h-7 px-2.5 rounded-full text-[11px] font-medium border capitalize',
-              verdict === v
+              'h-7 px-2.5 rounded-full text-[11px] font-medium border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+              verdict == null
                 ? 'bg-emerald-600 text-white border-emerald-600'
-                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700',
+                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800',
             )}
           >
-            {v.replace('-', ' ')}
+            All verdicts
           </button>
-        ))}
-        <label htmlFor="decision-from-date" className="ml-2 text-[11px] text-slate-500">From</label>
-        <input id="decision-from-date" type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-          aria-label="From date"
-          className="h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50" />
-        <label htmlFor="decision-to-date" className="text-[11px] text-slate-500">to</label>
-        <input id="decision-to-date" type="date" value={to} onChange={(e) => setTo(e.target.value)}
-          aria-label="To date"
-          className="h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50" />
+          {VERDICTS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setVerdict(v)}
+              aria-pressed={verdict === v}
+              className={cn(
+                'h-7 px-2.5 rounded-full text-[11px] font-medium border capitalize transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+                verdict === v
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800',
+              )}
+            >
+              {v.replace('-', ' ')}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:ml-2">
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="decision-from-date" className="text-[11px] text-slate-500 shrink-0">From</label>
+            <input id="decision-from-date" type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+              aria-label="From date"
+              className="h-7 px-2 min-w-0 flex-1 sm:flex-initial rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50" />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="decision-to-date" className="text-[11px] text-slate-500 shrink-0">to</label>
+            <input id="decision-to-date" type="date" value={to} onChange={(e) => setTo(e.target.value)}
+              aria-label="To date"
+              className="h-7 px-2 min-w-0 flex-1 sm:flex-initial rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50" />
+          </div>
+        </div>
       </div>
 
       {error && (
