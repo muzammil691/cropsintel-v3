@@ -38,37 +38,41 @@
    Fix: Add transition-colors duration-200 (or similar) for smooth state changes
    Where: src/pages/AtlasPD.tsx:120
 
-9. **[medium] motion** — AtlasShell.tsx:141 — hover state without transition class causes abrupt visual change
-   Fix: Add transition-colors duration-200 to the className
+9. **[high] mobile-responsive** — Fixed width w-[420px] will overflow on mobile viewports (375px–414px). Static check already flagged this.
+   Fix: Replace w-[420px] with w-full max-w-md or similar responsive constraint.
+   Where: src/components/atlas/AtlasShell.tsx:226
+
+10. **[medium] motion** — AtlasShell.tsx lines 141, 232, 303 use hover: classes without transition- prefix. Abrupt state changes violate motion guidelines.
+   Fix: Add transition-colors duration-200 to all interactive elements with hover states.
    Where: src/components/atlas/AtlasShell.tsx:141
 
-10. **[medium] motion** — AtlasShell.tsx:232 — hover state without transition class causes abrupt visual change
-   Fix: Add transition-colors duration-200 to the className
-   Where: src/components/atlas/AtlasShell.tsx:232
-
-11. **[medium] motion** — AtlasShell.tsx:303 — hover state without transition class causes abrupt visual change
-   Fix: Add transition-colors duration-200 to the className
-   Where: src/components/atlas/AtlasShell.tsx:303
-
-12. **[medium] motion** — AtlasTopNav.tsx:48 — hover state on Link without transition class (line ~173 in diff: 'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors' — actually HAS transition-colors, static check may be false positive OR applies to mobile dropdown)
-   Fix: Verify transition-colors is present on both desktop Link (line ~173) and mobile button (line ~193); if missing on mobile dropdown items (line ~219), add transition-colors duration-200
+11. **[medium] motion** — AtlasTopNav.tsx lines 48, 93 use hover:bg-* without transition. Desktop pill links and mobile dropdown button lack smooth state transitions.
+   Fix: Add transition-colors duration-200 to Link (line 48) and button (line 93).
    Where: src/components/atlas/AtlasTopNav.tsx:48
 
-13. **[medium] motion** — AtlasTopNav.tsx:93 — hover state without transition (likely mobile dropdown menu items around line ~219)
-   Fix: Add transition-colors duration-200 to mobile dropdown Link className
-   Where: src/components/atlas/AtlasTopNav.tsx:93
-
-14. **[medium] motion** — AtlasBrain.tsx:198 — hover state without transition (context not visible in truncated diff, but static check flagged it)
-   Fix: Add transition-colors duration-200 to the hover-enabled element
+12. **[medium] motion** — AtlasBrain.tsx:198 and AtlasPD.tsx:120 have hover states without transitions.
+   Fix: Add transition-colors duration-200 to interactive tab elements.
    Where: src/pages/AtlasBrain.tsx:198
 
-15. **[medium] motion** — AtlasPD.tsx:120 — hover state without transition (context not visible in truncated diff, but static check flagged it)
-   Fix: Add transition-colors duration-200 to the hover-enabled element
-   Where: src/pages/AtlasPD.tsx:120
+13. **[high] shadcn-usage** — AtlasTopNav.tsx:93 uses raw <button> with manual dropdown implementation. Should use shadcn DropdownMenu for accessible menu semantics (role='menu' alone is insufficient without proper keyboard nav and focus management).
+   Fix: Replace custom dropdown with <DropdownMenu><DropdownMenuTrigger>...<DropdownMenuContent> from shadcn/ui.
+   Where: src/components/atlas/AtlasTopNav.tsx:93
 
-16. **[high] mobile-responsive** — AtlasShell.tsx:226 — fixed width w-[420px] will overflow on mobile viewports (375px standard)
-   Fix: Replace w-[420px] with responsive width: w-full sm:w-[420px] sm:max-w-lg or similar breakpoint-aware sizing
-   Where: src/components/atlas/AtlasShell.tsx:226
+14. **[medium] states** — AtlasTopNav.tsx Link elements (line 48) and menu items (line 93+) lack focus-visible rings. Design system requires ring-2 ring-emerald-600/50 on all interactives.
+   Fix: Add focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2 to Link and button elements.
+   Where: src/components/atlas/AtlasTopNav.tsx:48
+
+15. **[medium] accessibility** — AtlasTopNav.tsx mobile dropdown (line 93) manually implements menu but lacks keyboard navigation (Escape to close, Arrow keys to navigate). aria-haspopup='menu' without matching keyboard handlers is incomplete.
+   Fix: Use shadcn DropdownMenu which provides full keyboard support, or implement useClickOutside + onKeyDown handlers for Escape/ArrowUp/ArrowDown.
+   Where: src/components/atlas/AtlasTopNav.tsx:93
+
+16. **[low] states** — AtlasShell.tsx tab buttons (lines ~141, 232, 303 inferred from static warnings) likely lack :active state (design system requires slight inset on click).
+   Fix: Add active:scale-[0.98] or active:translate-y-px to tab button classes.
+   Where: src/components/atlas/AtlasShell.tsx:141
+
+17. **[medium] motion** — AtlasPD.tsx tab buttons (~line 120) use hover styling without transition class.
+   Fix: Add transition-colors duration-200 to tab navigation buttons.
+   Where: src/pages/AtlasPD.tsx:120
 
 ## Acceptance criteria
 
