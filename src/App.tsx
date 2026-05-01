@@ -9,6 +9,7 @@ import { AuthGuard } from "@/components/auth/AuthGuard"
 import { LoadingScreen } from "@/components/auth/LoadingScreen"
 import NotImplemented from "@/components/NotImplemented"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
+import { DrAtlasAssistant } from "@/components/atlas/DrAtlasAssistant"
 import { useAuth } from "@/contexts/AuthContext"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
@@ -129,6 +130,7 @@ export default function App() {
           {/* Catch-all */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+        <DrAtlasAssistant />
       </Suspense>
     </ErrorBoundary>
   )

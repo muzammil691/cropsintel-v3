@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { drAtlas } from '@/lib/drAtlas'
 import { ChatPanel } from '@/components/atlas/ChatPanel'
 import { StatusGrid } from '@/components/atlas/StatusGrid'
 import { WizardBar } from '@/components/atlas/WizardBar'
@@ -16,6 +17,10 @@ import { useLiveMode } from '@/hooks/useLiveMode'
 import type { TrustMode } from '@/lib/atlas-client'
 
 export default function Atlas() {
+  useEffect(() => {
+    drAtlas.log('feature_mount', 'ui', 'atlas')
+  }, [])
+
   // Feature flag: ?legacyAtlas=1 falls back to the v1 two-pane layout while
   // the new shell is bedding in. Removed once the new shell is verified.
   const useLegacy =

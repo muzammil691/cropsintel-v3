@@ -1,6 +1,11 @@
+import { useEffect } from "react"
 import NotImplemented from "@/components/NotImplemented"
+import { drAtlas } from "@/lib/drAtlas"
 
 export default function Auth() {
+  useEffect(() => {
+    drAtlas.log("feature_mount", "ui", "auth")
+  }, [])
   return (
     <NotImplemented
       phase="1.30-auth-real"

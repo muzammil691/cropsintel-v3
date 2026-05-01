@@ -1,8 +1,13 @@
+import { useEffect } from "react"
 import { Helmet } from "react-helmet-async"
 import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
+import { drAtlas } from "@/lib/drAtlas"
 
 export default function Welcome() {
+  useEffect(() => {
+    drAtlas.log("feature_mount", "ui", "welcome")
+  }, [])
   return (
     <>
       <Helmet>

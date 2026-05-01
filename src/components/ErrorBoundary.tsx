@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { drAtlas } from '@/lib/drAtlas'
 
 interface Props {
   children: ReactNode
@@ -18,6 +19,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[ErrorBoundary]', error, info.componentStack)
+    drAtlas.log('error', 'ui', error.message, {
+      severity: 'error',
+      metadata: { stack: info.componentStack ?? null },
+    })
   }
 
   reset = () => this.setState({ error: null })
