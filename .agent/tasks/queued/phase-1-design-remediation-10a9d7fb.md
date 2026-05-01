@@ -70,53 +70,57 @@
    Fix: Add transition-colors duration-200 (or similar) for smooth state changes
    Where: src/pages/AtlasPD.tsx:118
 
-17. **[high] accessibility** — Date inputs in DecisionLogTab lack associated labels or aria-labels, violating WCAG AA and design system label-pairing requirement
-   Fix: Wrap date inputs with <Label htmlFor="from-date"> and add id="from-date" to input, or add aria-label="From date" to each input
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:75
-
-18. **[high] accessibility** — Search input in EvidenceTab lacks associated label, only has placeholder
-   Fix: Add <Label htmlFor="evidence-search" className="sr-only">Filter evidence</Label> above input and id="evidence-search" to input element
-   Where: src/components/atlas-pd/EvidenceTab.tsx:71
-
-19. **[medium] motion** — NavLink hover states in AdminSidebar lack transition classes (lines 26, 46 per static check)
-   Fix: Add 'transition-colors duration-200' to the cn() calls on both NavLink className functions
-   Where: src/components/admin/AdminSidebar.tsx:26
-
-20. **[medium] motion** — Button elements in ApprovalsTab, DecisionLogTab, EvidenceTab, ProposalDetailModal, ProposalsTab, ReviewBundlesTab, ValidationTab lack transitions on hover (10 instances flagged by static check)
-   Fix: shadcn Button component should include transitions by default. Verify shadcn/ui Button definition includes 'transition-colors duration-200' or add explicitly to custom button instances
-   Where: src/components/atlas-pd/ApprovalsTab.tsx:89
-
-21. **[medium] motion** — MigrationBanner close button in App.tsx has hover state without transition (line 42)
-   Fix: Add 'transition-colors duration-200' to button className
-   Where: src/App.tsx:42
-
-22. **[medium] mobile-responsive** — AiReviewButton has no responsive prefixes for button sizing or layout, may overflow on mobile
-   Fix: Add responsive sizing: <Button size="sm" className="text-xs sm:text-sm" ...> and ensure parent flex has flex-wrap
-   Where: src/components/atlas-pd/AiReviewButton.tsx
-
-23. **[medium] mobile-responsive** — ProposalsTab multi-column grid and action buttons lack mobile breakpoints, will compress on 375px viewport
-   Fix: Add responsive grid: grid-cols-1 sm:grid-cols-12, stack action buttons on mobile with flex-col sm:flex-row gap-2
-   Where: src/components/atlas-pd/ProposalsTab.tsx
-
-24. **[medium] mobile-responsive** — ValidationCard layout assumes desktop width, no responsive adjustments for mobile stacking
-   Fix: Convert fixed grid layouts to flex-col md:flex-row or grid-cols-1 md:grid-cols-[pattern]
+17. **[high] accessibility** — src/components/atlas-pd/ValidationCard.tsx contains <input> elements without id/htmlFor Label pairing. Static check flagged 2 instances of inputs missing aria-label or Label association.
+   Fix: Wrap all <input> elements with <Label htmlFor="...">, ensure each input has a matching id attribute
    Where: src/components/atlas-pd/ValidationCard.tsx
 
-25. **[medium] mobile-responsive** — BenchmarksTab 12-column grid (line ~71: grid-cols-12) will overflow on mobile without responsive breakpoints
-   Fix: Change to grid-cols-1 sm:grid-cols-12, stack metric name/chart/value vertically on mobile
-   Where: src/components/atlas-pd/BenchmarksTab.tsx:71
+18. **[medium] motion** — src/App.tsx:42 has hover: class without transition-. Static checks found 11 total instances across App.tsx, AdminSidebar.tsx, EvidenceTab.tsx, ProposalDetailModal.tsx, ProposalsTab.tsx, ReviewBundlesTab.tsx, ValidationTab.tsx, AtlasPD.tsx
+   Fix: Add transition-colors duration-200 to all elements with hover: pseudo-classes per design system motion rules
+   Where: src/App.tsx:42
 
-26. **[medium] mobile-responsive** — DecisionLogTab filter buttons flex-wrap but individual date inputs may overflow on narrow viewports without responsive font/padding
-   Fix: Add text-[10px] sm:text-[11px] to date inputs and reduce px-2 to px-1.5 sm:px-2
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:75
+19. **[medium] motion** — src/components/admin/AdminSidebar.tsx:26 and :46 have hover: without transition-
+   Fix: Add transition-colors duration-200 to NavLink className
+   Where: src/components/admin/AdminSidebar.tsx:26
 
-27. **[low] mobile-responsive** — ProposalDetailModal likely has wide content (evidence lists, markdown) without mobile overflow handling
-   Fix: Ensure DialogContent has max-w-full sm:max-w-2xl and overflow-y-auto, wrap wide code blocks in markdown with overflow-x-auto
-   Where: src/components/atlas-pd/ProposalDetailModal.tsx
+20. **[medium] motion** — src/components/atlas-pd/EvidenceTab.tsx:146 hover: class without transition-
+   Fix: Add transition-colors duration-200 to the hover-enabled element
+   Where: src/components/atlas-pd/EvidenceTab.tsx:146
 
-28. **[low] states** — Filter buttons in DecisionLogTab have aria-pressed but missing focus-visible ring (design system requires ring-2 ring-emerald-600/50 on all interactives)
-   Fix: Add 'focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none' to button className
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:56
+21. **[medium] motion** — src/components/atlas-pd/ProposalDetailModal.tsx:252 and :361 hover: without transition-
+   Fix: Add transition-colors duration-200 to interactive elements
+   Where: src/components/atlas-pd/ProposalDetailModal.tsx:252
+
+22. **[medium] motion** — src/components/atlas-pd/ProposalsTab.tsx:89 hover: class without transition-
+   Fix: Add transition-colors duration-200
+   Where: src/components/atlas-pd/ProposalsTab.tsx:89
+
+23. **[medium] motion** — src/components/atlas-pd/ReviewBundlesTab.tsx:93 and :285 hover: without transition-
+   Fix: Add transition-colors duration-200 to hover states
+   Where: src/components/atlas-pd/ReviewBundlesTab.tsx:93
+
+24. **[medium] motion** — src/components/atlas-pd/ValidationTab.tsx:76 hover: class without transition-
+   Fix: Add transition-colors duration-200
+   Where: src/components/atlas-pd/ValidationTab.tsx:76
+
+25. **[medium] motion** — src/pages/AtlasPD.tsx:118 hover: class without transition-
+   Fix: Add transition-colors duration-200 to the hover-enabled element
+   Where: src/pages/AtlasPD.tsx:118
+
+26. **[medium] mobile-responsive** — src/components/atlas-pd/AiReviewButton.tsx uses shadcn Button but has no responsive prefixes (sm:/md:/lg:) for layout adjustments
+   Fix: Add responsive classes if button sizing or layout needs mobile adaptation, or document that default sizing is mobile-first
+   Where: src/components/atlas-pd/AiReviewButton.tsx
+
+27. **[medium] mobile-responsive** — src/components/atlas-pd/ProposalsTab.tsx uses shadcn components but lacks responsive prefixes for multi-column layouts or spacing
+   Fix: Add sm:/md:/lg: responsive prefixes to grid/flex layouts to ensure mobile-first rendering
+   Where: src/components/atlas-pd/ProposalsTab.tsx
+
+28. **[medium] mobile-responsive** — src/components/atlas-pd/ValidationCard.tsx has no responsive prefixes despite complex layout
+   Fix: Apply responsive grid/flex classes (e.g., grid-cols-1 md:grid-cols-2) for mobile adaptation
+   Where: src/components/atlas-pd/ValidationCard.tsx
+
+29. **[medium] states** — Multiple interactive elements (buttons, links, inputs) likely missing focus-visible rings — design system mandates ring-2 ring-emerald-600/50 on all interactives
+   Fix: Audit all Button, NavLink, input, and custom interactive elements; ensure focus-visible:ring-2 focus-visible:ring-emerald-600/50 is present
+   Where: src/components/atlas-pd/*
 
 ## Acceptance criteria
 
