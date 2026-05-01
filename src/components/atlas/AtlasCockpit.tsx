@@ -130,10 +130,14 @@ export function AtlasCockpit() {
       />
 
       {/* Desktop / tablet: split-pane (chat fixed-width left, tabs right). */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* `hidden md:flex` on the wrapper prevents it from claiming flex-1
+          space on mobile (where its children are also hidden) — without it,
+          the parent column flex would split height between this empty
+          wrapper and the mobile section below. */}
+      <div className="hidden md:flex flex-1 overflow-hidden">
         <aside
           className={cn(
-            'hidden md:flex border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950',
+            'flex border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950',
             // Tablet 768-1280: 320px. Desktop ≥1280: 380px.
             'md:w-[320px] xl:w-[380px] shrink-0',
           )}
@@ -146,7 +150,7 @@ export function AtlasCockpit() {
           </ErrorBoundary>
         </aside>
 
-        <main className="flex-1 min-w-0 flex flex-col overflow-hidden hidden md:flex">
+        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
           <AtlasTabBar active={activeTab} onChange={setActiveTab} badges={badges} />
           <div className="flex-1 min-h-0 overflow-hidden">
             <ErrorBoundary>
@@ -160,11 +164,6 @@ export function AtlasCockpit() {
               </Suspense>
             </ErrorBoundary>
           </div>
-          {error && (
-            <div className="border-t border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-1.5 text-[11px] text-red-700 dark:text-red-300">
-              Atlas link: {error}
-            </div>
-          )}
         </main>
       </div>
 
@@ -191,6 +190,14 @@ export function AtlasCockpit() {
           onSlashNavigate={handleSlashNavigate}
         />
       </div>
+
+      {/* Atlas link error — visible on both desktop and mobile so users on
+          either viewport see when the API is degraded. */}
+      {error && (
+        <div className="border-t border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-1.5 text-[11px] text-red-700 dark:text-red-300">
+          Atlas link: {error}
+        </div>
+      )}
 
       {liveMode.active && (
         <ErrorBoundary>

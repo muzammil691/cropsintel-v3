@@ -27,7 +27,7 @@ export interface SlashCommand {
   /**
    * For navigate commands, which cockpit tab to open.
    */
-  targetTab?: 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts'
+  targetTab?: 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team'
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -42,6 +42,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'depends', argHint: '<task> <on>', description: 'Set depends-on', kind: 'tool', tool: 'builder.set_dependencies' },
   { name: 'plan', description: 'Open Plan tab', kind: 'navigate', targetTab: 'plan' },
   { name: 'workflow', description: 'Open Workflow tab', kind: 'navigate', targetTab: 'workflows' },
+  { name: 'team', description: 'Open Team tab', kind: 'navigate', targetTab: 'team' },
   { name: 'help', description: 'Show all commands', kind: 'help' },
 ]
 

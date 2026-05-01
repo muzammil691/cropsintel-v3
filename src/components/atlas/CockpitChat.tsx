@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Send, Sparkles } from 'lucide-react'
+import { Send, Sparkles, ChevronRight, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { MicButton } from './MicButton'
 import { useStt } from '@/hooks/useStt'
@@ -20,6 +20,7 @@ import {
 import {
   parseSlashCommand,
   commandSignature,
+  SLASH_COMMANDS,
   type SlashCommand,
   type MentionAgent,
 } from '@/lib/atlas-slash-commands'
@@ -370,8 +371,6 @@ function capitalise(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
 }
 
-import { SLASH_COMMANDS } from '@/lib/atlas-slash-commands'
-
 function SlashHelpList() {
   return (
     <ul className="grid gap-1 max-h-72 overflow-y-auto">
@@ -393,7 +392,6 @@ function SlashHelpList() {
 // ─── chat message bubble (cockpit variant — uses ArtifactCardInChat) ────────
 // Replaces the simple ToolChip from ChatPane/MessageBubble with the rich
 // inline artifact card so EVERY tool result carries its own fix path.
-import { ChevronRight, ChevronDown } from 'lucide-react'
 
 function ChatMessageBubble({
   msg,
