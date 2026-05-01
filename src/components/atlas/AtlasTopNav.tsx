@@ -42,10 +42,10 @@ export function AtlasTopNav() {
               to={s.path}
               aria-current={isActive ? 'page' : undefined}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
                 isActive
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800',
+                  : 'text-slate-600 dark:text-slate-300 transition-colors duration-200 hover:bg-slate-200 dark:hover:bg-slate-800',
               )}
               title={s.description}
             >
@@ -63,14 +63,20 @@ export function AtlasTopNav() {
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
-          className="w-full flex items-center justify-between gap-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-medium"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setOpen((o) => !o)
+            }
+          }}
+          className="w-full flex items-center justify-between gap-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
         >
           <span className="inline-flex items-center gap-1.5">
             <active.icon className="size-3.5 text-emerald-600" aria-hidden />
             <span>{active.label}</span>
             <span className="text-slate-400 hidden sm:inline">— {active.description}</span>
           </span>
-          <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} aria-hidden />
+          <ChevronDown className={cn('size-3.5 transition-transform duration-200', open && 'rotate-180')} aria-hidden />
         </button>
         {open && (
           <div
@@ -87,10 +93,10 @@ export function AtlasTopNav() {
                   role="menuitem"
                   onClick={() => setOpen(false)}
                   className={cn(
-                    'flex items-center gap-2 px-3 py-2 text-xs',
+                    'flex items-center gap-2 px-3 py-2 text-xs transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
                     isActive
                       ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+                      : 'text-slate-700 dark:text-slate-300 transition-colors duration-200 hover:bg-slate-100 dark:hover:bg-slate-800',
                   )}
                 >
                   <Icon className="size-3.5" aria-hidden />

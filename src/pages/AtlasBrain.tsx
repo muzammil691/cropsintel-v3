@@ -195,7 +195,7 @@ function TabButton({
         'flex-1 px-3 py-2 text-xs font-medium border-b-2 transition-colors',
         active
           ? 'border-emerald-600 text-emerald-700 dark:text-emerald-400'
-          : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200',
+          : 'border-transparent text-slate-600 dark:text-slate-400 transition-colors duration-200 hover:text-slate-900 dark:hover:text-slate-200',
         disabled && 'opacity-40 cursor-not-allowed',
       )}
     >
