@@ -24,6 +24,8 @@ const Upgrade = lazy(() => import("./pages/Upgrade"))
 const Dashboard = lazy(() => import("./pages/Dashboard"))
 const Atlas = lazy(() => import("./pages/Atlas"))
 const NotFound = lazy(() => import("./pages/NotFound"))
+const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
+const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
 
 function MigrationBanner() {
   const { migrationNotice, clearMigrationNotice } = useAuth()
@@ -113,6 +115,16 @@ export default function App() {
 
           {/* Atlas admin — single-user Muzammil; no auth guard in v0.1 */}
           <Route path="/atlas" element={<Atlas />} />
+
+          {/* Admin — maxons_team tier required */}
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<AdminDashboard />} />
+            <Route path="users" element={<NotImplemented phase="Phase 2 — User management" />} />
+            <Route path="verifications" element={<NotImplemented phase="Phase 1.11b — Verification queue" />} />
+            <Route path="companies" element={<NotImplemented phase="Phase 2 — Company management" />} />
+            <Route path="offers" element={<NotImplemented phase="Phase 2.3 — Offer management" />} />
+            <Route path="settings" element={<NotImplemented phase="Phase 2 — Admin settings" />} />
+          </Route>
 
           {/* Catch-all */}
           <Route path="*" element={<NotFound />} />
