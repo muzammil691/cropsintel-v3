@@ -14,15 +14,25 @@ export async function loadTrustModeFromDb(): Promise<void> {
     return
   }
 
-  // 3 attempts with 1s/2s/4s backoff before falling back to env default.
+  // 3 attempts with 200ms / 600ms / 1.8s backoff before falling back to env default.
   // Transient boot races (Supabase connection pool not warm yet) shouldn't lose
   // the user's persisted mode — they'd silently revert to passive on every restart.
-  const delays = [1000, 2000, 4000]
+  // 1.10af tightened the timing from 1s/2s/4s after Bug D — 7s of sleep on cold
+  // boot was making the conductor heartbeat fire against env-default before
+  // the DB read completed.
+  const delays = [200, 600, 1800]
   let lastErr: unknown = null
   for (let attempt = 0; attempt < delays.length; attempt++) {
     try {
       const { data, error } = await sb.from('atlas_config').select('*').eq('key', 'trust_mode').maybeSingle()
       if (error) throw error
+      // Log the raw read so debugging doesn't have to infer the row from the
+      // inferred mode. Bug D (2026-05-01) was masked by "no DB override" never
+      // distinguishing between (a) row missing and (b) row present but empty.
+      const rowCount = data ? 1 : 0
+      const rawValue = data ? (data.value as string | null | undefined) ?? null : null
+      const rawSetBy = data ? (data.set_by as string | null | undefined) ?? null : null
+      console.log(`[trust-mode] DB read result: rowCount=${rowCount}, value=${rawValue ?? 'null'}, set_by=${rawSetBy ?? 'null'}`)
       if (data && data.value) {
         _currentMode = data.value as TrustMode
         _modeSetAt = new Date(data.updated_at as string)

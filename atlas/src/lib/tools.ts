@@ -7,6 +7,7 @@ import { draftSpec, type DraftResult } from './spec-draft'
 import { getCurrentMode } from './trust-mode'
 import { checkInvariants } from './invariants'
 import { parseSpec, setFrontmatterField } from './frontmatter'
+import { withGitLock } from './git-mutex'
 
 const execFileP = promisify(execFile)
 
@@ -14,35 +15,37 @@ const REPO_ROOT = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
 
 // ─── Git helper for autonomous Atlas commits ────────────────────────────────
 async function gitCommitAndPush(commitMsg: string, filesToAdd: string[]): Promise<{ sha: string; pushed: boolean }> {
-  // Pull first to avoid stale-base conflicts
-  try {
-    await execFileP('git', ['pull', '--rebase', 'origin', 'main'], { cwd: REPO_ROOT })
-  } catch (err) {
-    console.warn('[atlas-git] pull failed (continuing):', err)
-  }
-  // Stage files
-  for (const f of filesToAdd) {
-    await execFileP('git', ['add', f], { cwd: REPO_ROOT })
-  }
-  // Commit
-  try {
-    await execFileP('git', ['-c', 'user.name=Atlas', '-c', 'user.email=atlas@cropsintel.local', 'commit', '-m', commitMsg], { cwd: REPO_ROOT })
-  } catch (err) {
-    // Probably nothing to commit
-    console.warn('[atlas-git] commit produced no changes:', err)
-    return { sha: 'no-changes', pushed: false }
-  }
-  // Get sha
-  const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT })
-  const sha = stdout.trim()
-  // Push
-  try {
-    await execFileP('git', ['push', 'origin', 'main'], { cwd: REPO_ROOT })
-    return { sha, pushed: true }
-  } catch (err) {
-    console.error('[atlas-git] push failed:', err)
-    return { sha, pushed: false }
-  }
+  return withGitLock(`commit-and-push:${commitMsg.slice(0, 40)}`, async () => {
+    // Pull first to avoid stale-base conflicts
+    try {
+      await execFileP('git', ['pull', '--rebase', 'origin', 'main'], { cwd: REPO_ROOT })
+    } catch (err) {
+      console.warn('[atlas-git] pull failed (continuing):', err)
+    }
+    // Stage files
+    for (const f of filesToAdd) {
+      await execFileP('git', ['add', f], { cwd: REPO_ROOT })
+    }
+    // Commit
+    try {
+      await execFileP('git', ['-c', 'user.name=Atlas', '-c', 'user.email=atlas@cropsintel.local', 'commit', '-m', commitMsg], { cwd: REPO_ROOT })
+    } catch (err) {
+      // Probably nothing to commit
+      console.warn('[atlas-git] commit produced no changes:', err)
+      return { sha: 'no-changes', pushed: false }
+    }
+    // Get sha
+    const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT })
+    const sha = stdout.trim()
+    // Push
+    try {
+      await execFileP('git', ['push', 'origin', 'main'], { cwd: REPO_ROOT })
+      return { sha, pushed: true }
+    } catch (err) {
+      console.error('[atlas-git] push failed:', err)
+      return { sha, pushed: false }
+    }
+  })
 }
 const MEMORY_URL = process.env.MEMORY_URL ?? 'https://cooperative-rejoicing-production.up.railway.app'
 const MEMORY_TOKEN = process.env.MEMORY_API_TOKEN
@@ -94,13 +97,15 @@ export async function builderQueueSpec(filename: string, body: string): Promise<
 }
 
 export async function builderListQueue(): Promise<{ specs: string[] }> {
-  // Refresh to see latest
-  try {
-    await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
-    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
-  } catch (err) {
-    console.warn('[atlas-list] git refresh failed:', err)
-  }
+  // Refresh to see latest — serialized via git-mutex to avoid index.lock collisions.
+  await withGitLock('list-queue:fetch+reset', async () => {
+    try {
+      await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
+      await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
+    } catch (err) {
+      console.warn('[atlas-list] git refresh failed:', err)
+    }
+  })
   const dir = resolve(REPO_ROOT, '.agent/tasks/queued')
   const files = await readdir(dir)
   return { specs: files.filter(f => f.endsWith('.md') && f !== '_template.md') }
@@ -110,13 +115,15 @@ export async function builderListDone(opts?: {
   limit?: number
   filter?: string
 }): Promise<{ specs: string[]; count: number }> {
-  // Refresh repo state first (mirror builderListQueue)
-  try {
-    await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
-    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
-  } catch (err) {
-    console.warn('[atlas-list-done] git refresh failed:', err)
-  }
+  // Refresh repo state first (mirror builderListQueue), serialized via git-mutex.
+  await withGitLock('list-done:fetch+reset', async () => {
+    try {
+      await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
+      await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
+    } catch (err) {
+      console.warn('[atlas-list-done] git refresh failed:', err)
+    }
+  })
   const dir = resolve(REPO_ROOT, '.agent/tasks/done')
   const files = (await readdir(dir)).filter(f => f.endsWith('.md') && f !== '_template.md')
   let filtered = files
@@ -224,12 +231,14 @@ async function wouldCreateCycle(taskId: string, newDeps: string[]): Promise<bool
 
 export async function builderQueueOrder(): Promise<{ order: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[] }> }> {
   // Refresh local view of queued/ + done/ first so order reflects HEAD.
-  try {
-    await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
-    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
-  } catch (err) {
-    console.warn('[atlas-queue-order] git refresh failed:', err)
-  }
+  await withGitLock('queue-order:fetch+reset', async () => {
+    try {
+      await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
+      await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
+    } catch (err) {
+      console.warn('[atlas-queue-order] git refresh failed:', err)
+    }
+  })
   const queuedDir = resolve(REPO_ROOT, '.agent/tasks/queued')
   const doneDir = resolve(REPO_ROOT, '.agent/tasks/done')
   const queuedFiles = (await readdir(queuedDir).catch(() => [] as string[]))

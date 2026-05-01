@@ -1126,17 +1126,18 @@ export async function startServer(): Promise<void> {
       try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
       try {
         await setMode(payload.mode, payload.setBy ?? 'api')
-        json(res, 200, { ...getModeMetadata(), success: true })
+        json(res, 200, { ok: true, ...getModeMetadata(), success: true })
       } catch (err) {
         // Distinguish bad-input (400) from persist-failure (500) so callers can
         // tell whether to retry. Validation errors come from setMode's known
         // "Invalid trust mode: …" path; everything else is a real server-side
         // failure (DB persist failure, missing client) and MUST surface as 500
         // — otherwise the dashboard sees 200 and the mode silently reverts on
-        // next service restart (the bug spec 1.10y was filed to fix).
+        // next service restart (the bug spec 1.10y was filed to fix and 1.10af
+        // re-asserted with the {ok:false,error} response contract).
         const msg = err instanceof Error ? err.message : String(err)
         const isValidationError = msg.startsWith('Invalid trust mode:')
-        json(res, isValidationError ? 400 : 500, { error: msg })
+        json(res, isValidationError ? 400 : 500, { ok: false, error: msg })
       }
       return
     }

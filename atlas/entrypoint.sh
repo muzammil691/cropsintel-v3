@@ -40,6 +40,14 @@ if [ ! -d "$REPO_DIR/.git" ]; then
     exit 1
   fi
 else
+  # Stale-lock recovery (Bug E + F, 2026-05-01): if the previous container died
+  # mid-git-op, an orphaned .git/index.lock blocks every subsequent git command.
+  # Container start = no other processes own the repo, so unconditional removal
+  # is safe by definition.
+  if [ -f "$REPO_DIR/.git/index.lock" ]; then
+    echo "[atlas-entrypoint] removing stale .git/index.lock from prior container"
+    rm -f "$REPO_DIR/.git/index.lock"
+  fi
   cd "$REPO_DIR" && git pull --rebase --autostash || echo "[atlas-entrypoint] pull failed (using cached)"
 fi
 

@@ -4,6 +4,7 @@ import { getBurnRate } from '../lib/cost-gate'
 import { sendWhatsAppReply } from '../lib/twilio'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { withGitLock } from '../lib/git-mutex'
 
 const execFileP = promisify(execFile)
 const REPO_ROOT = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
@@ -160,19 +161,24 @@ async function computeLoopHealth(): Promise<LoopHealth> {
   let loopLagSeconds: number | null = null
   try {
     // Most recent commit that touched .agent/tasks/queued/* (should be when a spec arrived).
-    const queueCommit = await execFileP(
-      'git',
-      ['log', '-1', '--pretty=format:%ct', '--', '.agent/tasks/queued/'],
-      { cwd: REPO_ROOT },
-    )
-    const queueAddedAt = parseInt(queueCommit.stdout.trim(), 10)
-    // Most recent commit that touched .agent/tasks/in-progress/* (Builder pickup).
-    const pickupCommit = await execFileP(
-      'git',
-      ['log', '-1', '--pretty=format:%ct', '--', '.agent/tasks/in-progress/'],
-      { cwd: REPO_ROOT },
-    )
-    const pickupAt = parseInt(pickupCommit.stdout.trim(), 10)
+    // Both git log calls are serialized as one critical section so they don't race
+    // with concurrent fetch+reset ops from tools.ts / conductor.ts.
+    const { queueAddedAt, pickupAt } = await withGitLock('snapshot:loop-lag', async () => {
+      const queueCommit = await execFileP(
+        'git',
+        ['log', '-1', '--pretty=format:%ct', '--', '.agent/tasks/queued/'],
+        { cwd: REPO_ROOT },
+      )
+      const pickupCommit = await execFileP(
+        'git',
+        ['log', '-1', '--pretty=format:%ct', '--', '.agent/tasks/in-progress/'],
+        { cwd: REPO_ROOT },
+      )
+      return {
+        queueAddedAt: parseInt(queueCommit.stdout.trim(), 10),
+        pickupAt: parseInt(pickupCommit.stdout.trim(), 10),
+      }
+    })
     if (!isNaN(queueAddedAt)) {
       // If a pickup happened AFTER the latest queue add, lag is small.
       // If queue add is more recent and queue isn't empty → lag = now - queueAdd.

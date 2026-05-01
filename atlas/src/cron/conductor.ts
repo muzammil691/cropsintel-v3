@@ -6,6 +6,7 @@ import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
+import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
 import { readFile, writeFile, rename, mkdir, readdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
@@ -620,34 +621,36 @@ ${gaps.map((g, i) => `${i + 1}. **[${g.severity ?? 'warn'}] ${g.check ?? 'unknow
 }
 
 async function getRecentUiCommits(limit: number): Promise<Array<{ sha: string; subject: string; changedFiles: string[] }>> {
-  try {
-    const { stdout } = await execFileP(
-      'git',
-      ['log', `-n`, String(limit), '--pretty=format:%H%x09%s'],
-      { cwd: REPO_ROOT },
-    )
-    const commits = stdout.split('\n').filter(Boolean).map(line => {
-      const [sha, subject] = line.split('\t')
-      return { sha, subject: subject ?? '' }
-    })
-    const enriched: Array<{ sha: string; subject: string; changedFiles: string[] }> = []
-    for (const c of commits) {
-      try {
-        const { stdout: files } = await execFileP(
-          'git',
-          ['show', '--name-only', '--pretty=format:', c.sha],
-          { cwd: REPO_ROOT },
-        )
-        enriched.push({ ...c, changedFiles: files.split('\n').filter(Boolean) })
-      } catch {
-        enriched.push({ ...c, changedFiles: [] })
+  return withGitLock('conductor:get-recent-ui-commits', async () => {
+    try {
+      const { stdout } = await execFileP(
+        'git',
+        ['log', `-n`, String(limit), '--pretty=format:%H%x09%s'],
+        { cwd: REPO_ROOT },
+      )
+      const commits = stdout.split('\n').filter(Boolean).map(line => {
+        const [sha, subject] = line.split('\t')
+        return { sha, subject: subject ?? '' }
+      })
+      const enriched: Array<{ sha: string; subject: string; changedFiles: string[] }> = []
+      for (const c of commits) {
+        try {
+          const { stdout: files } = await execFileP(
+            'git',
+            ['show', '--name-only', '--pretty=format:', c.sha],
+            { cwd: REPO_ROOT },
+          )
+          enriched.push({ ...c, changedFiles: files.split('\n').filter(Boolean) })
+        } catch {
+          enriched.push({ ...c, changedFiles: [] })
+        }
       }
+      return enriched
+    } catch (err) {
+      console.warn('[atlas-conductor] git log failed:', err)
+      return []
     }
-    return enriched
-  } catch (err) {
-    console.warn('[atlas-conductor] git log failed:', err)
-    return []
-  }
+  })
 }
 
 // ─── 4. Self-heal stuck Builder ─────────────────────────────────────────────
@@ -967,11 +970,11 @@ async function memoryIngestAfterShips(trustMode: TrustMode): Promise<void> {
   // Look at commits in roughly the last heartbeat window.
   let stdout: string
   try {
-    const result = await execFileP(
+    const result = await withGitLock('conductor:ship-detect-log', () => execFileP(
       'git',
       ['log', '--since=6 minutes ago', '--pretty=format:%H%x09%s'],
       { cwd: REPO_ROOT },
-    )
+    ))
     stdout = result.stdout
   } catch (err) {
     console.warn('[atlas-conductor] git log for ship-detect failed:', err)
