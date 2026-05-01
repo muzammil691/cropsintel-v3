@@ -100,6 +100,16 @@ bootstrap() {
   echo "$LOOP_TAG linking supabase project"
   supabase link --project-ref "$SUPABASE_PROJECT_REF" 2>/dev/null || true
 
+  # Apply any pending migrations that were committed but never pushed to the DB.
+  # Without this, services depending on new tables (atlas_config, designer_runs,
+  # atlas_events, etc.) fail at runtime even though the migration .sql files exist.
+  echo "$LOOP_TAG pushing pending supabase migrations"
+  if supabase db push --include-all --yes 2>&1 | tee /tmp/supabase-push.log | tail -20; then
+    echo "$LOOP_TAG supabase db push ok"
+  else
+    echo "$LOOP_TAG WARN: supabase db push failed — see /tmp/supabase-push.log" >&2
+  fi
+
   # Install deps once
   if [ ! -d "$REPO_DIR/node_modules" ]; then
     echo "$LOOP_TAG running npm ci (first time)"
