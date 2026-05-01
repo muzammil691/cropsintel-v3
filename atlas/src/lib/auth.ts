@@ -7,6 +7,7 @@
 import { randomBytes, createHash } from 'crypto'
 import bcrypt from 'bcryptjs'
 import { getSupabaseClient } from './supabase'
+import { sendWhatsAppReply } from './twilio'
 
 // Cost factor 10 ≈ ~80 ms per hash on Railway shared CPU. Plenty for a 6-digit
 // numeric secret with a 5-minute expiry and 5-attempt cap.
@@ -263,31 +264,19 @@ export async function listSessionsForPhone(phone: string): Promise<SessionRow[]>
 // is the bcrypt'd row in atlas_otp_codes and the body of the WhatsApp message
 // the user receives.
 export async function sendOtpViaWhatsApp(phone: string, code: string): Promise<boolean> {
-  const url = process.env.ATLAS_WHATSAPP_SEND_URL
-    ?? 'https://eywsfmixzrdfcywmdaaw.supabase.co/functions/v1/whatsapp-send'
-  const anonKey = process.env.V2_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? ''
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (anonKey) {
-    headers.Authorization = `Bearer ${anonKey}`
-    headers.apikey = anonKey
-  }
+  // Atlas already has TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM
+  // for the conductor's WhatsApp pings — reuse that path instead of routing through
+  // V2's whatsapp-send Edge Function (which would need a V2 anon key we don't ship).
+  const body = `Atlas login code: ${code} (valid ${Math.round(OTP_TTL_SECONDS / 60)} min). If you didn't request this, ignore.`
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        to: phone,
-        body: `Atlas login code: ${code} (valid ${Math.round(OTP_TTL_SECONDS / 60)} min)`,
-      }),
-    })
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      console.error(`[atlas-auth] whatsapp-send returned ${res.status}: ${errText.slice(0, 200)}`)
+    const result = await sendWhatsAppReply(phone, body)
+    if ('error' in result) {
+      console.error(`[atlas-auth] sendWhatsAppReply failed: ${result.error}`)
       return false
     }
     return true
   } catch (err) {
-    console.error('[atlas-auth] whatsapp-send request failed:', err)
+    console.error('[atlas-auth] sendWhatsAppReply threw:', err)
     return false
   }
 }
