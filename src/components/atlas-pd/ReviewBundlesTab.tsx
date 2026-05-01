@@ -87,10 +87,10 @@ export function ReviewBundlesTab() {
                     type="button"
                     onClick={() => setSelected(b)}
                     className={cn(
-                      'w-full text-left px-3 py-2 rounded-md border transition-colors',
+                      'w-full text-left px-3 py-2 rounded-md border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
                       isSelected
                         ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800'
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800',
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-800',
                     )}
                   >
                     <p className="text-sm font-medium truncate">{b.title}</p>
@@ -255,19 +255,23 @@ function CreateBundleDialog({
 
         <div className="space-y-3">
           <input
+            id="bundle-title"
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Bundle title (e.g. 'Phase 1.10 deliverables — week of May 1')"
-            className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40"
+            aria-label="Bundle title"
+            className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
             maxLength={200}
           />
           <textarea
+            id="bundle-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
             placeholder="Optional description / context for stakeholders."
-            className="w-full px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40"
+            aria-label="Bundle description"
+            className="w-full px-3 py-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
             maxLength={1000}
           />
 
@@ -282,12 +286,14 @@ function CreateBundleDialog({
                   const checked = selectedIds.has(p.id)
                   return (
                     <li key={p.id}>
-                      <label className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800">
+                      <label htmlFor={`bundle-proposal-${p.id}`} className="flex items-start gap-2 px-3 py-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors duration-200">
                         <input
+                          id={`bundle-proposal-${p.id}`}
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggle(p.id)}
-                          className="mt-0.5"
+                          aria-label={`Include "${p.title}" in bundle`}
+                          className="mt-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
                         />
                         <span className="flex-1 min-w-0">
                           <span className="block text-xs font-medium truncate">{p.title}</span>

@@ -40,8 +40,8 @@ export function AiReviewButton({ proposalId, onComplete }: Props) {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <Button size="sm" variant="outline" onClick={onClick} disabled={running}>
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+      <Button size="sm" variant="outline" onClick={onClick} disabled={running} className="w-full sm:w-auto">
         {running ? <Loader2 className="size-3.5 animate-spin" /> : <Wand2 className="size-3.5" />}
         {running ? 'Reviewing…' : 'AI Review'}
       </Button>

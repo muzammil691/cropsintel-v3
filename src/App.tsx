@@ -39,7 +39,7 @@ function MigrationBanner() {
         <AlertDescription className="flex-1">{migrationNotice}</AlertDescription>
         <button
           onClick={clearMigrationNotice}
-          className="shrink-0 text-green-700 hover:text-green-900 font-medium text-xs"
+          className="shrink-0 text-green-700 hover:text-green-900 font-medium text-xs transition-colors duration-200"
           aria-label="Dismiss"
         >
           ✕

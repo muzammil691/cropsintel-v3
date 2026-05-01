@@ -83,7 +83,9 @@ export function EvidenceTab() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter by proposal or description…"
-          className="w-full pl-7 pr-2 h-8 text-xs rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/40"
+          aria-label="Filter evidence by proposal or description"
+          id="evidence-search"
+          className="w-full pl-7 pr-2 h-8 text-xs rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
         />
       </div>
 
@@ -143,7 +145,7 @@ function Row({ item }: { item: PdEvidence }) {
       <span className="flex-1 min-w-0 truncate">{item.description ?? item.artefact_url ?? '(no description)'}</span>
       <span className="text-slate-500 text-[10px] shrink-0">{new Date(item.created_at).toLocaleDateString()}</span>
       {href && (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline shrink-0">
+        <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline shrink-0 transition-colors duration-200">
           Open
         </a>
       )}

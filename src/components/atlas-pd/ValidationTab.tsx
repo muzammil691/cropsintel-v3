@@ -73,7 +73,7 @@ export function ValidationTab() {
                 <button
                   type="button"
                   onClick={() => setExpanded(open ? null : r.id)}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-left"
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
                   aria-expanded={open}
                 >
                   <span className="flex-1 min-w-0">

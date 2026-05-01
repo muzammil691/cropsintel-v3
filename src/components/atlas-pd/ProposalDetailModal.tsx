@@ -234,26 +234,31 @@ export function ProposalDetailModal({ proposal, open, onOpenChange, onChanged }:
               <select
                 value={linkType}
                 onChange={(e) => setLinkType(e.target.value as 'commit' | 'note')}
-                className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                aria-label="Evidence link type"
+                className="h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
               >
                 <option value="note">note / link</option>
                 <option value="commit">commit</option>
               </select>
               <input
+                id="evidence-link-url"
                 type="url"
                 value={linkUrl}
                 onChange={(e) => setLinkUrl(e.target.value)}
                 placeholder="https://…"
-                className="flex-1 h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
+                aria-label="Evidence link URL"
+                className="flex-1 h-8 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
               />
               <Button size="sm" variant="outline" onClick={addLink} disabled={!linkUrl.trim() || acting}>
                 Attach link
               </Button>
-              <label className="inline-flex items-center h-8 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800">
+              <label className="inline-flex items-center h-8 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors duration-200">
                 Upload
                 <input
+                  id="evidence-file-upload"
                   type="file"
                   multiple
+                  aria-label="Upload evidence files"
                   className="sr-only"
                   onChange={(e) => onFiles(e.target.files)}
                 />
@@ -358,7 +363,7 @@ function EvidenceRow({ item }: { item: PdEvidence }) {
       </span>
       <span className="flex-1 min-w-0 truncate">{item.description ?? item.artefact_url ?? '(no description)'}</span>
       {href && (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline shrink-0">
+        <a href={href} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline shrink-0 transition-colors duration-200">
           Open
         </a>
       )}

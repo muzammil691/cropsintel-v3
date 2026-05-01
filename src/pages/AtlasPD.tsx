@@ -114,10 +114,10 @@ export default function AtlasPD() {
                   aria-selected={active}
                   onClick={() => setTab(t.key)}
                   className={cn(
-                    'flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap',
+                    'flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors duration-200 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
                     active
                       ? 'border-emerald-600 text-emerald-700 dark:text-emerald-400'
-                      : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200',
+                      : 'border-transparent transition-colors duration-200 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200',
                   )}
                 >
                   <Icon className="size-3.5" aria-hidden />

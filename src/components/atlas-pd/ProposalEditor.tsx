@@ -73,10 +73,12 @@ export function ProposalEditor({ mode, open, initial, onOpenChange, onSaved }: P
         <div className="space-y-3">
           <Field label="Title" required>
             <input
+              id="proposal-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40"
+              aria-label="Proposal title"
+              className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
               placeholder="Short, specific name (e.g. 'Auto-extract proposal gaps from Builder retrospectives')"
               maxLength={200}
             />
@@ -85,19 +87,23 @@ export function ProposalEditor({ mode, open, initial, onOpenChange, onSaved }: P
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Related phase">
               <input
+                id="proposal-related-phase"
                 type="text"
                 value={relatedPhase ?? ''}
                 onChange={(e) => setRelatedPhase(e.target.value)}
-                className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40"
+                aria-label="Related phase"
+                className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
                 placeholder="e.g. 1.10ac"
                 maxLength={32}
               />
             </Field>
             <Field label="Status">
               <input
+                id="proposal-status"
                 type="text"
                 value={initial?.status ?? 'draft'}
                 disabled
+                aria-label="Proposal status (read-only)"
                 className="w-full h-9 px-3 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 text-sm text-slate-500"
               />
             </Field>

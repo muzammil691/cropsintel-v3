@@ -73,12 +73,14 @@ export function DecisionLogTab() {
             {v.replace('-', ' ')}
           </button>
         ))}
-        <span className="ml-2 text-[11px] text-slate-500">From</span>
-        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-          className="h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]" />
-        <span className="text-[11px] text-slate-500">to</span>
-        <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-          className="h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]" />
+        <label htmlFor="decision-from-date" className="ml-2 text-[11px] text-slate-500">From</label>
+        <input id="decision-from-date" type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+          aria-label="From date"
+          className="h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50" />
+        <label htmlFor="decision-to-date" className="text-[11px] text-slate-500">to</label>
+        <input id="decision-to-date" type="date" value={to} onChange={(e) => setTo(e.target.value)}
+          aria-label="To date"
+          className="h-7 px-2 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50" />
       </div>
 
       {error && (

@@ -18,13 +18,16 @@ export function ValidationCard({ validation }: { validation: PdAutoValidation })
   const v = VERDICT_STYLE[validation.verdict] ?? VERDICT_STYLE['needs-work']
   const Icon = v.icon
   return (
-    <div className={cn('rounded-md border p-3 text-xs', v.color)}>
-      <div className="flex items-center gap-2 mb-1.5">
+    <div className={cn('rounded-md border p-3 sm:p-4 text-xs sm:text-sm', v.color)}>
+      <div className="flex flex-wrap items-center gap-2 mb-1.5">
         <Icon className="size-3.5" aria-hidden />
         <span className="font-semibold uppercase text-[11px] tracking-wide">{v.label}</span>
-        <span className="ml-auto text-[10px] opacity-70">
+        <span className="ml-auto text-[10px] opacity-70 hidden sm:inline">
           {validation.ai_model} · ${validation.cost_usd.toFixed(4)} ·{' '}
           {new Date(validation.created_at).toLocaleString()}
+        </span>
+        <span className="ml-auto text-[10px] opacity-70 sm:hidden">
+          ${validation.cost_usd.toFixed(4)}
         </span>
       </div>
       {validation.reasoning && (
