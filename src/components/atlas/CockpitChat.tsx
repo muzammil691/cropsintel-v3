@@ -195,7 +195,7 @@ export function CockpitChat({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50/40 dark:bg-slate-900/20">
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50/40 dark:bg-slate-900/20">
         {historyLoading && (
           <div className="text-xs text-slate-400 text-center py-8">Loading conversation…</div>
         )}

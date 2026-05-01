@@ -113,7 +113,7 @@ export function AtlasCockpit() {
   const openAgentsTab = useCallback(() => setActiveTab('agents'), [setActiveTab])
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
+    <div className="h-screen overflow-hidden flex flex-col bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
       <div className="px-4 md:px-6 pt-3 empty:hidden">
         <PwaInstallPrompt />
       </div>
@@ -129,15 +129,15 @@ export function AtlasCockpit() {
         onOpenAgentsTab={openAgentsTab}
       />
 
-      {/* Desktop / tablet: split-pane (chat fixed-width left, tabs right). */}
-      {/* `hidden md:flex` on the wrapper prevents it from claiming flex-1
-          space on mobile (where its children are also hidden) — without it,
-          the parent column flex would split height between this empty
-          wrapper and the mobile section below. */}
-      <div className="hidden md:flex flex-1 overflow-hidden">
+      {/* Desktop / tablet: split-pane (chat fixed-width left, tabs right).
+          `hidden md:flex` on the wrapper prevents it from claiming flex-1
+          space on mobile. min-h-0 + overflow-hidden contain inner scroll
+          so only the chat message list and the active tab content scroll —
+          the page itself never scrolls. */}
+      <div className="hidden md:flex flex-1 min-h-0 overflow-hidden">
         <aside
           className={cn(
-            'flex border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950',
+            'flex flex-col overflow-hidden border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950',
             // Tablet 768-1280: 320px. Desktop ≥1280: 380px.
             'md:w-[320px] xl:w-[380px] shrink-0',
           )}

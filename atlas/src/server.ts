@@ -157,11 +157,35 @@ async function authenticate(req: IncomingMessage): Promise<AuthPrincipal | null>
   // Fire-and-forget last_seen touch so /atlas/auth/sessions reflects activity.
   touchSessionLastSeen(session.id).catch(() => {})
 
-  // Defensive: legacy sessions (issued before 1.10ao) may have no role cached.
-  // Treat them as 'viewer' until they re-auth — fail closed.
-  const role: Role = (session.role as Role | null) ?? 'viewer'
+  // Pre-1.10ao sessions stored no role on the row (the column didn't exist).
+  // Rather than force every existing session to re-auth, self-heal by looking
+  // up the canonical role from atlas_members by phone. Falls closed to viewer
+  // only if no member row exists at all.
+  let role: Role = (session.role as Role | null) ?? 'viewer'
+  let memberId = session.member_id
+  if (!session.role) {
+    const sb = getSupabaseClient()
+    if (sb) {
+      const { data: m } = await sb
+        .from('atlas_members')
+        .select('id, role, status')
+        .eq('phone', session.phone)
+        .eq('status', 'active')
+        .maybeSingle()
+      if (m) {
+        const member = m as { id: string; role: Role; status: string }
+        role = member.role
+        memberId = member.id
+        // Backfill the session row so the next request hits the fast path.
+        sb.from('atlas_sessions')
+          .update({ role: member.role, member_id: member.id })
+          .eq('id', session.id)
+          .then(() => {})
+      }
+    }
+  }
 
-  return { phone: session.phone, sessionId: session.id, role, memberId: session.member_id }
+  return { phone: session.phone, sessionId: session.id, role, memberId }
 }
 
 // Convenience: return 401 + null when unauthenticated, principal when ok.
