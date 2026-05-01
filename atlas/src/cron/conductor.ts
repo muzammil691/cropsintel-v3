@@ -8,7 +8,7 @@ import { ToolName, builderQueueOrder } from '../lib/tools'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
-import { readFile, writeFile, rename, mkdir, readdir } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, readdir, access } from 'fs/promises'
 import { resolve, dirname } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -22,6 +22,7 @@ const IDLE_QUEUE_HOURS = parseInt(process.env.ATLAS_IDLE_QUEUE_HOURS ?? '2', 10)
 const REPO_ROOT = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
 const RAILWAY_API_TOKEN = process.env.RAILWAY_API_TOKEN
 const RAILWAY_BUILDER_SERVICE_ID = process.env.RAILWAY_BUILDER_SERVICE_ID
+const RAILWAY_ENVIRONMENT_ID = process.env.RAILWAY_ENVIRONMENT_ID
 // Tracks signatures of specs we've already pre-flighted so we only review NEW arrivals.
 const seenSpecs = new Set<string>()
 // Tracks commits we've already designer-audited so we don't re-audit on every heartbeat.
@@ -524,8 +525,46 @@ async function pauseBuilder(reason: string): Promise<void> {
 async function designerAuditOnUiCommits(state: ConductorState, trustMode: TrustMode): Promise<void> {
   if (trustMode === 'passive' || trustMode === 'stopped') return
 
+  // Hydrate the in-memory dedup set from designer_runs so we don't re-audit
+  // commits across container restarts. Without this, every Atlas redeploy
+  // re-audits + re-queues remediation specs for the same SHAs in a loop.
+  if (auditedCommits.size === 0) {
+    try {
+      const sb = getSupabaseClient()
+      if (sb) {
+        const { data } = await sb
+          .from('designer_runs')
+          .select('head_after')
+          .order('created_at', { ascending: false })
+          .limit(200)
+        for (const row of data ?? []) {
+          if (row.head_after) auditedCommits.add(row.head_after)
+        }
+        console.log(`[atlas-conductor] hydrated ${auditedCommits.size} audited commits from designer_runs`)
+      }
+    } catch (err) {
+      console.error('[atlas-conductor] hydrate auditedCommits failed:', err)
+    }
+  }
+
   for (const commit of state.recentUiCommits) {
     if (auditedCommits.has(commit.sha)) continue
+    // Also skip if a remediation spec already exists on disk (queued or in-progress).
+    // Atlas may have audited but not yet recorded to designer_runs (e.g., audit failed
+    // post-write). The spec file is the durable signal.
+    const remediationFile = `phase-1-design-remediation-${commit.sha.slice(0, 8)}.md`
+    const queuedPath = `${REPO_ROOT}/.agent/tasks/queued/${remediationFile}`
+    const inProgressPath = `${REPO_ROOT}/.agent/tasks/in-progress/${remediationFile}`
+    try {
+      await access(queuedPath)
+      auditedCommits.add(commit.sha)
+      continue
+    } catch {}
+    try {
+      await access(inProgressPath)
+      auditedCommits.add(commit.sha)
+      continue
+    } catch {}
     auditedCommits.add(commit.sha)
     try {
       await designerAuditOnUiCommit(commit, trustMode)
@@ -696,14 +735,15 @@ async function selfHealStuckBuilder(state: ConductorState, trustMode: TrustMode)
 
 async function railwayRestartService(serviceId: string): Promise<void> {
   if (!RAILWAY_API_TOKEN) throw new Error('RAILWAY_API_TOKEN not set')
-  const query = `mutation ServiceRestart($serviceId: String!) { serviceInstanceRedeploy(serviceId: $serviceId) }`
+  if (!RAILWAY_ENVIRONMENT_ID) throw new Error('RAILWAY_ENVIRONMENT_ID not set')
+  const query = `mutation ServiceRestart($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }`
   const res = await fetch('https://backboard.railway.app/graphql/v2', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${RAILWAY_API_TOKEN}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query, variables: { serviceId } }),
+    body: JSON.stringify({ query, variables: { serviceId, environmentId: RAILWAY_ENVIRONMENT_ID } }),
   })
   if (!res.ok) {
     throw new Error(`Railway API ${res.status}: ${await res.text()}`)
