@@ -273,7 +273,12 @@ async function getRecentShips(repoRoot: string, sinceMinutes: number): Promise<S
     for (const line of lines) {
       const [sha, ts, ...subjectParts] = line.split('\t')
       const subject = subjectParts.join('\t') ?? ''
-      const isShip = /^feat:.*\(autonomous agent/.test(subject) || /chore\(agent\):.* → done/.test(subject)
+      // A "ship" = a feature commit by the autonomous Builder. Cleanup commits
+      // (chore(agent): → done, fix(*), etc.) don't change source files in a way
+      // that needs Verifier/Designer/memory audits, so skip them — otherwise
+      // the invariant checker fires false-positive WhatsApp pings on every
+      // bookkeeping push.
+      const isShip = /^feat:.*\(autonomous agent/.test(subject)
       if (!isShip) continue
       let changedFiles: string[] = []
       try {
