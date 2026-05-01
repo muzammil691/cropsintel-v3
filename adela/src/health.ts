@@ -73,7 +73,7 @@ function isHealthy(states: ScraperState[]): boolean {
       s.last_status === "success" ||
       s.last_status === "skipped" ||
       s.last_status === "running" ||
-      (s.last_status === "pending" && inBootGrace)
+      (s.last_status === "never_ran" && inBootGrace)
   )
 }
 
