@@ -52,6 +52,15 @@ import {
   sendElevationRequestWhatsApp,
 } from './lib/team'
 import { uploadVoiceNote, VOICE_OUT_MAX_BYTES } from './lib/voice-note-storage'
+import {
+  uploadAttachment,
+  isMimeAllowed,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENTS_PER_MESSAGE_MAX,
+  IMAGES_PER_MESSAGE_MAX,
+  downloadAttachment,
+  type AttachmentRecord,
+} from './lib/storage'
 import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop } from './cron/conductor'
@@ -273,8 +282,9 @@ export async function runChatTurn(params: {
   callerRole?: Role
   onEvent?: (event: string, data: unknown) => void
   assistantMetadata?: Record<string, unknown>
+  attachments?: AttachmentRecord[]
 }): Promise<string> {
-  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata } = params
+  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata, attachments } = params
   const sb = getSupabaseClient()
   const trustMode = getCurrentMode()
 
@@ -293,10 +303,54 @@ export async function runChatTurn(params: {
     }))
   }
 
-  // Ensure the current message is appended if not already persisted
-  const lastMsg = messages[messages.length - 1]
-  if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content !== message) {
-    messages.push({ role: 'user', content: message })
+  // Ensure the current message is appended if not already persisted.
+  // When attachments accompany the message, build a multimodal content array:
+  //   - image attachments → Claude vision blocks (base64-encoded bytes)
+  //   - text/JSON attachments → inlined as code blocks
+  //   - video/PDF/zip → URL reference (Claude can't process but is told they exist)
+  const attached = attachments ?? []
+  if (attached.length > 0) {
+    const blocks: Array<unknown> = []
+    let imagesIncluded = 0
+    let textNotes: string[] = []
+    for (const att of attached) {
+      const mime = (att.mime || '').toLowerCase()
+      if (mime.startsWith('image/') && imagesIncluded < IMAGES_PER_MESSAGE_MAX) {
+        try {
+          const dl = await downloadAttachment(att.storage_path)
+          if (dl) {
+            const b64 = dl.buffer.toString('base64')
+            blocks.push({
+              type: 'image',
+              source: { type: 'base64', media_type: mime, data: b64 },
+            })
+            imagesIncluded++
+          }
+        } catch (err) {
+          textNotes.push(`(failed to attach image ${att.name}: ${err instanceof Error ? err.message : String(err)})`)
+        }
+      } else if (mime.startsWith('text/') || mime === 'application/json') {
+        try {
+          const dl = await downloadAttachment(att.storage_path)
+          if (dl) {
+            const text = dl.buffer.toString('utf-8').slice(0, 16000)
+            textNotes.push(`Attached file ${att.name} (${mime}):\n\n\`\`\`\n${text}\n\`\`\``)
+          }
+        } catch {
+          textNotes.push(`(failed to read text attachment ${att.name})`)
+        }
+      } else {
+        textNotes.push(`Attached: ${att.name} (${mime}, ${att.size} bytes) — link: ${att.signed_url}`)
+      }
+    }
+    const textPart = [message, ...textNotes].filter(Boolean).join('\n\n')
+    blocks.push({ type: 'text', text: textPart })
+    messages.push({ role: 'user', content: blocks as unknown })
+  } else {
+    const lastMsg = messages[messages.length - 1]
+    if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content !== message) {
+      messages.push({ role: 'user', content: message })
+    }
   }
 
   // ─── Intent-detection hint (advisory, no LLM call) ────────────────────────
@@ -446,7 +500,12 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
   if (!principal) return
 
   const body = await readBody(req)
-  let payload: { thread_id: string; channel: string; message: string }
+  let payload: {
+    thread_id: string
+    channel: string
+    message: string
+    attachments?: AttachmentRecord[]
+  }
   try {
     payload = JSON.parse(body)
   } catch {
@@ -454,8 +513,21 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
     return
   }
 
-  if (!payload.thread_id || !payload.message) {
-    json(res, 400, { error: 'thread_id and message are required' })
+  if (!payload.thread_id || (!payload.message && (!payload.attachments || payload.attachments.length === 0))) {
+    json(res, 400, { error: 'thread_id and message (or attachments) are required' })
+    return
+  }
+
+  // Defense-in-depth: server-side cap matches storage helper. Reject more than
+  // ATTACHMENTS_PER_MESSAGE_MAX even though the client also enforces this.
+  const cleanAttachments = Array.isArray(payload.attachments) ? payload.attachments : []
+  if (cleanAttachments.length > ATTACHMENTS_PER_MESSAGE_MAX) {
+    json(res, 400, { error: `too_many_attachments`, max: ATTACHMENTS_PER_MESSAGE_MAX })
+    return
+  }
+  const imageCount = cleanAttachments.filter(a => (a.mime || '').toLowerCase().startsWith('image/')).length
+  if (imageCount > IMAGES_PER_MESSAGE_MAX) {
+    json(res, 400, { error: 'too_many_images', max: IMAGES_PER_MESSAGE_MAX })
     return
   }
 
@@ -466,6 +538,7 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
       channel: payload.channel || 'web',
       role: 'user',
       content: payload.message,
+      metadata: cleanAttachments.length > 0 ? { attachments: cleanAttachments } : {},
     })
   }
 
@@ -491,6 +564,7 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
       overrideToken,
       callerRole: principal.role,
       onEvent: sendEvent,
+      attachments: cleanAttachments,
     })
 
     sendEvent('done', { thread_id: payload.thread_id })
@@ -500,6 +574,168 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
   } catch (err) {
     sendEvent('error', { error: err instanceof Error ? err.message : String(err) })
     res.end()
+  }
+}
+
+// ─── Phase 1.10am: chat attachments + URL preview ───────────────────────────
+//
+// POST /atlas/chat/upload — multipart/form-data with one or more file parts.
+// Each file is size+type validated, uploaded to atlas-chat-attachments, and
+// returned with a 6-hour signed URL. The client then echoes the returned
+// AttachmentRecord(s) back in the next /atlas/chat call's `attachments` field.
+async function handleChatUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const principal = await requireAuth(req, res)
+  if (!principal) return
+
+  const contentType = req.headers['content-type'] ?? ''
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+  if (!contentType.toLowerCase().startsWith('multipart/form-data') || !boundaryMatch) {
+    json(res, 400, { error: 'Content-Type must be multipart/form-data' })
+    return
+  }
+  const boundary = (boundaryMatch[1] ?? boundaryMatch[2] ?? '').trim()
+  if (!boundary) { json(res, 400, { error: 'Missing multipart boundary' }); return }
+
+  // Cap whole body at ATTACHMENTS_PER_MESSAGE_MAX × ATTACHMENT_MAX_BYTES so a
+  // single request can't pin memory on Railway. ~10 × 25MB = 250MB max.
+  const MAX_BODY_BYTES = ATTACHMENTS_PER_MESSAGE_MAX * ATTACHMENT_MAX_BYTES
+  let body: Buffer
+  try {
+    body = await readBodyBuffer(req, MAX_BODY_BYTES)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg === 'payload_too_large') {
+      json(res, 413, { error: 'payload_too_large', max_bytes: MAX_BODY_BYTES })
+      return
+    }
+    json(res, 400, { error: 'failed_to_read_body', detail: msg })
+    return
+  }
+
+  const files = parseMultipart(body, boundary)
+  if (files.length === 0) { json(res, 400, { error: 'no_files' }); return }
+  if (files.length > ATTACHMENTS_PER_MESSAGE_MAX) {
+    json(res, 400, { error: 'too_many_files', max: ATTACHMENTS_PER_MESSAGE_MAX })
+    return
+  }
+
+  // thread_id is optional but recommended — when present we file objects under
+  // the thread directory so cleanup can scope by thread.
+  const threadIdRaw = files.find(f => f.field === 'thread_id')?.data?.toString('utf-8')
+  const threadId = (threadIdRaw && threadIdRaw.trim()) || 'web-default'
+  const messageId = (files.find(f => f.field === 'message_id')?.data?.toString('utf-8')?.trim()) || randomUUID()
+
+  // Validate every file BEFORE uploading any so we don't half-commit a batch.
+  for (const f of files) {
+    if (!f.filename) continue
+    if (f.data.length === 0) {
+      json(res, 400, { error: 'empty_file', filename: f.filename })
+      return
+    }
+    if (f.data.length > ATTACHMENT_MAX_BYTES) {
+      json(res, 413, { error: 'file_too_large', filename: f.filename, max_bytes: ATTACHMENT_MAX_BYTES })
+      return
+    }
+    if (!isMimeAllowed(f.mimeType)) {
+      json(res, 415, { error: 'unsupported_type', filename: f.filename, mime: f.mimeType })
+      return
+    }
+  }
+
+  const records: AttachmentRecord[] = []
+  for (const f of files) {
+    if (!f.filename) continue
+    try {
+      const rec = await uploadAttachment({
+        data: f.data,
+        filename: f.filename,
+        mimeType: f.mimeType,
+        threadId,
+        messageId,
+      })
+      records.push(rec)
+    } catch (err) {
+      json(res, 500, { error: 'upload_failed', detail: err instanceof Error ? err.message : String(err) })
+      return
+    }
+  }
+
+  json(res, 200, { ok: true, attachments: records, message_id: messageId, thread_id: threadId })
+}
+
+// GET /atlas/chat/preview-url?url=<...> — fetch a Slack/GitHub/Linear (or any)
+// URL server-side and return a small structured preview so the client can
+// render an inline card. Defends against SSRF by allow-listing schemes and
+// rejecting private/loopback IP literals at the URL parser level (best-effort
+// — proper SSRF defense would resolve DNS server-side; out of scope here).
+async function handleChatPreviewUrl(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!(await requireAuth(req, res))) return
+  const url = new URL(req.url ?? '', 'http://_')
+  const target = url.searchParams.get('url') ?? ''
+  if (!target) { json(res, 400, { error: 'url required' }); return }
+  let parsed: URL
+  try { parsed = new URL(target) } catch { json(res, 400, { error: 'invalid_url' }); return }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    json(res, 400, { error: 'unsupported_scheme' })
+    return
+  }
+  const host = parsed.hostname.toLowerCase()
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) {
+    json(res, 400, { error: 'forbidden_host' })
+    return
+  }
+
+  try {
+    const upstream = await fetch(parsed.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      // Bound how much HTML we'll parse — 256 KB is plenty for og: tags.
+      signal: AbortSignal.timeout(8000),
+      headers: { 'user-agent': 'Mozilla/5.0 (CropsIntel Atlas Preview)' },
+    })
+    if (!upstream.ok) {
+      json(res, 502, { error: 'upstream_error', status: upstream.status })
+      return
+    }
+    const reader = upstream.body?.getReader()
+    if (!reader) { json(res, 502, { error: 'no_body' }); return }
+    const PREVIEW_MAX = 256 * 1024
+    const chunks: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      if (value) {
+        total += value.length
+        if (total > PREVIEW_MAX) break
+        chunks.push(value)
+      }
+    }
+    try { reader.cancel() } catch { /* ignore */ }
+    const html = Buffer.concat(chunks.map(c => Buffer.from(c))).toString('utf-8')
+
+    const meta = (prop: string): string | null => {
+      const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i')
+      const m = re.exec(html)
+      return m ? m[1] : null
+    }
+    const titleMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html)
+    const ogTitle = meta('og:title') ?? meta('twitter:title')
+    const ogDesc = meta('og:description') ?? meta('description') ?? meta('twitter:description')
+    const ogImage = meta('og:image') ?? meta('twitter:image')
+    const ogSite = meta('og:site_name')
+
+    json(res, 200, {
+      ok: true,
+      url: parsed.toString(),
+      host: parsed.hostname,
+      title: ogTitle ?? (titleMatch ? titleMatch[1].trim() : null),
+      description: ogDesc,
+      image: ogImage,
+      site_name: ogSite,
+    })
+  } catch (err) {
+    json(res, 502, { error: 'fetch_failed', detail: err instanceof Error ? err.message : String(err) })
   }
 }
 
@@ -924,7 +1160,8 @@ async function handleTts(req: IncomingMessage, res: ServerResponse): Promise<voi
 }
 
 async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!(await requireAuth(req, res))) return
+  const principal = await requireAuth(req, res)
+  if (!principal) return
 
   const contentType = req.headers['content-type'] ?? ''
   const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
@@ -982,11 +1219,41 @@ async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<voi
   const audioSeconds = estimateAudioSeconds(audioFile.data.length)
   const costUsd = estimateWhisperCostUsd(audioSeconds)
 
+  // Phase 1.10am: persist user mic audio so the message bubble can offer a
+  // "Play your audio" replay button. Soft-fails — if storage is mis-configured
+  // the STT transcript still returns to the client.
+  let userAudio: { storage_path: string; signed_url: string; mime: string; bytes: number } | null = null
+  try {
+    const messageId = randomUUID()
+    const ext = audioFile.mimeType.includes('mp4') ? 'mp4'
+      : audioFile.mimeType.includes('wav') ? 'wav'
+      : audioFile.mimeType.includes('mpeg') || audioFile.mimeType.includes('mp3') ? 'mp3'
+      : 'webm'
+    const rec = await uploadAttachment({
+      data: audioFile.data,
+      filename: `user-${messageId}.${ext}`,
+      mimeType: audioFile.mimeType,
+      threadId: 'web-default',
+      messageId,
+      subPath: 'audio/user',
+    })
+    userAudio = {
+      storage_path: rec.storage_path,
+      signed_url: rec.signed_url,
+      mime: audioFile.mimeType,
+      bytes: audioFile.data.length,
+    }
+  } catch (err) {
+    // Log + swallow — STT response must still succeed.
+    console.warn('[stt] audio persistence failed:', err instanceof Error ? err.message : String(err))
+  }
+
   json(res, 200, {
     transcript: result.text,
     duration_ms: result.durationMs,
     audio_seconds: audioSeconds,
     cost_usd: costUsd,
+    audio: userAudio,
   })
 
   // Log cost after responding; never block the client on the cost-log write.
@@ -994,6 +1261,7 @@ async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<voi
     bytes: audioFile.data.length,
     mime_type: audioFile.mimeType,
     transcribe_latency_ms: result.durationMs,
+    user_phone: principal.phone,
   })
 }
 
@@ -1028,10 +1296,24 @@ async function authenticateWs(req: IncomingMessage): Promise<{ ok: boolean; prot
 }
 
 interface DownstreamMessage {
-  type: 'open' | 'text' | 'flush' | 'close'
+  type: 'open' | 'text' | 'flush' | 'close' | 'heartbeat-ack' | 'turn-start' | 'thinking-start' | 'thinking-end'
   voiceId?: string
   text?: string
 }
+
+// Phase 1.10am: filler library for live mode. When Atlas is "thinking" for
+// more than 2s, server picks one and streams it via the upstream TTS WS so
+// the user hears continuous audio instead of dead air. Kept short on purpose.
+const LIVE_MODE_FILLERS = [
+  'Just a moment, let me think.',
+  'Hmm, let me work that out.',
+  'One second, processing.',
+  'Okay, give me a beat.',
+  'Right, working on it.',
+] as const
+
+const HEARTBEAT_INTERVAL_MS = 20_000
+const FILLER_DELAY_MS = 2000
 
 function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
   const wss = new WebSocketServer({ noServer: true })
@@ -1065,15 +1347,48 @@ function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
     const pendingText: string[] = []
     let pendingFlush = false
     let closed = false
+    // Phase 1.10am: heartbeat + filler timers
+    let heartbeatTimer: NodeJS.Timeout | null = null
+    let fillerTimer: NodeJS.Timeout | null = null
+    let inThinking = false
+    let fillerSent = false
+    const sessionStart = Date.now()
+    const voiceSessionId = randomUUID()
+
+    const clearHeartbeat = () => {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
+    }
+    const clearFiller = () => {
+      if (fillerTimer) { clearTimeout(fillerTimer); fillerTimer = null }
+      inThinking = false
+      fillerSent = false
+    }
 
     const cleanup = () => {
       if (closed) return
       closed = true
+      clearHeartbeat()
+      clearFiller()
       try { upstream?.close() } catch { /* ignore */ }
       upstream = null
       // Log cost (one row per WS session) — never block on this.
       if (charCount > 0) {
         void recordElevenLabsTtsCost(charCount, voiceId, { transport: 'ws_stream', live_mode: true })
+      }
+      // Persist a row in atlas_voice_sessions so we can audit live-mode usage.
+      const sb = getSupabaseClient()
+      if (sb) {
+        const durationSec = (Date.now() - sessionStart) / 1000
+        void sb.from('atlas_voice_sessions').insert({
+          id: voiceSessionId,
+          thread_id: 'web-default',
+          phone: 'live-mode',
+          started_at: new Date(sessionStart).toISOString(),
+          ended_at: new Date().toISOString(),
+          atlas_speech_seconds: Math.round(durationSec * 100) / 100,
+          end_reason: 'cleanup',
+          metadata: { transport: 'ws_stream', char_count: charCount },
+        })
       }
     }
 
@@ -1181,12 +1496,22 @@ function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
           return
         }
         openUpstream(msg.voiceId ?? VOICE_DEFAULT)
+        // Start heartbeat once upstream is opened. Railway proxies idle out
+        // sockets after ~60s of silence, so we need to send something at least
+        // every 20s during quiet windows.
+        clearHeartbeat()
+        heartbeatTimer = setInterval(() => {
+          if (closed || ws.readyState !== ws.OPEN) return
+          safeSend(JSON.stringify({ type: 'heartbeat', t: Date.now() }))
+        }, HEARTBEAT_INTERVAL_MS)
         return
       }
 
       if (msg.type === 'text') {
         const t = (msg.text ?? '').toString()
         if (!t) return
+        // First text after thinking-start cancels the filler timer.
+        clearFiller()
         charCount += t.length
         pendingText.push(t)
         flushPending()
@@ -1196,6 +1521,38 @@ function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
       if (msg.type === 'flush') {
         pendingFlush = true
         flushPending()
+        // Atlas finished its turn — signal end-of-turn to the client so the UI
+        // state machine can flip out of 'speaking' deterministically.
+        safeSend(JSON.stringify({ type: 'turn-end', reason: 'atlas-finished' }))
+        return
+      }
+
+      if (msg.type === 'thinking-start') {
+        // Client tells us "Atlas is generating, no audio coming yet" — start
+        // the filler countdown. If text arrives before FILLER_DELAY_MS the
+        // filler is cancelled.
+        inThinking = true
+        fillerSent = false
+        clearFiller()
+        fillerTimer = setTimeout(() => {
+          if (!inThinking || fillerSent || closed) return
+          fillerSent = true
+          const filler = LIVE_MODE_FILLERS[Math.floor(Math.random() * LIVE_MODE_FILLERS.length)]
+          charCount += filler.length
+          pendingText.push(filler)
+          pendingFlush = true
+          flushPending()
+        }, FILLER_DELAY_MS)
+        return
+      }
+
+      if (msg.type === 'thinking-end') {
+        clearFiller()
+        return
+      }
+
+      if (msg.type === 'heartbeat-ack') {
+        // Quiet ack — nothing to do beyond keeping the socket alive.
         return
       }
 
@@ -1557,6 +1914,16 @@ export async function startServer(): Promise<void> {
 
     if (url === '/atlas/chat' && method === 'POST') {
       await handleChat(req, res)
+      return
+    }
+
+    if (url === '/atlas/chat/upload' && method === 'POST') {
+      await handleChatUpload(req, res)
+      return
+    }
+
+    if ((url ?? '').split('?')[0] === '/atlas/chat/preview-url' && method === 'GET') {
+      await handleChatPreviewUrl(req, res)
       return
     }
 

@@ -20,6 +20,8 @@ export type LiveModeState =
   | 'thinking'
   | 'speaking'
   | 'interrupting'
+  | 'reconnecting'
+  | 'disconnected'
   | 'error'
 
 export interface LiveModeTranscriptItem {
@@ -38,6 +40,7 @@ export interface UseLiveModeResult {
   budgetBlocked: boolean
   sessionElapsedMs: number
   transcript: LiveModeTranscriptItem[]
+  reconnectAttempt: number   // 0 when stable, 1..3 during reconnect retries
   start: () => Promise<void>
   end: () => void
 }
@@ -82,6 +85,8 @@ export function useLiveMode(opts: UseLiveModeOptions): UseLiveModeResult {
   const [budgetBlocked, setBudgetBlocked] = useState(false)
   const [sessionElapsedMs, setSessionElapsedMs] = useState(0)
   const [transcript, setTranscript] = useState<LiveModeTranscriptItem[]>([])
+  const [reconnectAttempt, setReconnectAttempt] = useState(0)
+  const reconnectTimerRef = useRef<number | null>(null)
 
   // ─── Refs (mutable runtime state — never trigger renders) ─────────────────
   const stateRef = useRef<LiveModeState>('idle')
@@ -326,6 +331,8 @@ export function useLiveMode(opts: UseLiveModeOptions): UseLiveModeResult {
       }
       if (event.kind === 'audio') {
         if (event.base64) {
+          // First audio chunk arriving cancels filler/thinking on the server.
+          try { ws.thinkingEnd() } catch { /* ignore */ }
           void decodeAndQueue(event.base64)
         }
         if (event.isFinal) {
@@ -342,12 +349,30 @@ export function useLiveMode(opts: UseLiveModeOptions): UseLiveModeResult {
         }
         return
       }
+      if (event.kind === 'heartbeat') {
+        // Server keep-alive — atlas-client already replies with heartbeat-ack;
+        // nothing to render but it confirms the socket is alive.
+        return
+      }
+      if (event.kind === 'turn_end') {
+        // Server told us this turn ended — useful for the UI state pill in case
+        // we miss the audio isFinal flag.
+        return
+      }
       if (event.kind === 'closed') {
-        // Upstream WS closed — if we have queued audio still playing, let it finish.
+        // Upstream WS closed mid-turn — let any queued audio finish, then try
+        // to reconnect if the user hasn't ended the session.
         playbackFinalReceivedRef.current = true
+        if (stateRef.current !== 'idle' && stateRef.current !== 'disconnected') {
+          tryReconnect()
+        }
       }
     })
     ttsWsRef.current = ws
+
+    // Tell the server "we're entering thinking" so it can prepare a filler if
+    // text doesn't arrive within FILLER_DELAY_MS.
+    try { ws.thinkingStart() } catch { /* ignore */ }
 
     setStateBoth('speaking')
 
@@ -657,6 +682,11 @@ export function useLiveMode(opts: UseLiveModeOptions): UseLiveModeResult {
       clearTimeout(turnCleanupTimerRef.current)
       turnCleanupTimerRef.current = null
     }
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+    setReconnectAttempt(0)
     if (sessionTickerRef.current !== null) {
       clearInterval(sessionTickerRef.current)
       sessionTickerRef.current = null
@@ -685,11 +715,61 @@ export function useLiveMode(opts: UseLiveModeOptions): UseLiveModeResult {
     setSpeakingLevel(0)
   }, [fadeOutAndStopPlayback, releaseStream, setStateBoth, stopAnalyser, stopRecorder])
 
+  // ─── Reconnect on WS drop ────────────────────────────────────────────────
+  // 3 attempts with 1s / 3s / 9s exponential backoff. While reconnecting we
+  // flip into a 'reconnecting' state pill and reset the recorder so the user
+  // doesn't lose their next utterance silently.
+  const tryReconnect = useCallback(() => {
+    if (reconnectTimerRef.current !== null) return // already retrying
+    setStateBoth('reconnecting')
+    let attempt = reconnectAttempt
+    const schedule = () => {
+      if (stateRef.current === 'idle') return
+      attempt += 1
+      setReconnectAttempt(attempt)
+      if (attempt > 3) {
+        setErrorMessage('Call ended — could not reconnect after 3 attempts.')
+        setStateBoth('disconnected')
+        reconnectTimerRef.current = null
+        return
+      }
+      const backoffMs = attempt === 1 ? 1000 : attempt === 2 ? 3000 : 9000
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null
+        // Defer to beginListening — it will reset recorder + analyser.
+        if (stateRef.current === 'idle' || stateRef.current === 'disconnected') return
+        try {
+          // Drop any stale handle; beginListening will reopen on next turn.
+          ttsWsRef.current = null
+        } catch { /* ignore */ }
+        // Probe network with a noop fetch to /health; if it succeeds we treat
+        // the WS as recoverable and resume listening.
+        const probe = fetch(
+          ((import.meta.env.VITE_ATLAS_URL ?? 'https://courteous-simplicity-production.up.railway.app') + '/health'),
+          { method: 'GET' },
+        ).then(r => r.ok).catch(() => false)
+        void probe.then((ok) => {
+          if (!ok) {
+            schedule()
+            return
+          }
+          // Network looks healthy — clear reconnect counter and resume.
+          setReconnectAttempt(0)
+          if (stateRef.current === 'reconnecting') {
+            void beginListening()
+          }
+        })
+      }, backoffMs)
+    }
+    schedule()
+  }, [reconnectAttempt, setStateBoth])
+
   const start = useCallback(async () => {
     if (stateRef.current !== 'idle') return
     setErrorMessage(null)
     setBudgetBlocked(false)
     setTranscript([])
+    setReconnectAttempt(0)
     sessionStartRef.current = Date.now()
     setSessionElapsedMs(0)
     setStateBoth('connecting')
@@ -740,6 +820,7 @@ export function useLiveMode(opts: UseLiveModeOptions): UseLiveModeResult {
     budgetBlocked,
     sessionElapsedMs,
     transcript,
+    reconnectAttempt,
     start,
     end: endSession,
   }

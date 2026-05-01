@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   streamChat,
   fetchChatHistory,
+  type ChatAttachment,
   type ChatMessage,
   type ToolCallChip,
 } from '@/lib/atlas-client'
@@ -20,11 +21,18 @@ function normaliseRealtimeRow(row: {
   metadata?: Record<string, unknown> | null
   created_at: string
 }): ChatMessage {
+  const meta = (row.metadata ?? {}) as Record<string, unknown>
+  const attachments = Array.isArray(meta.attachments) ? (meta.attachments as ChatAttachment[]) : undefined
+  const audio = (meta.audio && typeof meta.audio === 'object')
+    ? (meta.audio as ChatMessage['audio'])
+    : undefined
   return {
     id: row.id,
     role: row.role === 'atlas' ? 'atlas' : 'user',
     content: row.content,
     created_at: row.created_at,
+    attachments,
+    audio,
   }
 }
 
@@ -32,7 +40,8 @@ export interface UseAtlasChatResult {
   messages: ChatMessage[]
   isStreaming: boolean
   historyLoading: boolean
-  send: (text: string) => void
+  send: (text: string, attachments?: ChatAttachment[]) => void
+  cancel: () => void
 }
 
 export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
@@ -106,15 +115,17 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
   }, [threadId])
 
   const send = useCallback(
-    (text: string) => {
-      if (isStreaming || !text.trim()) return
+    (text: string, attachments?: ChatAttachment[]) => {
+      const hasContent = !!text.trim() || (attachments && attachments.length > 0)
+      if (isStreaming || !hasContent) return
 
-      // Optimistically append the user message
+      // Optimistically append the user message (with attachments for inline render)
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
         role: 'user',
         content: text,
         created_at: new Date().toISOString(),
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
       }
       setMessages((prev) => [...prev, userMsg])
 
@@ -182,12 +193,20 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
           )
           setIsStreaming(false)
         }
-      })
+      }, { attachments })
 
       abortRef.current = cleanup
     },
     [isStreaming, threadId],
   )
+
+  const cancel = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current()
+      abortRef.current = null
+    }
+    setIsStreaming(false)
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -195,5 +214,5 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
     }
   }, [])
 
-  return { messages, isStreaming, historyLoading, send }
+  return { messages, isStreaming, historyLoading, send, cancel }
 }

@@ -202,6 +202,7 @@ export function AtlasCockpit() {
             budgetBlocked={liveMode.budgetBlocked}
             sessionElapsedMs={liveMode.sessionElapsedMs}
             transcript={liveMode.transcript}
+            reconnectAttempt={liveMode.reconnectAttempt}
             onEnd={liveMode.end}
           />
         </ErrorBoundary>

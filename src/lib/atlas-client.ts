@@ -199,6 +199,14 @@ export interface ChatMessage {
   content: string
   tool_calls?: ToolCallChip[]
   created_at: string
+  // Phase 1.10am — attachments uploaded with this message (echoed back from
+  // metadata.attachments for rendering thumbnails / cards in the bubble).
+  attachments?: ChatAttachment[]
+  // Audio metadata for messages that originated from voice (live mode or STT).
+  audio?: {
+    user?: { storage_path: string; signed_url: string; mime: string; bytes: number } | null
+    atlas?: { storage_path: string; signed_url: string; mime: string; bytes: number } | null
+  }
 }
 
 export interface ToolCallChip {
@@ -498,10 +506,14 @@ export type TtsWsEvent =
   | { kind: 'budget_exceeded'; monthToDateUsd: number; gateUsd: number }
   | { kind: 'error'; error: string; detail?: string }
   | { kind: 'closed' }
+  | { kind: 'heartbeat'; t: number }
+  | { kind: 'turn_end'; reason: 'user-finished' | 'atlas-finished' | 'silence-timeout' }
 
 export interface TtsWsHandle {
   sendText: (text: string) => void
   flush: () => void
+  thinkingStart: () => void
+  thinkingEnd: () => void
   close: () => void
   readonly state: 'connecting' | 'open' | 'closed'
 }
@@ -525,6 +537,8 @@ export function openTtsWs(
     return {
       sendText: () => { /* noop */ },
       flush: () => { /* noop */ },
+      thinkingStart: () => { /* noop */ },
+      thinkingEnd: () => { /* noop */ },
       close: () => { /* noop */ },
       get state() { return state },
     }
@@ -580,6 +594,27 @@ export function openTtsWs(
       // Stream ended cleanly — surface but don't treat as error.
       return
     }
+    if (type === 'heartbeat') {
+      // Server-side keep-alive — reply with an ack so a future "client missed
+      // 3 heartbeats" check on the server has actionable signal, then surface
+      // the event to consumers that may want to render a small ping indicator.
+      try {
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: 'heartbeat-ack' }))
+        }
+      } catch { /* ignore */ }
+      onEvent({ kind: 'heartbeat', t: typeof o.t === 'number' ? o.t : Date.now() })
+      return
+    }
+    if (type === 'turn-end') {
+      const reasonRaw = typeof o.reason === 'string' ? o.reason : 'atlas-finished'
+      const reason: 'user-finished' | 'atlas-finished' | 'silence-timeout' =
+        reasonRaw === 'user-finished' || reasonRaw === 'silence-timeout'
+          ? reasonRaw
+          : 'atlas-finished'
+      onEvent({ kind: 'turn_end', reason })
+      return
+    }
 
     // Otherwise expect an ElevenLabs audio frame: { audio, isFinal? }
     const frame = parsed as ElevenLabsAudioFrame
@@ -614,6 +649,22 @@ export function openTtsWs(
         queued.push({ type: 'flush' })
       }
     },
+    thinkingStart: () => {
+      // Tells the server "Atlas's LLM is thinking; if no text arrives soon,
+      // stream a filler so the user doesn't hear silence."
+      if (ws.readyState === ws.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'thinking-start' })) } catch { /* ignore */ }
+      } else {
+        queued.push({ type: 'thinking-start' })
+      }
+    },
+    thinkingEnd: () => {
+      if (ws.readyState === ws.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'thinking-end' })) } catch { /* ignore */ }
+      } else {
+        queued.push({ type: 'thinking-end' })
+      }
+    },
     close: () => {
       try {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'close' }))
@@ -624,18 +675,111 @@ export function openTtsWs(
   }
 }
 
+// Phase 1.10am — attachment record returned by /atlas/chat/upload and echoed
+// back on /atlas/chat as `attachments`. Mirrors AttachmentPreview's
+// AttachmentRecord — kept in this file so server callers don't need to import
+// from a UI module.
+export interface ChatAttachment {
+  id: string
+  name: string
+  size: number
+  mime: string
+  storage_path: string
+  signed_url: string
+  signed_url_expires_at: string
+}
+
+export interface UploadAttachmentsResult {
+  ok: true
+  attachments: ChatAttachment[]
+  thread_id: string
+  message_id: string
+}
+
+export interface UploadAttachmentsError {
+  ok: false
+  status: number
+  error: string
+  filename?: string
+  detail?: string
+}
+
+export async function uploadChatAttachments(
+  files: File[],
+  threadId = 'web-default',
+): Promise<UploadAttachmentsResult | UploadAttachmentsError> {
+  if (files.length === 0) {
+    return { ok: false, status: 400, error: 'no_files' }
+  }
+  const fd = new FormData()
+  fd.append('thread_id', threadId)
+  for (const f of files) fd.append('file', f, f.name)
+  let res: Response
+  try {
+    res = await fetch(`${ATLAS_URL}/atlas/chat/upload`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    })
+  } catch (err) {
+    return { ok: false, status: 0, error: 'network_error', detail: err instanceof Error ? err.message : String(err) }
+  }
+  if (!res.ok) {
+    let parsed: { error?: string; filename?: string; detail?: string; max_bytes?: number; mime?: string } = {}
+    try { parsed = await res.json() as typeof parsed } catch { /* ignore */ }
+    return {
+      ok: false,
+      status: res.status,
+      error: parsed.error ?? `HTTP ${res.status}`,
+      filename: parsed.filename,
+      detail: parsed.detail ?? (parsed.max_bytes ? `max ${parsed.max_bytes} bytes` : parsed.mime),
+    }
+  }
+  const data = await res.json() as UploadAttachmentsResult
+  return data
+}
+
+export interface UrlPreview {
+  ok: true
+  url: string
+  host: string
+  title: string | null
+  description: string | null
+  image: string | null
+  site_name: string | null
+}
+
+export async function fetchUrlPreview(url: string): Promise<UrlPreview | null> {
+  try {
+    const res = await fetch(`${ATLAS_URL}/atlas/chat/preview-url?url=${encodeURIComponent(url)}`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) return null
+    const data = await res.json() as UrlPreview
+    return data
+  } catch {
+    return null
+  }
+}
+
 // SSE chat — returns a cleanup function that aborts the stream.
 export function streamChat(
   threadId: string,
   message: string,
   onEvent: (event: string, data: unknown) => void,
+  options?: { attachments?: ChatAttachment[] },
 ): () => void {
   const controller = new AbortController()
 
   fetch(`${ATLAS_URL}/atlas/chat`, {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thread_id: threadId, channel: 'web', message }),
+    body: JSON.stringify({
+      thread_id: threadId,
+      channel: 'web',
+      message,
+      attachments: options?.attachments ?? [],
+    }),
     signal: controller.signal,
   })
     .then(async (res) => {
