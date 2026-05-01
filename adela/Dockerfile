@@ -22,5 +22,13 @@ RUN npm install --include=dev && \
     npx tsc && \
     npm prune --omit=dev
 
+# Copy non-TS assets (selectors config) next to compiled scrapers so
+# `path.resolve(__dirname, "./selectors.json")` resolves at runtime.
+RUN mkdir -p dist/scrapers && \
+    cp src/scrapers/selectors.json dist/scrapers/selectors.json
+
+# Railway sets $PORT; expose for documentation
+EXPOSE 8080
+
 # Run compiled output
 CMD ["node", "dist/index.js"]

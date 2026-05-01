@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').mkdirSync('dist/scrapers',{recursive:true}); require('fs').copyFileSync('src/scrapers/selectors.json','dist/scrapers/selectors.json')\"",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts"
   },

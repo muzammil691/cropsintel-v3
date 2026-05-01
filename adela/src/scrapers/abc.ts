@@ -291,6 +291,7 @@ export async function runAbcScraper(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err)
     console.error("[abc] Scraper failed:", msg)
     await finishRun(run.id, "failed", { error_message: msg.slice(0, 2000) })
-    // Do NOT rethrow — cron loop must continue
+    // Rethrow so the scheduler's outer retry + scraper_errors dead-letter engage.
+    throw err
   }
 }

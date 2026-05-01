@@ -1,0 +1,39 @@
+{
+  "$comment": "Scraper URL + selector + feed config. Edit here, never hardcode in *.ts. Selectors are intentionally externalised so HTML structure changes only require editing this file, not redeploying TypeScript changes.",
+
+  "abc": {
+    "indexUrl": "https://www.almonds.org/tools-and-resources/crop-reports/position-reports",
+    "baseUrl": "https://www.almonds.org",
+    "pdfLinkSelector": "a[href]",
+    "pdfHrefMatch": "posrpt",
+    "pdfDateRegex": "/(\\d{4})\\.(\\d{2})_PosRpt"
+  },
+
+  "strata": {
+    "$comment": "Strata is paid commercial intelligence. URL, selectors, and feed shape are placeholders until production credentials are provisioned. The scraper reads STRATA_BASE_URL / STRATA_USERNAME / STRATA_PASSWORD from env; if any are missing it logs and skips cleanly without writing to scraper_errors.",
+    "loginPath": "/login",
+    "positionsPath": "/positions/latest.json",
+    "selectors": {
+      "row": "tr.position-row",
+      "variety": "td.variety",
+      "size": "td.size",
+      "long": "td.long-lbs",
+      "short": "td.short-lbs",
+      "open": "td.open-lbs",
+      "committed": "td.committed-lbs"
+    }
+  },
+
+  "news": {
+    "$comment": "List RSS/Atom feed URLs here. Default empty so production deploy must opt-in; production sets feeds via NEWS_FEEDS env var or by editing this file. Feed entries with a pubDate older than `maxAgeDays` are ignored.",
+    "feeds": [],
+    "maxAgeDays": 30,
+    "selectors": {
+      "item": "item, entry",
+      "title": "title",
+      "link": "link",
+      "pubDate": "pubDate, published, updated",
+      "description": "description, summary, content"
+    }
+  }
+}
