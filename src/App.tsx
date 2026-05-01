@@ -30,6 +30,8 @@ const AtlasBrain = lazy(() => import("./pages/AtlasBrain"))
 const AtlasPD = lazy(() => import("./pages/AtlasPD"))
 const AtlasLogin = lazy(() => import("./pages/atlas/AtlasLogin"))
 const AtlasInviteAccept = lazy(() => import("./pages/atlas/AtlasInviteAccept"))
+const AtlasPlan = lazy(() => import("./pages/atlas/AtlasPlan"))
+const AtlasWorkflow = lazy(() => import("./pages/atlas/AtlasWorkflow"))
 const NotFound = lazy(() => import("./pages/NotFound"))
 const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
@@ -130,6 +132,12 @@ export default function App() {
 
           {/* Atlas admin — gated by WhatsApp-OTP session (Phase 1.10aj). */}
           <Route path="/atlas" element={<AtlasAuthGuard><Atlas /></AtlasAuthGuard>} />
+
+          {/* Atlas plan tree — knowledge authoring (Phase 1.10ak) */}
+          <Route path="/atlas/plan" element={<AtlasAuthGuard><AtlasPlan /></AtlasAuthGuard>} />
+
+          {/* Atlas workflow diagram — almond-trade flow (Phase 1.10ak) */}
+          <Route path="/atlas/workflow" element={<AtlasAuthGuard><AtlasWorkflow /></AtlasAuthGuard>} />
 
           {/* Atlas Brain — Multi-Brain debate console (admin/team only; gated inside the page) */}
           <Route path="/atlas-brain" element={<AtlasAuthGuard><AtlasBrain /></AtlasAuthGuard>} />

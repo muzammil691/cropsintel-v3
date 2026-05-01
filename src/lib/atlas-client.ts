@@ -821,3 +821,166 @@ export async function requestElevation(params: {
   )
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Plan + workflow authoring (Phase 1.10ak)
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface PlanNode {
+  id: string
+  level: number
+  title: string
+  body: string
+  children: PlanNode[]
+  source: { line: number; raw: string }
+}
+
+export interface PlanResponse {
+  updatedAt: string
+  sha: string
+  tree: PlanNode
+  flat: PlanNode[]
+}
+
+export async function fetchPlan(): Promise<PlanResponse> {
+  return fetchJson<PlanResponse>(`${ATLAS_URL}/atlas/plan`, { headers: authHeaders() })
+}
+
+export async function uploadPlan(markdown: string, message?: string): Promise<{ ok: true; sha: string; pushed: boolean }> {
+  return fetchJson<{ ok: true; sha: string; pushed: boolean }>(`${ATLAS_URL}/atlas/plan/upload`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markdown, message }),
+  })
+}
+
+export async function amendPlan(instruction: string): Promise<{ ok: true; sha: string; pushed: boolean }> {
+  return fetchJson<{ ok: true; sha: string; pushed: boolean }>(`${ATLAS_URL}/atlas/plan/amend`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruction }),
+  })
+}
+
+export async function reorderPlan(
+  movedId: string,
+  newParentId: string,
+  newIndex: number,
+): Promise<{ ok: true; sha: string }> {
+  return fetchJson<{ ok: true; sha: string }>(`${ATLAS_URL}/atlas/plan/reorder`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ moved_id: movedId, new_parent_id: newParentId, new_index: newIndex }),
+  })
+}
+
+export async function buildFromPlanNode(
+  title: string,
+  nodeBody: string,
+  phaseHint: string,
+): Promise<{ ok: true; filename: string; sha: string; pushed: boolean }> {
+  return fetchJson<{ ok: true; filename: string; sha: string; pushed: boolean }>(
+    `${ATLAS_URL}/atlas/plan/build`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, node_body: nodeBody, phase_hint: phaseHint }),
+    },
+  )
+}
+
+export interface WorkflowGraphNode {
+  id: string
+  type: 'workflow' | 'department' | 'operating_model'
+  title: string
+  description: string
+  meta: Record<string, unknown>
+}
+
+export interface WorkflowGraphEdge {
+  id: string
+  source: string
+  target: string
+  label?: string
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowGraphNode[]
+  edges: WorkflowGraphEdge[]
+}
+
+export async function fetchWorkflowGraph(): Promise<WorkflowGraph> {
+  return fetchJson<WorkflowGraph>(`${ATLAS_URL}/atlas/workflow/graph`, { headers: authHeaders() })
+}
+
+export interface RelatedSpecHit {
+  filename: string
+  status: 'queued' | 'done' | 'failed' | 'in-progress'
+}
+
+export async function fetchRelatedSpecs(query: string): Promise<RelatedSpecHit[]> {
+  const data = await fetchJson<{ hits?: RelatedSpecHit[] }>(
+    `${ATLAS_URL}/atlas/workflow/related-specs?q=${encodeURIComponent(query)}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.hits) ? data!.hits! : []
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Discussion queue (Phase 1.10ak)
+// ──────────────────────────────────────────────────────────────────────────
+
+export type ArtifactKind = 'design_audit' | 'open_fork' | 'pending_spec' | 'plan_node'
+
+export interface DiscussionQueueItem {
+  id: string
+  artifact_kind: ArtifactKind
+  artifact_ref: string
+  context: Record<string, unknown>
+  notes: string | null
+  created_at: string
+  resolved_at: string | null
+  resolution: string | null
+}
+
+export interface MoveToDiscussionPayload {
+  kind: ArtifactKind
+  ref: string
+  context?: Record<string, unknown>
+  notes?: string
+}
+
+export async function moveArtifactsToDiscussion(
+  items: MoveToDiscussionPayload[],
+): Promise<{ ok: true; inserted: number }> {
+  return fetchJson<{ ok: true; inserted: number }>(
+    `${ATLAS_URL}/atlas/artifacts/move-to-discussion`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    },
+  )
+}
+
+export async function fetchDiscussionQueue(): Promise<DiscussionQueueItem[]> {
+  const data = await fetchJson<{ items?: DiscussionQueueItem[] }>(
+    `${ATLAS_URL}/atlas/artifacts/discussion-queue`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.items) ? data!.items! : []
+}
+
+export async function resolveDiscussion(
+  id: string,
+  resolution: 'queued' | 'dismissed' | 'forked',
+): Promise<{ ok: true; id: string }> {
+  return fetchJson<{ ok: true; id: string }>(
+    `${ATLAS_URL}/atlas/artifacts/discussion/${encodeURIComponent(id)}/resolve`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution }),
+    },
+  )
+}
+

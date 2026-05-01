@@ -78,6 +78,18 @@ import {
   estimateWhisperCostUsd,
 } from './lib/whisper'
 import { TrustMode } from './types'
+import {
+  getPlanResponse,
+  writePlanMarkdown,
+  reorderPlanNode,
+  buildWorkflowGraph,
+  moveItemsToDiscussion,
+  listDiscussionQueue,
+  resolveDiscussionItem,
+  findRelatedSpecs,
+  amendPlanWithClaude,
+  queueSpecFromPlanNode,
+} from './lib/plan-server'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -1964,6 +1976,229 @@ export async function startServer(): Promise<void> {
     if (url === '/whatsapp/inbound' && method === 'POST') {
       await handleWhatsAppInbound(req, res)
       return
+    }
+
+    // ─── Plan + workflow authoring (Phase 1.10ak) ────────────────────────────
+
+    if (url === '/atlas/plan' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      try {
+        const data = await getPlanResponse()
+        json(res, 200, data)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/plan/upload' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { markdown?: string; message?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.markdown || typeof payload.markdown !== 'string') {
+        json(res, 400, { error: 'markdown required' })
+        return
+      }
+      try {
+        const result = await writePlanMarkdown(
+          payload.markdown,
+          payload.message ?? 'chore(plan): user-uploaded plan revision',
+          'upload',
+          principal.phone,
+        )
+        json(res, 200, { ok: true, sha: result.sha, pushed: result.pushed })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/plan/amend' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { instruction?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.instruction || typeof payload.instruction !== 'string') {
+        json(res, 400, { error: 'instruction required' })
+        return
+      }
+      try {
+        const { markdown } = await amendPlanWithClaude(payload.instruction, anthropic)
+        if (!markdown || markdown.length < 100) {
+          json(res, 502, { error: 'amend_returned_empty' })
+          return
+        }
+        const result = await writePlanMarkdown(
+          markdown,
+          `chore(plan): amend — ${payload.instruction.slice(0, 60)}`,
+          'amend',
+          principal.phone,
+          payload.instruction,
+        )
+        json(res, 200, { ok: true, sha: result.sha, pushed: result.pushed })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/plan/reorder' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { moved_id?: string; new_parent_id?: string; new_index?: number }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.moved_id || !payload.new_parent_id || typeof payload.new_index !== 'number') {
+        json(res, 400, { error: 'moved_id, new_parent_id, new_index required' })
+        return
+      }
+      try {
+        const result = await reorderPlanNode(
+          payload.moved_id,
+          payload.new_parent_id,
+          payload.new_index,
+          principal.phone,
+        )
+        if (!result.ok) {
+          json(res, 400, { error: result.error ?? 'reorder_failed' })
+          return
+        }
+        json(res, 200, { ok: true, sha: result.sha })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/plan/build' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { title?: string; node_body?: string; phase_hint?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.title) { json(res, 400, { error: 'title required' }); return }
+      try {
+        const r = await queueSpecFromPlanNode(
+          payload.title,
+          payload.node_body ?? '',
+          payload.phase_hint ?? 'plan',
+        )
+        json(res, 200, { ok: true, ...r })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/workflow/graph' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      try {
+        const graph = await buildWorkflowGraph()
+        json(res, 200, graph)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url.split('?')[0] === '/atlas/workflow/related-specs' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      try {
+        const queryStr = url.includes('?') ? url.split('?')[1] : ''
+        const q = new URLSearchParams(queryStr).get('q') ?? ''
+        const hits = await findRelatedSpecs(q)
+        json(res, 200, { hits })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/artifacts/move-to-discussion' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const body = await readBody(req)
+      let payload: { items?: Array<{ kind?: string; ref?: string; context?: Record<string, unknown>; notes?: string }> }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!Array.isArray(payload.items)) {
+        json(res, 400, { error: 'items array required' })
+        return
+      }
+      const validKinds = ['design_audit', 'open_fork', 'pending_spec', 'plan_node']
+      const items = payload.items
+        .filter(it => it && typeof it.kind === 'string' && typeof it.ref === 'string' && validKinds.includes(it.kind))
+        .map(it => ({
+          artifact_kind: it.kind as 'design_audit' | 'open_fork' | 'pending_spec' | 'plan_node',
+          artifact_ref: it.ref!,
+          context: it.context ?? {},
+          notes: it.notes,
+        }))
+      try {
+        const result = await moveItemsToDiscussion(items)
+        json(res, 200, { ok: true, ...result })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/artifacts/discussion-queue' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      try {
+        const items = await listDiscussionQueue()
+        json(res, 200, { items })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    {
+      const resolveMatch = url.match(/^\/atlas\/artifacts\/discussion\/([0-9a-f-]{36})\/resolve$/i)
+      if (resolveMatch && method === 'POST') {
+        if (!(await requireAuth(req, res))) return
+        const id = resolveMatch[1]
+        const body = await readBody(req)
+        let payload: { resolution?: string }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        const validResolutions = ['queued', 'dismissed', 'forked']
+        if (!payload.resolution || !validResolutions.includes(payload.resolution)) {
+          json(res, 400, { error: 'resolution must be queued|dismissed|forked' })
+          return
+        }
+        try {
+          const result = await resolveDiscussionItem(id, payload.resolution as 'queued' | 'dismissed' | 'forked')
+          if (!result.ok) {
+            json(res, 500, { error: 'resolve_failed' })
+            return
+          }
+          json(res, 200, { ok: true, id })
+        } catch (err) {
+          json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
     }
 
     if (!(await requireAuth(req, res))) return
