@@ -289,21 +289,35 @@ export async function verifierRecentRuns(limit = 10): Promise<unknown> {
   if (!sb) throw new Error('Supabase client not configured')
   const { data, error } = await sb
     .from('verifier_runs')
-    .select('*')
-    .order('created_at', { ascending: false })
+    .select('id, task_id, commit_sha, mode, passed, gaps, duration_ms, ran_at')
+    .order('ran_at', { ascending: false })
     .limit(limit)
-  if (error) throw error
+  if (error) throw new Error(`verifier_runs query failed: ${error.message ?? JSON.stringify(error)}`)
   return { runs: data ?? [] }
 }
 
 // ─── Council ────────────────────────────────────────────────────────────────
 
 export async function councilWriteSpec(phase: string, context?: string): Promise<unknown> {
-  const res = await fetch(`${COUNCIL_URL}/write-spec`, {
+  const question = `Draft a task spec for phase ${phase}. Output the spec body as adrMarkdown. ${context ? `\n\nAdditional context:\n${context}` : ''}`
+  const res = await fetch(`${COUNCIL_URL}/council`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${COUNCIL_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phase, context }),
+    headers: {
+      'Authorization': `Bearer ${COUNCIL_TOKEN}`,
+      'Content-Type': 'application/json',
+      'x-invoked-by': 'atlas',
+    },
+    body: JSON.stringify({ question, context: context ? { extra: context } : undefined, depth: 'quick' }),
   })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Council /council ${res.status}: ${body.slice(0, 200)}`)
+  }
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('json')) {
+    const body = await res.text()
+    throw new Error(`Council returned non-JSON (${ct}): ${body.slice(0, 200)}`)
+  }
   return res.json()
 }
 

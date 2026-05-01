@@ -1119,6 +1119,39 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // GET /atlas/conversations/<threadId>?limit=N — chat history for the thread.
+    // Returns the most recent N messages in chronological order so the UI can
+    // re-hydrate the chat after a page refresh.
+    if (method === 'GET' && url.startsWith('/atlas/conversations/')) {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      const parsed = new URL(url, 'http://_')
+      const threadId = decodeURIComponent(parsed.pathname.replace('/atlas/conversations/', ''))
+      if (!threadId) { json(res, 400, { error: 'threadId required' }); return }
+      const limitRaw = parsed.searchParams.get('limit')
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? '50', 10) || 50, 1), 200)
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, []); return }
+      const { data, error } = await sb
+        .from('atlas_conversations')
+        .select('id, role, content, metadata, created_at')
+        .eq('thread_id', threadId)
+        .order('created_at', { ascending: false })
+        .limit(limit)
+      if (error) {
+        json(res, 500, { error: `history query failed: ${error.message ?? JSON.stringify(error)}` })
+        return
+      }
+      const rows = (data ?? []).reverse().map(r => ({
+        id: r.id as string,
+        role: r.role === 'atlas' ? 'assistant' : (r.role as 'user' | 'assistant'),
+        content: r.content as string,
+        metadata: r.metadata as Record<string, unknown> | undefined,
+        created_at: r.created_at as string,
+      }))
+      json(res, 200, rows)
+      return
+    }
+
     if (url === '/atlas/mode' && method === 'POST') {
       if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
       const body = await readBody(req)
