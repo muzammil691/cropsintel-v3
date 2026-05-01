@@ -23,7 +23,7 @@ export interface DispatchResult {
 }
 
 const READ_ONLY_TOOLS = new Set<ToolName>([
-  'memory.search', 'builder.list_queue', 'builder.queue_order', 'verifier.recent_runs', 'status.snapshot',
+  'memory.search', 'builder.list_queue', 'builder.list_done', 'builder.queue_order', 'verifier.recent_runs', 'status.snapshot',
   'designer.review_spec', 'designer.audit_commit',
   // atlas.draft_spec produces markdown only — no filesystem/git side effects.
   'atlas.draft_spec',

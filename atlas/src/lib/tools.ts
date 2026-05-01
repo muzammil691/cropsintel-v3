@@ -106,6 +106,28 @@ export async function builderListQueue(): Promise<{ specs: string[] }> {
   return { specs: files.filter(f => f.endsWith('.md') && f !== '_template.md') }
 }
 
+export async function builderListDone(opts?: {
+  limit?: number
+  filter?: string
+}): Promise<{ specs: string[]; count: number }> {
+  // Refresh repo state first (mirror builderListQueue)
+  try {
+    await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
+    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
+  } catch (err) {
+    console.warn('[atlas-list-done] git refresh failed:', err)
+  }
+  const dir = resolve(REPO_ROOT, '.agent/tasks/done')
+  const files = (await readdir(dir)).filter(f => f.endsWith('.md') && f !== '_template.md')
+  let filtered = files
+  if (opts?.filter) {
+    filtered = files.filter(f => f.includes(opts.filter!))
+  }
+  filtered.sort()
+  const limit = opts?.limit ?? 100
+  return { specs: filtered.slice(0, limit), count: filtered.length }
+}
+
 export async function builderCancelTask(taskId: string): Promise<{ moved_to: string; sha: string; pushed: boolean }> {
   const fromRel = `.agent/tasks/queued/${taskId}.md`
   const toRel = `.agent/tasks/cancelled/${taskId}.md`
@@ -577,6 +599,7 @@ export const TOOLS = {
   'memory.ingest':        { fn: memoryIngest,       description: 'Trigger ingest of a knowledge source. Sources: master-plan, workflow-doc, audits, github-history, adrs, conversations, v2-codebase, v1-codebase, all.' },
   'builder.queue_spec':   { fn: builderQueueSpec,   description: 'Queue a new task spec for Builder by writing a markdown file to .agent/tasks/queued/. filename must start with "phase-" and end ".md".' },
   'builder.list_queue':   { fn: builderListQueue,   description: 'List the current queue of tasks waiting for Builder.' },
+  'builder.list_done':    { fn: builderListDone,    description: 'List task specs that have already shipped (in .agent/tasks/done/). Supports optional substring filter (e.g. filter="phase-1.3" returns only Phase 1.3 specs) and limit (default 100). Use this when the user asks "what shipped", "what\'s done", or asks about a specific phase\'s status — status.snapshot only gives counts, this gives names.' },
   'builder.cancel_task':  { fn: builderCancelTask,  description: 'Cancel a queued task by moving it to cancelled/.' },
   'builder.set_priority': { fn: builderSetPriority, description: 'Set a queued spec\'s priority (1=urgent .. 10=lowest). Mutates frontmatter and commits+pushes so Builder picks the new order on next loop. args=(taskId, priority).' },
   'builder.set_dependencies': { fn: builderSetDependencies, description: 'Set a queued spec\'s depends-on list. Each dep must exist somewhere in .agent/tasks/. Cycles are rejected. Commits+pushes. args=(taskId, dependsOn[]).' },

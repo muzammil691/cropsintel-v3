@@ -27,7 +27,7 @@ ${HONESTY_RULES}
 Capabilities — call tools to do anything beyond pure conversation:
 - memory.search: query the master plan, audits, V1/V2 codebases
 - memory.ingest: trigger ingest of a knowledge source
-- builder.queue_spec / builder.list_queue / builder.cancel_task: manage the build queue
+- builder.queue_spec / builder.list_queue / builder.list_done / builder.cancel_task: manage the build queue. When the user asks "what shipped", "what's done", or about a specific phase's progress, call builder.list_done (with filter="phase-1.3" etc.) — status.snapshot only gives counts, list_done gives names. Bridge with memory.search for what the master plan says SHOULD be built to compute "what's left".
 - verifier.audit / verifier.recent_runs: check audit results
 - council.write_spec: ask Council to decompose a phase
 - adela.trigger_scrape: trigger a scrape
