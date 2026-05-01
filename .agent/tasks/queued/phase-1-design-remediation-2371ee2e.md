@@ -6,29 +6,33 @@
 
 ## Gaps to fix
 
-1. **[high] shadcn-usage** — MigrationBanner uses raw `<button onClick={clearMigrationNotice}>` instead of shadcn Button component for the dismiss action
-   Fix: Replace raw button with `<Button variant="ghost" size="sm" onClick={clearMigrationNotice} aria-label="Dismiss">✕</Button>`
+1. **[high] shadcn-usage** — DecisionLogTab uses raw <button> elements for verdict filters (lines 54-73) instead of shadcn Button. These are interactive UI elements that should follow the component system.
+   Fix: Replace raw button elements with <Button variant="outline" size="sm" className={...}> from shadcn/ui, or create a FilterChip component that wraps Button.
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:54
+
+2. **[high] shadcn-usage** — ProposalsTab uses raw <button> elements for status filter chips (lines 67-87) instead of shadcn Button. These are core interactive elements.
+   Fix: Replace raw button elements with <Button variant="outline" size="sm"> from shadcn/ui to match design system requirement.
+   Where: src/components/atlas-pd/ProposalsTab.tsx:67
+
+3. **[high] states** — Migration banner dismiss button (App.tsx line 41-46) is a raw button with hover state but missing focus-visible ring required by design system.
+   Fix: Add focus-visible:ring-2 focus-visible:ring-emerald-600/50 to the className, or replace with shadcn Button variant="ghost".
    Where: src/App.tsx:41
 
-2. **[high] accessibility** — DecisionLogTab date inputs have `id` and `aria-label` but are not paired with `<Label htmlFor=...>` components; using bare `<label>` instead of shadcn Label
-   Fix: Import and use `<Label htmlFor="decision-from-date">From</Label>` from '@/components/ui/label' instead of bare HTML `<label>`
+4. **[medium] accessibility** — Date inputs in DecisionLogTab (lines 76-81) have id and aria-label but the <label> elements use htmlFor without being proper <Label> components from shadcn/ui.
+   Fix: Import Label from '@/components/ui/label' and replace <label> with <Label htmlFor="decision-from-date"> to ensure proper pairing per design system.
    Where: src/components/atlas-pd/DecisionLogTab.tsx:76
 
-3. **[high] accessibility** — ProposalEditor fields use custom Field component but inputs lack proper shadcn Label pairing visible in the diff
-   Fix: Verify Field component internally uses shadcn `<Label>` with proper `htmlFor` binding, or refactor to explicit `<Label htmlFor="proposal-title">Title</Label>` + Input pattern
-   Where: src/components/atlas-pd/ProposalEditor.tsx:68
-
-4. **[medium] accessibility** — EvidenceTab search input has `id="evidence-search"` but no visible paired `<Label>` component in the diff, only `aria-label`
-   Fix: Add `<Label htmlFor="evidence-search" className="sr-only">Filter evidence</Label>` before the input for screen readers
+5. **[medium] accessibility** — EvidenceTab search input (line 88) has id="evidence-search" and aria-label but no visible paired <Label> component. Design system requires Label/input pairing for all form inputs.
+   Fix: Add <Label htmlFor="evidence-search" className="sr-only">Filter evidence by proposal or description</Label> above the input, importing Label from shadcn/ui.
    Where: src/components/atlas-pd/EvidenceTab.tsx:88
 
-5. **[medium] states** — DecisionLogTab filter buttons have `aria-pressed` and hover states but missing `:active` state for tactile feedback
-   Fix: Add `active:scale-95` or `active:bg-emerald-700` to the active filter button className
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:56
+6. **[medium] accessibility** — ProposalEditor input fields (lines 71-90+) have id and aria-label but use a custom Field component instead of shadcn Label. Unclear if Field wraps Label properly.
+   Fix: Verify Field component uses shadcn <Label> internally, or replace with direct <Label htmlFor=...> imports from '@/components/ui/label'.
+   Where: src/components/atlas-pd/ProposalEditor.tsx:71
 
-6. **[medium] states** — ProposalsTab filter chips missing `:active` state despite having hover and focus-visible
-   Fix: Add `active:scale-95` to the button className on line ~95 in ProposalsTab.tsx
-   Where: src/components/atlas-pd/ProposalsTab.tsx:95
+7. **[medium] states** — DecisionLogTab and ProposalsTab filter buttons have aria-pressed but include focus-visible:outline-none without the required focus-visible:ring-2 replacement. Design system mandates visible focus state.
+   Fix: Ensure focus-visible:ring-2 focus-visible:ring-emerald-600/50 is present in the className alongside outline-none (appears to be present in ProposalsTab line 75 but verify in DecisionLogTab).
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:54
 
 ## Acceptance criteria
 
