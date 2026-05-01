@@ -715,6 +715,57 @@ export type Database = {
         }
         Relationships: []
       }
+      verification_requests: {
+        Row: {
+          id: string
+          user_id: string
+          status: string
+          company_name: string | null
+          company_role: string | null
+          company_website: string | null
+          reason: string
+          primary_models: string[]
+          evidence_urls: string[]
+          reviewed_by: string | null
+          reviewed_at: string | null
+          reviewer_notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          status?: string
+          company_name?: string | null
+          company_role?: string | null
+          company_website?: string | null
+          reason: string
+          primary_models?: string[]
+          evidence_urls?: string[]
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          reviewer_notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          status?: string
+          company_name?: string | null
+          company_role?: string | null
+          company_website?: string | null
+          reason?: string
+          primary_models?: string[]
+          evidence_urls?: string[]
+          reviewed_by?: string | null
+          reviewed_at?: string | null
+          reviewer_notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
