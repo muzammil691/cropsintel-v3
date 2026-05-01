@@ -1,7 +1,12 @@
 import { getSupabaseClient } from '../lib/supabase'
-import { statusSnapshot as computeSnapshot } from '../lib/tools'
+import { statusSnapshot as computeSnapshot, builderQueueOrder } from '../lib/tools'
 import { getBurnRate } from '../lib/cost-gate'
 import { sendWhatsAppReply } from '../lib/twilio'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+
+const execFileP = promisify(execFile)
+const REPO_ROOT = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
 
 const INTERVAL_MS = parseInt(process.env.ATLAS_SNAPSHOT_INTERVAL_MS ?? '300000', 10)
 const MUZAMMIL_WHATSAPP = process.env.MUZAMMIL_WHATSAPP ?? '+971562556592'
@@ -47,6 +52,9 @@ export async function runSnapshot(): Promise<void> {
       .limit(1)
       .maybeSingle()
 
+    // 1.10x: loop health metrics
+    const loopHealth = await computeLoopHealth()
+
     const { data: snapshot } = await sb.from('atlas_snapshots').insert({
       current_phase: deriveCurrentPhase(state),
       queued_specs: state.queuedSpecs,
@@ -58,7 +66,10 @@ export async function runSnapshot(): Promise<void> {
       cost_today_usd: burn.today,
       cost_month_to_date_usd: burn.monthToDate,
       open_forks: openForks ?? [],
-      raw_state: { ...state, burn },
+      raw_state: { ...state, burn, loopHealth },
+      loop_lag_seconds: loopHealth.loopLagSeconds,
+      dependency_violations_count: loopHealth.dependencyViolationsCount,
+      priority_inversions_count: loopHealth.priorityInversionsCount,
     }).select('*').single()
 
     console.log(`[atlas-cron] snapshot written: queued=${state.queuedSpecs}, inFlight=${state.inFlightSpecs}, cost_today=$${burn.today.toFixed(4)}`)
@@ -116,4 +127,66 @@ function canSendPing(): boolean {
     recentPings.shift()
   }
   return recentPings.length < PING_RATE_LIMIT_PER_HOUR
+}
+
+interface LoopHealth {
+  loopLagSeconds: number | null
+  dependencyViolationsCount: number
+  priorityInversionsCount: number
+}
+
+// Loop lag: seconds between the most-recent commit that *added* a spec to
+// .agent/tasks/queued/ and the most-recent in-progress pickup. Proxy for
+// "how long is Builder behind?". Null when we can't compute (no queue, no
+// recent queue add commits).
+async function computeLoopHealth(): Promise<LoopHealth> {
+  let queueOrder: Awaited<ReturnType<typeof builderQueueOrder>>['order'] = []
+  try {
+    const r = await builderQueueOrder()
+    queueOrder = r.order
+  } catch (err) {
+    console.warn('[atlas-cron] queue_order for loop health failed:', err)
+  }
+  const dependencyViolationsCount = queueOrder.filter(s => s.blocked).length
+  // Priority inversion = an unblocked spec with priority strictly lower (more
+  // urgent) than the head spec. Same metric the conductor acts on.
+  const unblocked = queueOrder.filter(s => !s.blocked)
+  let priorityInversionsCount = 0
+  if (unblocked.length >= 2) {
+    const headPri = unblocked[0].priority
+    priorityInversionsCount = unblocked.slice(1).filter(s => s.priority < headPri).length
+  }
+
+  let loopLagSeconds: number | null = null
+  try {
+    // Most recent commit that touched .agent/tasks/queued/* (should be when a spec arrived).
+    const queueCommit = await execFileP(
+      'git',
+      ['log', '-1', '--pretty=format:%ct', '--', '.agent/tasks/queued/'],
+      { cwd: REPO_ROOT },
+    )
+    const queueAddedAt = parseInt(queueCommit.stdout.trim(), 10)
+    // Most recent commit that touched .agent/tasks/in-progress/* (Builder pickup).
+    const pickupCommit = await execFileP(
+      'git',
+      ['log', '-1', '--pretty=format:%ct', '--', '.agent/tasks/in-progress/'],
+      { cwd: REPO_ROOT },
+    )
+    const pickupAt = parseInt(pickupCommit.stdout.trim(), 10)
+    if (!isNaN(queueAddedAt)) {
+      // If a pickup happened AFTER the latest queue add, lag is small.
+      // If queue add is more recent and queue isn't empty → lag = now - queueAdd.
+      if (queueOrder.length === 0) {
+        loopLagSeconds = 0
+      } else if (!isNaN(pickupAt) && pickupAt >= queueAddedAt) {
+        loopLagSeconds = 0
+      } else {
+        loopLagSeconds = Math.max(0, Math.floor(Date.now() / 1000) - queueAddedAt)
+      }
+    }
+  } catch (err) {
+    console.warn('[atlas-cron] loop lag git log failed:', err)
+  }
+
+  return { loopLagSeconds, dependencyViolationsCount, priorityInversionsCount }
 }

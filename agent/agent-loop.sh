@@ -114,11 +114,78 @@ bootstrap() {
 }
 
 # -----------------------------------------------------------------------------
-# 1. Pick next task
+# 1. Pick next task — frontmatter-aware (priority + depends-on)
 # -----------------------------------------------------------------------------
+# Spec frontmatter (between leading --- markers) MAY declare:
+#   priority: 1     # 1=urgent, 5=normal (default), 10=lowest
+#   depends-on:
+#     - phase-X-foo
+# Algorithm:
+#   1. Read all queued specs' frontmatter.
+#   2. Filter out specs whose `depends-on` ids are NOT all present in done/.
+#   3. Sort by (priority ASC, filename ASC). Lower priority number ships first.
+#   4. Return head.
+# When no spec declares frontmatter, behavior is identical to alphabetical sort
+# (priority defaults to 5 for every spec) — preserves the 1.10n-w shipping order.
 pick_next_task() {
   cd "$REPO_DIR"
-  ls .agent/tasks/queued/*.md 2>/dev/null | grep -v ".gitkeep" | sort | head -1
+  local done_ids
+  done_ids=$(ls .agent/tasks/done/ 2>/dev/null | sed 's|\.md$||')
+
+  local candidates=""
+  for spec in .agent/tasks/queued/*.md; do
+    [ -e "$spec" ] || continue
+    local id
+    id=$(basename "$spec" .md)
+    [ "$id" = "_template" ] && continue
+
+    # Extract frontmatter block (between leading --- fences). Empty if absent.
+    local fm
+    fm=$(awk 'NR==1 && $0!="---" {exit} /^---$/{f++; next} f==1{print} f==2{exit}' "$spec")
+
+    # priority: scalar; default 5
+    local priority=5
+    if [ -n "$fm" ]; then
+      local p
+      p=$(echo "$fm" | awk -F: '/^priority:[[:space:]]*[0-9]+/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
+      if [ -n "$p" ]; then
+        priority="$p"
+      fi
+    fi
+
+    # depends-on: list of bullets under "depends-on:" key
+    local blocked=0
+    if [ -n "$fm" ]; then
+      local deps
+      deps=$(echo "$fm" | awk '
+        /^depends-on:[[:space:]]*$/ {in_list=1; next}
+        in_list==1 && /^[[:space:]]+-[[:space:]]+/ { sub(/^[[:space:]]+-[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print; next }
+        in_list==1 && /^[^[:space:]]/ {in_list=0}
+      ')
+      if [ -n "$deps" ]; then
+        local dep
+        while IFS= read -r dep; do
+          [ -z "$dep" ] && continue
+          # Strip optional surrounding quotes
+          dep=$(echo "$dep" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+          if ! echo "$done_ids" | grep -qx "$dep"; then
+            blocked=1
+            break
+          fi
+        done <<< "$deps"
+      fi
+    fi
+    [ "$blocked" = "1" ] && continue
+
+    # Sortable line: zero-padded priority, then filename
+    candidates="${candidates}$(printf '%02d' "$priority") ${spec}"$'\n'
+  done
+
+  if [ -z "$candidates" ]; then
+    return 0
+  fi
+
+  printf '%s' "$candidates" | sort -k1,1n -k2,2 | head -1 | awk '{print $2}'
 }
 
 # -----------------------------------------------------------------------------
@@ -222,26 +289,17 @@ EOF
 # -----------------------------------------------------------------------------
 # 2a-bis. Designer gate — UI tasks only, runs after Verifier passes
 # -----------------------------------------------------------------------------
-is_ui_task() {
-  local task_name="$1"
-  # Filename keywords
-  if echo "$task_name" | grep -qiE '(dashboard|page|component|ui|layout|form|modal|widget)'; then
-    return 0
+is_ui_diff() {
+  # Diff-based UI detection: if the commit range touches any frontend file under
+  # src/pages/, src/components/, src/styles/, or src/index.css, Designer audits.
+  # No more keyword guesswork from filenames or spec text.
+  local head_before="$1"
+  local head_after="$2"
+  if [ -z "$head_before" ] || [ -z "$head_after" ]; then
+    return 1
   fi
-  # Spec content (if file still around in done/ or in-progress/)
-  local spec_path=""
-  for d in .agent/tasks/done .agent/tasks/in-progress .agent/tasks/queued; do
-    if [ -f "$d/$task_name.md" ]; then
-      spec_path="$d/$task_name.md"
-      break
-    fi
-  done
-  if [ -n "$spec_path" ]; then
-    if grep -qiE '(\.tsx|tailwind|shadcn|<Button|<Card|<Input|<Dialog)' "$spec_path"; then
-      return 0
-    fi
-  fi
-  return 1
+  git diff --name-only "$head_before" "$head_after" 2>/dev/null \
+    | grep -qE '^src/(pages|components|styles)/|^src/index\.css$'
 }
 
 run_designer_gate() {
@@ -254,8 +312,8 @@ run_designer_gate() {
     return 0
   fi
 
-  if ! is_ui_task "$task_id"; then
-    echo "$LOOP_TAG designer gate skipped — non-UI task"
+  if ! is_ui_diff "$head_before" "$head_after"; then
+    echo "$LOOP_TAG designer gate skipped — diff did not touch src/pages, src/components, src/styles, or src/index.css"
     return 0
   fi
 

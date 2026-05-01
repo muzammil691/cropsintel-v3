@@ -4,7 +4,7 @@ import { sendWhatsAppReply } from '../lib/twilio'
 import { simple, debate, DebateResult } from '../lib/multi-brain'
 import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
-import { ToolName } from '../lib/tools'
+import { ToolName, builderQueueOrder } from '../lib/tools'
 import { TrustMode } from '../types'
 import { readFile, writeFile, rename, mkdir, readdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
@@ -74,13 +74,16 @@ async function runHeartbeat(): Promise<void> {
       await executeAction(action, trustMode)
     }
 
-    // The five autonomous behaviors. Each is internally trust-mode aware and
+    // The autonomous behaviors. Each is internally trust-mode aware and
     // budget-gated. Run sequentially so one bad cluster doesn't trigger ten.
     await preFlightNewSpecs(state, trustMode)
     await detectFailureClusters(state, trustMode)
     await designerAuditOnUiCommits(state, trustMode)
     await selfHealStuckBuilder(state, trustMode)
     await suggestNextPhase(state, trustMode)
+    // 1.10x: queue intelligence + post-ship memory ingest.
+    await reorderQueueIfPriorityInversion(trustMode)
+    await memoryIngestAfterShips(trustMode)
   } catch (err) {
     console.error('[atlas-conductor] heartbeat failed:', err)
   }
@@ -817,4 +820,144 @@ function truncate(s: string, n: number): string {
 async function snapshotOnly(): Promise<void> {
   const { runSnapshot } = await import('./snapshot.js')
   await runSnapshot()
+}
+
+// ─── 6. Queue intelligence — priority inversion detection ───────────────────
+//
+// "Inversion" = a queued spec exists with priority lower (more urgent) than the
+// current head spec, but it's NOT the head because it arrived later
+// alphabetically. Atlas should bump it to the head.
+//
+// Debounce: don't act on the same inversion (same set of spec ids) more than
+// once per 30 min, to prevent fight-with-self loops.
+
+interface InversionRecord { key: string; ts: number }
+const recentInversions: InversionRecord[] = []
+const INVERSION_DEBOUNCE_MS = 30 * 60 * 1000
+
+async function reorderQueueIfPriorityInversion(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto' && trustMode !== 'confirm') return
+  let order: Awaited<ReturnType<typeof builderQueueOrder>>['order']
+  try {
+    const result = await builderQueueOrder()
+    order = result.order
+  } catch (err) {
+    console.warn('[atlas-conductor] queue_order failed:', err)
+    return
+  }
+  // Only inspect non-blocked specs for inversions. The "head" is the first non-blocked spec.
+  const candidates = order.filter(s => !s.blocked)
+  if (candidates.length < 2) return
+  const head = candidates[0]
+  // Find a deeper spec with strictly lower priority than the head — that's an inversion.
+  const inverted = candidates.slice(1).find(s => s.priority < head.priority)
+  if (!inverted) return
+
+  const key = `${inverted.id}->${head.id}`
+  pruneOldInversions()
+  if (recentInversions.some(r => r.key === key)) {
+    console.log(`[atlas-conductor] inversion ${key} already debounced — skipping`)
+    return
+  }
+  recentInversions.push({ key, ts: Date.now() })
+
+  await logDecision({
+    fork_question: `Priority inversion: ${inverted.id} (p${inverted.priority}) ranked behind ${head.id} (p${head.priority})`,
+    options_considered: { proposed: 'bump-to-head', head: head.id, victim: inverted.id },
+    chosen_option: trustMode === 'auto' ? 'auto-bumped' : 'pinged-user',
+    rationale: `${inverted.id} has lower priority number than current head; would ship sooner if reordered`,
+  })
+
+  if (trustMode === 'confirm') {
+    await sendWhatsAppReply(
+      MUZAMMIL_WHATSAPP,
+      `🔀 Queue inversion: ${inverted.id} (p${inverted.priority}) is queued behind ${head.id} (p${head.priority}). Reply BUMP ${inverted.id} to promote.`,
+    )
+    return
+  }
+
+  // auto: bump the inverted spec one notch ahead of the head's priority.
+  // Never auto-promote to priority=1 — reserved for explicit user direction
+  // unless the spec was already priority 1 (in which case the inversion is
+  // about an even-lower-priority head, which shouldn't happen but we
+  // tolerate by leaving priority alone).
+  const newPriority = Math.max(1, Math.min(inverted.priority, head.priority - 1))
+  if (newPriority === inverted.priority) {
+    console.log(`[atlas-conductor] inversion ${key} would require no priority change — skipping`)
+    return
+  }
+  try {
+    await dispatch({
+      tool: 'builder.set_priority' as ToolName,
+      arguments: { taskId: inverted.id, priority: newPriority },
+      initiatedBy: 'cron',
+      trustMode: 'auto',
+    })
+    await sendWhatsAppReply(
+      MUZAMMIL_WHATSAPP,
+      `🔀 Queue reorder: bumped ${inverted.id} to priority=${newPriority} (was p${inverted.priority}, sat behind ${head.id} p${head.priority}).`,
+    )
+  } catch (err) {
+    console.error('[atlas-conductor] reorder dispatch failed:', err)
+  }
+}
+
+function pruneOldInversions(): void {
+  const cutoff = Date.now() - INVERSION_DEBOUNCE_MS
+  while (recentInversions.length > 0 && recentInversions[0].ts < cutoff) {
+    recentInversions.shift()
+  }
+}
+
+// ─── 7. Memory ingest after every ship ──────────────────────────────────────
+// After Builder ships a spec, the relevant commits land on origin/main. Memory
+// only sees them on its next manual ingest call. We bridge the gap by firing
+// memory.ingest('github-history') whenever recent commits include a
+// "X → done" or "feat: phase-* (autonomous agent...)" message.
+// Memory dedupes by commit SHA, so re-firing within the heartbeat window is safe.
+
+const ingestedCommitWindows = new Set<string>()
+
+async function memoryIngestAfterShips(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto') return // confirm/chat: stay passive on memory
+  // Look at commits in roughly the last heartbeat window.
+  let stdout: string
+  try {
+    const result = await execFileP(
+      'git',
+      ['log', '--since=6 minutes ago', '--pretty=format:%H%x09%s'],
+      { cwd: REPO_ROOT },
+    )
+    stdout = result.stdout
+  } catch (err) {
+    console.warn('[atlas-conductor] git log for ship-detect failed:', err)
+    return
+  }
+  const lines = stdout.split('\n').filter(Boolean)
+  if (lines.length === 0) return
+  const shipCommits = lines.filter(l => {
+    const subj = l.split('\t')[1] ?? ''
+    return /chore\(agent\):.* → done/.test(subj) || /^feat:.*\(autonomous agent/.test(subj)
+  })
+  if (shipCommits.length === 0) return
+  // Dedupe per heartbeat: a single window (set of SHAs) only triggers one ingest call.
+  const windowKey = shipCommits.map(l => l.split('\t')[0]).sort().join(',')
+  if (ingestedCommitWindows.has(windowKey)) return
+  ingestedCommitWindows.add(windowKey)
+  // Cap memory of windows to last 50 to prevent unbounded growth.
+  if (ingestedCommitWindows.size > 50) {
+    const first = ingestedCommitWindows.values().next().value
+    if (first !== undefined) ingestedCommitWindows.delete(first)
+  }
+  try {
+    await dispatch({
+      tool: 'memory.ingest' as ToolName,
+      arguments: { source: 'github-history' },
+      initiatedBy: 'cron',
+      trustMode: 'auto',
+    })
+    console.log(`[atlas-conductor] memory.ingest fired after ${shipCommits.length} ship commit(s)`)
+  } catch (err) {
+    console.warn('[atlas-conductor] memory.ingest after-ship dispatch failed:', err)
+  }
 }

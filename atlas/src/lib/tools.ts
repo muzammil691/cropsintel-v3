@@ -1,11 +1,12 @@
 import { getSupabaseClient } from './supabase'
-import { writeFile, readdir, rename } from 'fs/promises'
+import { writeFile, readFile, readdir, rename } from 'fs/promises'
 import { resolve } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { draftSpec, type DraftResult } from './spec-draft'
 import { getCurrentMode } from './trust-mode'
 import { checkInvariants } from './invariants'
+import { parseSpec, setFrontmatterField } from './frontmatter'
 
 const execFileP = promisify(execFile)
 
@@ -113,6 +114,132 @@ export async function builderCancelTask(taskId: string): Promise<{ moved_to: str
   await rename(fromPath, toPath)
   const result = await gitCommitAndPush(`atlas: cancel ${taskId}`, [fromRel, toRel])
   return { moved_to: toPath, sha: result.sha, pushed: result.pushed }
+}
+
+// Atlas-driven queue management. These mutate frontmatter on a queued spec
+// (priority + depends-on) and commit+push so Builder picks them up next loop.
+export async function builderSetPriority(taskId: string, priority: number): Promise<{ updated: boolean; sha: string; pushed: boolean }> {
+  if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 1 || priority > 10) {
+    throw new Error('builder.set_priority: priority must be an integer in [1..10]')
+  }
+  const relPath = `.agent/tasks/queued/${taskId}.md`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  let content: string
+  try {
+    content = await readFile(fullPath, 'utf-8')
+  } catch {
+    throw new Error(`builder.set_priority: spec not found in queued/: ${taskId}.md (must not be in-progress/done/cancelled)`)
+  }
+  const next = setFrontmatterField(content, 'priority', priority)
+  if (next === content) {
+    return { updated: false, sha: 'no-changes', pushed: false }
+  }
+  await writeFile(fullPath, next, 'utf-8')
+  const result = await gitCommitAndPush(`atlas: set priority=${priority} on ${taskId}`, [relPath])
+  return { updated: true, sha: result.sha, pushed: result.pushed }
+}
+
+export async function builderSetDependencies(taskId: string, dependsOn: string[]): Promise<{ updated: boolean; sha: string; pushed: boolean }> {
+  if (!Array.isArray(dependsOn)) {
+    throw new Error('builder.set_dependencies: dependsOn must be an array of task ids')
+  }
+  // Validate each dep exists somewhere — queued / in-progress / done / failed / cancelled
+  const buckets = ['queued', 'in-progress', 'done', 'failed', 'cancelled']
+  const known = new Set<string>()
+  for (const b of buckets) {
+    try {
+      const files = await readdir(resolve(REPO_ROOT, `.agent/tasks/${b}`))
+      for (const f of files) {
+        if (f.endsWith('.md')) known.add(f.replace(/\.md$/, ''))
+      }
+    } catch { /* dir may not exist */ }
+  }
+  const missing = dependsOn.filter(id => !known.has(id))
+  if (missing.length > 0) {
+    throw new Error(`builder.set_dependencies: unknown task ids: ${missing.join(', ')}`)
+  }
+  // Cycle detection: A depends on B, but B already lists A in its depends-on chain.
+  if (await wouldCreateCycle(taskId, dependsOn)) {
+    throw new Error(`builder.set_dependencies: would create a dependency cycle for ${taskId}`)
+  }
+  const relPath = `.agent/tasks/queued/${taskId}.md`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  let content: string
+  try {
+    content = await readFile(fullPath, 'utf-8')
+  } catch {
+    throw new Error(`builder.set_dependencies: spec not found in queued/: ${taskId}.md`)
+  }
+  const next = setFrontmatterField(content, 'dependsOn', dependsOn)
+  if (next === content) {
+    return { updated: false, sha: 'no-changes', pushed: false }
+  }
+  await writeFile(fullPath, next, 'utf-8')
+  const result = await gitCommitAndPush(`atlas: set depends-on=[${dependsOn.join(',')}] on ${taskId}`, [relPath])
+  return { updated: true, sha: result.sha, pushed: result.pushed }
+}
+
+async function wouldCreateCycle(taskId: string, newDeps: string[]): Promise<boolean> {
+  // Walk dependency graph from each new dep; if we ever land back on taskId, cycle.
+  const queuedDir = resolve(REPO_ROOT, '.agent/tasks/queued')
+  const visited = new Set<string>()
+  const stack = [...newDeps]
+  while (stack.length > 0) {
+    const cur = stack.pop()!
+    if (cur === taskId) return true
+    if (visited.has(cur)) continue
+    visited.add(cur)
+    try {
+      const content = await readFile(resolve(queuedDir, `${cur}.md`), 'utf-8')
+      const parsed = parseSpec(content)
+      for (const d of parsed.frontmatter.dependsOn ?? []) {
+        stack.push(d)
+      }
+    } catch { /* not in queued — terminal node */ }
+  }
+  return false
+}
+
+export async function builderQueueOrder(): Promise<{ order: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[] }> }> {
+  // Refresh local view of queued/ + done/ first so order reflects HEAD.
+  try {
+    await execFileP('git', ['fetch', 'origin', 'main'], { cwd: REPO_ROOT })
+    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: REPO_ROOT })
+  } catch (err) {
+    console.warn('[atlas-queue-order] git refresh failed:', err)
+  }
+  const queuedDir = resolve(REPO_ROOT, '.agent/tasks/queued')
+  const doneDir = resolve(REPO_ROOT, '.agent/tasks/done')
+  const queuedFiles = (await readdir(queuedDir).catch(() => [] as string[]))
+    .filter(f => f.endsWith('.md') && f !== '_template.md')
+  const doneIds = new Set(
+    (await readdir(doneDir).catch(() => [] as string[]))
+      .filter(f => f.endsWith('.md'))
+      .map(f => f.replace(/\.md$/, '')),
+  )
+  const rows: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[]; filename: string }> = []
+  for (const f of queuedFiles) {
+    const id = f.replace(/\.md$/, '')
+    let priority = 5
+    let dependsOn: string[] = []
+    try {
+      const content = await readFile(resolve(queuedDir, f), 'utf-8')
+      const parsed = parseSpec(content)
+      if (typeof parsed.frontmatter.priority === 'number') priority = parsed.frontmatter.priority
+      dependsOn = parsed.frontmatter.dependsOn ?? []
+    } catch { /* unreadable — treat as default */ }
+    const blockedBy = dependsOn.filter(d => !doneIds.has(d))
+    rows.push({ id, priority, depends_on: dependsOn, blocked: blockedBy.length > 0, blocked_by: blockedBy, filename: f })
+  }
+  // Same sort as Builder: priority asc, filename asc. Blocked specs sort to the end so the head is "what Builder will pick next".
+  rows.sort((a, b) => {
+    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1
+    if (a.priority !== b.priority) return a.priority - b.priority
+    return a.filename.localeCompare(b.filename)
+  })
+  return {
+    order: rows.map(r => ({ id: r.id, priority: r.priority, depends_on: r.depends_on, blocked: r.blocked, blocked_by: r.blocked_by })),
+  }
 }
 
 // ─── Verifier ───────────────────────────────────────────────────────────────
@@ -451,6 +578,9 @@ export const TOOLS = {
   'builder.queue_spec':   { fn: builderQueueSpec,   description: 'Queue a new task spec for Builder by writing a markdown file to .agent/tasks/queued/. filename must start with "phase-" and end ".md".' },
   'builder.list_queue':   { fn: builderListQueue,   description: 'List the current queue of tasks waiting for Builder.' },
   'builder.cancel_task':  { fn: builderCancelTask,  description: 'Cancel a queued task by moving it to cancelled/.' },
+  'builder.set_priority': { fn: builderSetPriority, description: 'Set a queued spec\'s priority (1=urgent .. 10=lowest). Mutates frontmatter and commits+pushes so Builder picks the new order on next loop. args=(taskId, priority).' },
+  'builder.set_dependencies': { fn: builderSetDependencies, description: 'Set a queued spec\'s depends-on list. Each dep must exist somewhere in .agent/tasks/. Cycles are rejected. Commits+pushes. args=(taskId, dependsOn[]).' },
+  'builder.queue_order':  { fn: builderQueueOrder,  description: 'Compute the current queue pickup order Builder will use (priority + dependency aware). Read-only. Returns array of {id, priority, depends_on, blocked, blocked_by}.' },
   'verifier.audit':       { fn: verifierAudit,      description: 'Trigger Verifier to audit a task by ID and HEAD range. Returns verdict + gaps.' },
   'verifier.recent_runs': { fn: verifierRecentRuns, description: 'List recent verifier audit runs.' },
   'council.write_spec':   { fn: councilWriteSpec,   description: 'Ask Council to decompose a phase into a task spec.' },
