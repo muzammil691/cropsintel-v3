@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { MessageCircle, Layers, Activity, Sparkles, X } from 'lucide-react'
+import { AtlasTopNav } from './AtlasTopNav'
 import { TrustModeBadge } from './TrustModeBadge'
 import { VoiceToggle } from './VoiceToggle'
 import { VoicePicker } from './VoicePicker'
@@ -55,6 +56,8 @@ export function AtlasShell() {
       <div className="px-4 md:px-6 pt-3 empty:hidden">
         <PwaInstallPrompt />
       </div>
+
+      <AtlasTopNav />
 
       <header className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur sticky top-0 z-30">
         <div className="px-4 md:px-6 py-3 flex items-center justify-between gap-3 flex-wrap">

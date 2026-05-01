@@ -16,6 +16,7 @@ import { drAtlas } from '@/lib/drAtlas'
 import { BrainNodeList } from '@/components/atlas-brain/BrainNodeList'
 import { BrainNodeDetail } from '@/components/atlas-brain/BrainNodeDetail'
 import { CostFooter } from '@/components/atlas-brain/CostFooter'
+import { AtlasTopNav } from '@/components/atlas/AtlasTopNav'
 import { cn } from '@/lib/utils'
 
 type MobileTab = 'list' | 'detail'
@@ -91,6 +92,7 @@ export default function AtlasBrain() {
     <>
       <Helmet><title>Atlas Brain — CropsIntel</title></Helmet>
       <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        <AtlasTopNav />
         <header className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-3">
           <Brain className="size-5 text-emerald-600" aria-hidden />
           <div className="min-w-0">

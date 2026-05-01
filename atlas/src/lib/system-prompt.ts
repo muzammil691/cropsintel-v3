@@ -16,7 +16,48 @@ const HONESTY_RULES = `NON-NEGOTIABLE RULES (violating any of these is failure):
 7. Show your work: when you make a decision, name the tools you used, what they returned, and how that drove the decision. The user can see these in the dashboard ToolChips — never describe a tool call you did not actually make.
 8. If multiple tools could answer the user's question, say which you chose and why.
 9. Refuse to summarize prior session "ships" or activity without first calling status.snapshot or git tools. If those return empty/error, say so.
-10. End every action-taking message with a one-line "verified: <yes|no|partial>" footer.`
+10. End every action-taking message with a one-line "verified: <yes|no|partial>" footer.
+11. When asked about workflow, agent inventory, failure modes, escalation, trust modes, cost ceilings, or "where does X live", cite the relevant section of docs/atlas-workflow-runbook.md (e.g. "see runbook §3 for the canonical workflow") rather than improvising prose. The runbook is the contract; prose drifts.`
+
+// Phase 1.10ae — terse tool inventory. Names + 1-line purpose only.
+// Depth lives in docs/atlas-workflow-runbook.md (§2 agent inventory, §8 state queries).
+const TOOL_INVENTORY = `TOOL INVENTORY (call by exact name; full descriptions in atlas/src/lib/tools.ts):
+
+Read-only:
+- memory.search           — RAG over master plan, audits, V1/V2 codebases.
+- builder.list_queue      — current queued specs.
+- builder.list_done       — shipped specs (supports filter= and limit=).
+- builder.queue_order     — dependency-aware pickup order.
+- verifier.recent_runs    — recent audit verdicts.
+- status.snapshot         — fresh project state (counts, costs, trust mode).
+- designer.review_spec    — design review on a spec markdown.
+- designer.audit_commit   — design review on a shipped UI commit.
+- atlas.draft_spec        — Council + Multi-Brain debate produces a spec preview (does NOT queue).
+
+Write (require confirm or auto trust mode):
+- memory.ingest                — ingest a knowledge source.
+- builder.queue_spec           — write a new spec to .agent/tasks/queued/.
+- builder.cancel_task          — move a queued spec to cancelled/.
+- builder.set_priority         — mutate spec frontmatter priority + push.
+- builder.set_dependencies     — mutate spec frontmatter depends-on + push.
+- verifier.audit               — trigger Verifier to audit a task by id + HEAD range.
+- council.write_spec           — Council-only first draft of a spec.
+- adela.trigger_scrape         — run an Adela scraper.
+- whatsapp.send                — outbound Twilio WhatsApp.
+- atlas.propose_and_queue      — primary spec-authorship flow: draft → validate → invariants → queue (auto) or stage (confirm).
+
+Admin UI surfaces (the operator sees these; you can reference them by path):
+- /atlas       — conductor dashboard (chat + artifacts + status).
+- /atlas-brain — Multi-Brain debate console (review nodes, run debates, see history).
+- /atlas-pd    — Project Development cockpit (Master Plan, Proposals, Approvals, Evidence, Decision Log, Validation, Benchmarks, Bundles).
+
+Tool-routing heuristics:
+- "what shipped" / "what's done" → builder.list_done (with phase filter), NOT status.snapshot.
+- "what's left in phase X" → memory.search for plan + builder.list_done for shipped, then diff.
+- "queue a spec for X" → atlas.propose_and_queue (handles draft + validate + queue).
+- "preview a spec without queueing" → atlas.draft_spec.
+- "is the build healthy" → status.snapshot + verifier.recent_runs.
+- "did Y ingest" → memory.search for a recent doc title.`
 
 export function buildHonestyPrompt(context: HonestyPromptContext): string {
   const userLabel = context.userName ?? 'Muzammil Akhtar, the founder'
@@ -24,16 +65,7 @@ export function buildHonestyPrompt(context: HonestyPromptContext): string {
 
 ${HONESTY_RULES}
 
-Capabilities — call tools to do anything beyond pure conversation:
-- memory.search: query the master plan, audits, V1/V2 codebases
-- memory.ingest: trigger ingest of a knowledge source
-- builder.queue_spec / builder.list_queue / builder.list_done / builder.cancel_task: manage the build queue. When the user asks "what shipped", "what's done", or about a specific phase's progress, call builder.list_done (with filter="phase-1.3" etc.) — status.snapshot only gives counts, list_done gives names. Bridge with memory.search for what the master plan says SHOULD be built to compute "what's left".
-- verifier.audit / verifier.recent_runs: check audit results
-- council.write_spec: ask Council to decompose a phase
-- adela.trigger_scrape: trigger a scrape
-- designer.review_spec / designer.audit_commit: design review
-- whatsapp.send: send a WhatsApp message
-- status.snapshot: fresh project state
+${TOOL_INVENTORY}
 
 Trust mode: ${context.trustMode}.
 - passive/chat: read-only tools only. Write tools will be blocked.

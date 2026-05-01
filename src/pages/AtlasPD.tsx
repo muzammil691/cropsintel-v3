@@ -30,6 +30,7 @@ import { DecisionLogTab } from '@/components/atlas-pd/DecisionLogTab'
 import { ValidationTab } from '@/components/atlas-pd/ValidationTab'
 import { BenchmarksTab } from '@/components/atlas-pd/BenchmarksTab'
 import { ReviewBundlesTab } from '@/components/atlas-pd/ReviewBundlesTab'
+import { AtlasTopNav } from '@/components/atlas/AtlasTopNav'
 
 type TabKey =
   | 'master-plan'
@@ -87,6 +88,7 @@ export default function AtlasPD() {
     <>
       <Helmet><title>Atlas PD — CropsIntel</title></Helmet>
       <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        <AtlasTopNav />
         <header className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-3">
           <ClipboardList className="size-5 text-emerald-600" aria-hidden />
           <div className="min-w-0">
