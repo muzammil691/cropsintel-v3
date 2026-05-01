@@ -99,16 +99,20 @@ export default function Auth() {
     expect(gaps).toHaveLength(0)
   })
 
-  it('detects <NotImplemented> import as a stub', () => {
+  it('detects bare <NotImplemented /> in non-whitelisted code as a stub', () => {
+    // Bare NotImplemented (no phase= prop) inside a substantial component file
+    // (not src/App.tsx, not a tiny placeholder page) — this is a true stub.
+    const padding = Array.from({ length: 50 }, (_, i) => `  // line ${i}`).join('\n')
     writeFile(
-      'src/pages/Auth.tsx',
+      'src/components/CustomerDashboard.tsx',
       `import NotImplemented from "@/components/NotImplemented"
-export default function Auth() {
-  return <NotImplemented phase="1.30" what="login" />
+${padding}
+export default function CustomerDashboard() {
+  return <NotImplemented />
 }`,
     )
 
-    const spec = makeSpec({ filesRequired: ['src/pages/Auth.tsx'] })
+    const spec = makeSpec({ filesRequired: ['src/components/CustomerDashboard.tsx'] })
     const gaps = checkStubDetector(spec)
     expect(gaps.length).toBeGreaterThan(0)
     expect(gaps[0].check).toBe('stub-detector')

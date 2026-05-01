@@ -21,7 +21,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENV NODE_ENV=production
 
 # entrypoint.sh clones the repo (using AGENT_SSH_PRIVATE_KEY env var) into
-# /workspace/cropsintel-v3, sets REPO_ROOT, then execs the verifier with
-# whatever command was passed. Default = audit-all (one-shot).
+# /workspace/cropsintel-v3, sets REPO_ROOT, then execs the verifier.
+# Default = server mode (HTTP listener for Builder /audit calls).
+# Boot retro-audit is opt-in via VERIFIER_RETRO_AUDIT_ON_BOOT=true.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["audit-all"]
+CMD []

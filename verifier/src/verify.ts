@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { Gap, TaskSpec, VerificationResult } from './types'
 import { parseTaskSpec } from './lib/spec-parser'
@@ -13,33 +13,22 @@ import { checkE2ESmoke } from './checks/e2e-smoke'
 import { askO3Judgment } from './verifiers/openai-o3'
 import { askGemini25ProJudgment } from './verifiers/gemini-2-5-pro'
 import { escalateToCouncil } from './verifiers/escalate-to-council'
+import { loadShippedCodeContext } from './lib/context-loader'
 
 function getRepoRoot(): string {
   return process.env.REPO_ROOT ?? join(__dirname, '..', '..')
 }
 
 function buildShippedCodeSummary(spec: TaskSpec): string {
-  const root = getRepoRoot()
-  const parts: string[] = []
-
-  // Include up to 20 required files (truncated to fit AI context limits)
-  for (const filePath of spec.filesRequired.slice(0, 20)) {
-    const fullPath = join(root, filePath)
-    if (!existsSync(fullPath)) {
-      parts.push(`=== ${filePath} ===\n[FILE MISSING]`)
-      continue
-    }
-    try {
-      const content = readFileSync(fullPath, 'utf-8')
-      const truncated =
-        content.length > 3000 ? content.slice(0, 3000) + '\n...(truncated)' : content
-      parts.push(`=== ${filePath} ===\n${truncated}`)
-    } catch {
-      parts.push(`=== ${filePath} ===\n[READ ERROR]`)
-    }
-  }
-
-  return parts.join('\n\n')
+  // Bug I fix — files explicitly named in the spec's "Files" section get
+  // loaded WHOLE; only secondary files (none today, but plumbing is here) get
+  // truncated. Logged via [ctx-loader] for visibility.
+  const { contextString } = loadShippedCodeContext({
+    spec,
+    repoRoot: getRepoRoot(),
+    additionalDiffPaths: [],
+  })
+  return contextString
 }
 
 function hasFail(gaps: Gap[]): boolean {

@@ -57,10 +57,31 @@ fi
 export REPO_ROOT="$REPO_DIR"
 echo "[verifier-entrypoint] REPO_ROOT=$REPO_ROOT"
 
-# 4. Run the verifier with whatever args were passed (default: server)
+# 4. Run the verifier — Bug G fix: never default to audit-all on boot.
+#    Boot retro-audit is opt-in via VERIFIER_RETRO_AUDIT_ON_BOOT=true.
+#    Default = server mode (HTTP listener for /audit calls from Builder).
 cd /app
-echo "[verifier-entrypoint] starting verifier: ${*:-server}"
-exec node dist/index.js "${@:-server}"
+
+# If no args passed at all, decide based on env var. If args were passed
+# (e.g. an operator invoked `audit phase-1.10ah`), respect them verbatim.
+if [ "$#" -eq 0 ]; then
+  if [ "${VERIFIER_RETRO_AUDIT_ON_BOOT:-false}" = "true" ]; then
+    echo "[verifier-entrypoint] retro-audit enabled (VERIFIER_RETRO_AUDIT_ON_BOOT=true) — running audit-all"
+    exec node dist/index.js audit-all
+  else
+    echo "[verifier-entrypoint] retro-audit disabled (default); starting server"
+    exec node dist/index.js server
+  fi
+else
+  # Special-case: if the (Dockerfile-baked) CMD is the legacy `audit-all`,
+  # still gate it behind the env var so we don't burn 30 min + $5-10 on every restart.
+  if [ "$1" = "audit-all" ] && [ "${VERIFIER_RETRO_AUDIT_ON_BOOT:-false}" != "true" ]; then
+    echo "[verifier-entrypoint] received audit-all but VERIFIER_RETRO_AUDIT_ON_BOOT!=true → starting server instead"
+    exec node dist/index.js server
+  fi
+  echo "[verifier-entrypoint] starting verifier: $*"
+  exec node dist/index.js "$@"
+fi
 
 
 
