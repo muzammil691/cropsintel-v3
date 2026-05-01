@@ -62,14 +62,20 @@ export function snapshot(): ScraperState[] {
   return Array.from(registry.values())
 }
 
+const BOOT_GRACE_MS = 30 * 60 * 1000
+const startedAt = new Date().toISOString()
+
 function isHealthy(states: ScraperState[]): boolean {
-  if (states.length === 0) return false
+  const inBootGrace = Date.now() - Date.parse(startedAt) < BOOT_GRACE_MS
+  if (states.length === 0) return inBootGrace
   return states.every(
-    (s) => s.last_status === "success" || s.last_status === "skipped" || s.last_status === "running"
+    (s) =>
+      s.last_status === "success" ||
+      s.last_status === "skipped" ||
+      s.last_status === "running" ||
+      (s.last_status === "pending" && inBootGrace)
   )
 }
-
-const startedAt = new Date().toISOString()
 
 export function startHealthServer(port: number): http.Server {
   const server = http.createServer((req, res) => {
