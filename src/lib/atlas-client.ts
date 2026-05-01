@@ -984,3 +984,48 @@ export async function resolveDiscussion(
   )
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Smart diagnosis (Phase 1.10al)
+// ──────────────────────────────────────────────────────────────────────────
+
+export type DiagnoseArtifactKind =
+  | 'designer_audit'
+  | 'verifier_run'
+  | 'workflow_violation'
+  | 'open_fork'
+  | 'pending_spec'
+
+export const KNOWN_DIAGNOSE_ACTION_IDS = [
+  'mark-stub-intentional',
+  'update-gemini-model',
+  'update-anthropic-model',
+  'flip-trust-mode',
+  'rotate-api-key',
+  'dismiss-as-waived',
+] as const
+export type KnownDiagnoseActionId = (typeof KNOWN_DIAGNOSE_ACTION_IDS)[number]
+
+export type DiagnosisBucket =
+  | { bucket: 'auto-remediate'; spec_filename: string; spec_body: string; reason: string }
+  | { bucket: 'claude-code'; prompt: string; affected_files: string[]; reason: string }
+  | {
+      bucket: 'in-app-action'
+      action_id: string
+      label: string
+      payload: Record<string, unknown>
+      reason: string
+    }
+  | { bucket: 'discuss'; chat_seed: string; reason: string }
+
+export async function diagnoseArtifact(input: {
+  kind: DiagnoseArtifactKind
+  ref: string
+  payload: Record<string, unknown>
+}): Promise<DiagnosisBucket> {
+  return fetchJson<DiagnosisBucket>(`${ATLAS_URL}/atlas/artifacts/diagnose`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+

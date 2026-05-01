@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { GitBranch, Check } from 'lucide-react'
+import { GitBranch, Check, Stethoscope } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { OpenFork } from '@/lib/atlas-client'
+import { diagnoseArtifact, type DiagnosisBucket, type OpenFork } from '@/lib/atlas-client'
+import { DiagnosisResult } from '../DiagnosisResult'
 
 interface OpenForkCardProps {
   fork: OpenFork
@@ -46,6 +47,32 @@ export function OpenForkCard({ fork, onResolve }: OpenForkCardProps) {
   const [rationale, setRationale] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
+  const [diagnosis, setDiagnosis] = useState<DiagnosisBucket | null>(null)
+  const [diagError, setDiagError] = useState<string | null>(null)
+
+  async function handleDiagnose() {
+    setDiagnosing(true)
+    setDiagError(null)
+    try {
+      const result = await diagnoseArtifact({
+        kind: 'open_fork',
+        ref: fork.id,
+        payload: {
+          fork_question: fork.fork_question,
+          options_considered: fork.options_considered,
+          rationale: fork.rationale,
+          related_phase: fork.related_phase,
+          decided_at: fork.decided_at,
+        },
+      })
+      setDiagnosis(result)
+    } catch (err) {
+      setDiagError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDiagnosing(false)
+    }
+  }
 
   async function handleApprove() {
     if (!chosen) return
@@ -133,7 +160,7 @@ export function OpenForkCard({ fork, onResolve }: OpenForkCardProps) {
         <p className="text-xs text-red-700 dark:text-red-400 mb-2">{error}</p>
       )}
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 flex-wrap">
         <Button
           size="sm"
           className="h-7 text-xs px-2.5 bg-blue-600 hover:bg-blue-700 text-white"
@@ -146,7 +173,27 @@ export function OpenForkCard({ fork, onResolve }: OpenForkCardProps) {
           <Check className="size-3 mr-1" />
           {submitting ? 'Approving…' : 'Approve'}
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs px-2.5"
+          onClick={() => void handleDiagnose()}
+          disabled={diagnosing}
+        >
+          <Stethoscope className="size-3 mr-1" />
+          {diagnosing ? 'Diagnosing…' : 'Diagnose'}
+        </Button>
       </div>
+
+      {diagnosing && (
+        <div className="mt-2 h-12 rounded-md bg-slate-100 dark:bg-slate-800 animate-pulse" />
+      )}
+      {diagError && (
+        <p className="mt-2 text-[11px] text-red-700 dark:text-red-400">{diagError}</p>
+      )}
+      {diagnosis && (
+        <DiagnosisResult result={diagnosis} onClose={() => setDiagnosis(null)} />
+      )}
     </article>
   )
 }

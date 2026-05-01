@@ -90,6 +90,9 @@ import {
   amendPlanWithClaude,
   queueSpecFromPlanNode,
 } from './lib/plan-server'
+import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind } from './lib/diagnose'
+import { traceArtifact, formatTraceForChat } from './lib/workflow-trace'
+import { buildClaudeCodePrompt } from './lib/claude-code-prompt-builder'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -2129,6 +2132,69 @@ export async function startServer(): Promise<void> {
         const q = new URLSearchParams(queryStr).get('q') ?? ''
         const hits = await findRelatedSpecs(q)
         json(res, 200, { hits })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase 1.10al: smart diagnosis for Active Artifacts ────────────────
+    if (url === '/atlas/artifacts/diagnose' && method === 'POST') {
+      if (!(await requireAuth(req, res))) return
+      const body = await readBody(req)
+      let payload: { kind?: string; ref?: string; payload?: Record<string, unknown> }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+
+      const validKinds: DiagnoseArtifactKind[] = [
+        'designer_audit', 'verifier_run', 'workflow_violation', 'open_fork', 'pending_spec',
+      ]
+      if (!payload.kind || !validKinds.includes(payload.kind as DiagnoseArtifactKind)) {
+        json(res, 400, { error: 'kind must be one of designer_audit|verifier_run|workflow_violation|open_fork|pending_spec' })
+        return
+      }
+      if (!payload.ref || typeof payload.ref !== 'string') {
+        json(res, 400, { error: 'ref is required' })
+        return
+      }
+      const artifactPayload = payload.payload ?? {}
+
+      try {
+        const input: ArtifactInput = {
+          kind: payload.kind as DiagnoseArtifactKind,
+          ref: payload.ref,
+          payload: artifactPayload,
+        }
+        let result = await diagnose(input)
+
+        // Discuss bucket: enrich the chat seed with a workflow-chain trace so
+        // Atlas's first response in chat reads like a senior engineer's diag.
+        if (result.bucket === 'discuss') {
+          const trace = await traceArtifact(artifactPayload)
+          if (trace.task_id) {
+            const traced = formatTraceForChat(trace)
+            result = {
+              ...result,
+              chat_seed: `${result.chat_seed}\n\n---\n\n${traced}`,
+            }
+          }
+        }
+
+        // Claude-code bucket: replace the LLM-drafted prompt with the
+        // canonical, file-embedded prompt builder so the user actually has
+        // file contents at hand.
+        if (result.bucket === 'claude-code') {
+          const taskId = (artifactPayload['task_id'] as string | undefined) ?? payload.ref.slice(0, 8)
+          const evidence = JSON.stringify(artifactPayload, null, 2).slice(0, 4000)
+          const richPrompt = await buildClaudeCodePrompt({
+            problem: result.reason,
+            affectedFiles: result.affected_files,
+            evidence,
+            taskId,
+          })
+          result = { ...result, prompt: richPrompt }
+        }
+
+        json(res, 200, result)
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }
