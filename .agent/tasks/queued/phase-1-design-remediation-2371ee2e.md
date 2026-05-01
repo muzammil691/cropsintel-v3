@@ -6,33 +6,25 @@
 
 ## Gaps to fix
 
-1. **[high] shadcn-usage** — DecisionLogTab.tsx uses raw <button> elements for filter chips (lines 55-71) instead of shadcn Button component. Design system mandates 'always shadcn/ui — never raw HTML for clickable'.
-   Fix: Replace raw <button> elements with <Button variant='outline' size='sm'> from shadcn/ui
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:55
-
-2. **[high] shadcn-usage** — ProposalsTab.tsx uses raw <button> elements for status filter chips (lines 87-102) instead of shadcn Button component.
-   Fix: Replace raw <button> elements with <Button variant='outline' size='sm'> from shadcn/ui
-   Where: src/components/atlas-pd/ProposalsTab.tsx:87
-
-3. **[high] shadcn-usage** — App.tsx MigrationBanner uses raw <button> for dismiss action (line 41-48) instead of shadcn Button. Violates 'never raw HTML for clickable' rule.
-   Fix: Replace with <Button variant='ghost' size='sm' onClick={clearMigrationNotice} aria-label='Dismiss'>✕</Button>
+1. **[high] shadcn-usage** — MigrationBanner dismiss button is raw <button> instead of shadcn Button variant='ghost'
+   Fix: Replace raw button with <Button variant='ghost' size='sm' onClick={clearMigrationNotice} aria-label='Dismiss'>✕</Button>
    Where: src/App.tsx:41
 
-4. **[high] accessibility** — DecisionLogTab.tsx date inputs (lines 76-81) use <label htmlFor> but not paired with shadcn <Label> component. Design system requires 'All form inputs: <Label htmlFor=...> paired'.
-   Fix: Import and use <Label htmlFor='decision-from-date'>From</Label> from '@/components/ui/label' instead of raw <label>
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:76
+2. **[high] states** — DecisionLogTab verdict filter buttons (lines 51-73) and date inputs lack focus-visible rings. Buttons use custom classes but are missing focus-visible:ring-2 ring-emerald-600/50
+   Fix: Add 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50' to all verdict filter buttons in the cn() call, similar to ProposalsTab line 82
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:54
 
-5. **[high] accessibility** — EvidenceTab.tsx search input (line 83-89) lacks paired Label component, only has aria-label. Design system requires visual Label component paired with htmlFor.
-   Fix: Add <Label htmlFor='evidence-search' className='sr-only'>Filter evidence</Label> before the input
-   Where: src/components/atlas-pd/EvidenceTab.tsx:83
+3. **[medium] accessibility** — ProposalEditor disabled status input (line ~135 in truncated code) should not be a disabled input field. Disabled inputs are anti-pattern when the value is purely presentational.
+   Fix: Replace disabled input with read-only text or <Badge variant='secondary'>{initial?.status ?? 'draft'}</Badge> for better semantics
+   Where: src/components/atlas-pd/ProposalEditor.tsx:135
 
-6. **[medium] shadcn-usage** — DecisionLogTab.tsx and ProposalDetailModal.tsx use raw <input type='date'> and <select> elements instead of shadcn Input and Select components.
-   Fix: Replace raw inputs with shadcn <Input type='date'> and <Select> components for consistency
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:77
+4. **[medium] states** — ProposalsTab filter buttons (lines 78-95) have transition-colors and focus-visible, but EvidenceTab Row link (line 148) only has 'transition-colors duration-200' without focus-visible ring
+   Fix: Add 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50' to the <a> element at EvidenceTab.tsx line 148
+   Where: src/components/atlas-pd/EvidenceTab.tsx:148
 
-7. **[medium] states** — Filter chip buttons in DecisionLogTab and ProposalsTab have focus-visible:ring but missing focus-visible:outline-none to suppress default browser outline, creating double-ring effect.
-   Fix: Add 'focus-visible:outline-none' to button className alongside existing focus-visible:ring-2
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:58
+5. **[low] mobile-responsive** — DecisionLogTab filter controls (lines 46-78) use flex-wrap but date inputs may overflow on narrow viewports (<320px). No explicit min-width or responsive stacking.
+   Fix: Consider wrapping date inputs in a separate flex container with 'flex flex-col sm:flex-row gap-2' for better mobile layout, or add 'min-w-0' to inputs
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:46
 
 ## Acceptance criteria
 
