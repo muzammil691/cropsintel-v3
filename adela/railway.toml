@@ -20,7 +20,7 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "adela/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Use the persistent in-process node-cron scheduler — NOT Railway cron.
