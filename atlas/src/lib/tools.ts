@@ -396,10 +396,13 @@ export async function statusSnapshot(): Promise<unknown> {
   const filterMd = (files: string[]) => files.filter(f => f.endsWith('.md') && f !== '_template.md')
 
   const { count: chunkCount } = await sb.from('memory_chunks').select('*', { count: 'exact', head: true })
-  let costToday: { cost_usd: number } | null = null
+  // atlas_cost_today is a per-provider rollup; sum across rows for today's total.
+  let costTodayUsd = 0
   try {
-    const res = await sb.from('atlas_cost_today').select('cost_usd').maybeSingle()
-    costToday = res.data as { cost_usd: number } | null
+    const res = await sb.from('atlas_cost_today').select('cost_usd')
+    for (const row of (res.data ?? []) as Array<{ cost_usd: number | string }>) {
+      costTodayUsd += Number(row.cost_usd) || 0
+    }
   } catch {
     // view may not exist yet; treat as zero
   }
@@ -411,7 +414,7 @@ export async function statusSnapshot(): Promise<unknown> {
     doneSpecsTotal: filterMd(doneList).length,
     failedSpecsTotal: filterMd(failedList).length,
     memoryChunkCount: chunkCount ?? 0,
-    costTodayUsd: costToday?.cost_usd ?? 0,
+    costTodayUsd,
   }
 }
 
