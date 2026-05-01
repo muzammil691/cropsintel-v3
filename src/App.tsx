@@ -13,7 +13,7 @@ import { useAuth } from "@/contexts/AuthContext"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 // Lazy-loaded pages (master plan calls for lazy routing per V1 pattern)
-const Welcome = lazy(() => import("./pages/Welcome"))
+const Landing = lazy(() => import("./pages/Landing"))
 const Auth = lazy(() => import("./pages/Auth"))
 const AuthCallback = lazy(() => import("./pages/AuthCallback"))
 const Login = lazy(() => import("./pages/Login"))
@@ -60,8 +60,8 @@ export default function App() {
       <MigrationBanner />
       <Suspense fallback={<LoadingScreen />}>
         <Routes>
-          {/* Root — Welcome page */}
-          <Route path="/" element={<Welcome />} />
+          {/* Root — Landing page */}
+          <Route path="/" element={<Landing />} />
 
           {/* Legacy /welcome alias kept for existing links */}
           <Route path="/welcome" element={<Navigate to="/" replace />} />
