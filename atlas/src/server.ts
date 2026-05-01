@@ -6,7 +6,15 @@ import { dispatch } from './lib/dispatch'
 import { TOOLS, ToolName } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
-import { sendWhatsAppReply, phoneToThreadId } from './lib/twilio'
+import {
+  sendWhatsAppReply,
+  sendWhatsAppMedia,
+  downloadTwilioMedia,
+  validateTwilioSignature,
+  phoneToThreadId,
+} from './lib/twilio'
+import { uploadVoiceNote, VOICE_OUT_MAX_BYTES } from './lib/voice-note-storage'
+import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
@@ -20,6 +28,8 @@ import {
   estimateTtsCostUsd,
   buildElevenLabsStreamInputUrl,
   getElevenLabsApiKey,
+  generateVoiceNote,
+  VOICE_NOTE_MAX_CHARS,
 } from './lib/elevenlabs'
 import { recordElevenLabsTtsCost, recordWhisperSttCost, getMonthlyProviderSpendUsd } from './lib/cost-log'
 import {
@@ -158,8 +168,9 @@ export async function runChatTurn(params: {
   message: string
   overrideToken?: string
   onEvent?: (event: string, data: unknown) => void
+  assistantMetadata?: Record<string, unknown>
 }): Promise<string> {
-  const { threadId, channel, message, overrideToken, onEvent } = params
+  const { threadId, channel, message, overrideToken, onEvent, assistantMetadata } = params
   const sb = getSupabaseClient()
   const trustMode = getCurrentMode()
 
@@ -318,7 +329,7 @@ export async function runChatTurn(params: {
       channel,
       role: 'atlas',
       content: assistantText,
-      metadata: { totalCostUsd, iterations: iteration },
+      metadata: { totalCostUsd, iterations: iteration, ...(assistantMetadata ?? {}) },
     })
   }
 
@@ -388,18 +399,50 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
   }
 }
 
+// Public URL Atlas presents to Twilio for the inbound webhook. Used to compute
+// the expected HMAC for signature validation; if not set we skip validation
+// (e.g. local dev without a public tunnel).
+const TWILIO_INBOUND_PUBLIC_URL = process.env.TWILIO_INBOUND_PUBLIC_URL ?? ''
+const TWILIO_VALIDATE_SIGNATURE = process.env.TWILIO_VALIDATE_SIGNATURE !== 'false'
+
+const VOICE_TOGGLE_DISABLE = /^\s*disable\s+voice\s*$/i
+const VOICE_TOGGLE_ENABLE = /^\s*enable\s+voice\s*$/i
+
 async function handleWhatsAppInbound(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readBody(req)
   const params = new URLSearchParams(body)
 
   const from = params.get('From')
-  const messageBody = params.get('Body')
+  const messageBody = params.get('Body') ?? ''
   const messageSid = params.get('MessageSid')
+  const numMedia = parseInt(params.get('NumMedia') ?? '0', 10)
+  const mediaUrl0 = params.get('MediaUrl0') ?? undefined
+  const mediaType0 = params.get('MediaContentType0') ?? undefined
 
-  if (!from || !messageBody) {
+  // Either a non-empty body OR at least one media attachment is required.
+  if (!from || (!messageBody && numMedia === 0)) {
     res.writeHead(400, { 'Content-Type': 'text/plain' })
-    res.end('Missing From or Body')
+    res.end('Missing From, Body, or media')
     return
+  }
+
+  // Validate Twilio signature when configured. Reject unsigned webhooks unless
+  // explicitly disabled (set TWILIO_VALIDATE_SIGNATURE=false for local dev).
+  if (TWILIO_VALIDATE_SIGNATURE && TWILIO_INBOUND_PUBLIC_URL) {
+    const sigHeader = (req.headers['x-twilio-signature'] as string | undefined) ?? null
+    const formMap: Record<string, string> = {}
+    for (const [k, v] of params.entries()) formMap[k] = v
+    const ok = validateTwilioSignature({
+      expectedUrl: TWILIO_INBOUND_PUBLIC_URL,
+      formParams: formMap,
+      signatureHeader: sigHeader,
+    })
+    if (!ok) {
+      console.warn('[whatsapp-inbound] signature validation FAILED — rejecting')
+      res.writeHead(403, { 'Content-Type': 'text/plain' })
+      res.end('signature_invalid')
+      return
+    }
   }
 
   // Acknowledge to Twilio immediately (within 10s SLA)
@@ -407,36 +450,270 @@ async function handleWhatsAppInbound(req: IncomingMessage, res: ServerResponse):
   res.end('<?xml version="1.0" encoding="UTF-8"?><Response></Response>')
 
   // Process async — don't block the webhook
-  processWhatsAppMessage(from, messageBody, messageSid).catch(err =>
+  processWhatsAppMessage({
+    from,
+    body: messageBody,
+    messageSid,
+    numMedia,
+    mediaUrl0,
+    mediaType0,
+  }).catch(err =>
     console.error('[whatsapp-inbound] processing error:', err),
   )
 }
 
-async function processWhatsAppMessage(
-  from: string,
-  body: string,
-  messageSid: string | null,
-): Promise<void> {
+interface VoicePrefs {
+  voice_replies_enabled: boolean
+  preferred_voice_id: string | null
+}
+
+async function getVoicePrefs(phone: string): Promise<VoicePrefs> {
+  const sb = getSupabaseClient()
+  if (!sb) return { voice_replies_enabled: true, preferred_voice_id: null }
+  const { data } = await sb
+    .from('atlas_user_prefs')
+    .select('voice_replies_enabled, preferred_voice_id')
+    .eq('user_phone', phone)
+    .maybeSingle()
+  if (!data) return { voice_replies_enabled: true, preferred_voice_id: null }
+  return {
+    voice_replies_enabled: Boolean((data as { voice_replies_enabled: boolean }).voice_replies_enabled),
+    preferred_voice_id: (data as { preferred_voice_id: string | null }).preferred_voice_id,
+  }
+}
+
+async function setVoicePrefs(phone: string, enabled: boolean): Promise<void> {
+  const sb = getSupabaseClient()
+  if (!sb) return
+  await sb.from('atlas_user_prefs').upsert(
+    { user_phone: phone, voice_replies_enabled: enabled, updated_at: new Date().toISOString() },
+    { onConflict: 'user_phone' },
+  )
+}
+
+interface ProcessParams {
+  from: string
+  body: string
+  messageSid: string | null
+  numMedia: number
+  mediaUrl0?: string
+  mediaType0?: string
+}
+
+async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
+  const { from, body, messageSid, numMedia, mediaUrl0, mediaType0 } = params
   const threadId = phoneToThreadId(from)
   const sb = getSupabaseClient()
+  const fromPhone = from.replace('whatsapp:', '')
+
+  let inboundText = body
+  let isVoiceNote = false
+  let inboundAudioSeconds = 0
+  const userMetadata: Record<string, unknown> = { from, messageSid }
+
+  // ─── Voice-note inbound path ──────────────────────────────────────────────
+  // Download immediately (Twilio media URLs expire ~24 h, but we never persist
+  // the URL — we only use it once to fetch the bytes for Whisper). The audio
+  // buffer itself is held only in memory for the duration of transcription.
+  if (numMedia > 0 && mediaUrl0 && mediaType0?.toLowerCase().startsWith('audio/')) {
+    isVoiceNote = true
+    try {
+      const dl = await downloadTwilioMedia(mediaUrl0)
+      inboundAudioSeconds = estimateAudioSeconds(dl.buffer.length)
+      const mime = dl.contentType.split(';')[0].trim() || mediaType0
+      const filename = mime.includes('ogg') ? 'voice.ogg' : 'voice.mp3'
+      const result = await transcribe(dl.buffer, mime, filename)
+      inboundText = result.text.trim()
+      userMetadata.voice_note = true
+      userMetadata.audio_mime = mime
+      userMetadata.audio_seconds = inboundAudioSeconds
+      userMetadata.transcribe_latency_ms = result.durationMs
+      // Cost log for Whisper (the inbound side of this voice turn).
+      void recordWhisperSttCost(inboundAudioSeconds, {
+        bytes: dl.buffer.length,
+        mime_type: mime,
+        channel: 'whatsapp',
+        from_phone: fromPhone,
+      })
+    } catch (err) {
+      console.error('[whatsapp-inbound] voice transcription failed:', err)
+      // Inform the user so they're not left hanging.
+      const msg = 'Sorry — I could not transcribe that voice note. Could you try again, or send it as text?'
+      await sendWhatsAppReply(from, msg)
+      if (sb) {
+        await sb.from('atlas_conversations').insert({
+          thread_id: threadId,
+          channel: 'whatsapp',
+          role: 'user',
+          content: '[voice note: transcription failed]',
+          metadata: { ...userMetadata, voice_note: true, transcription_error: err instanceof Error ? err.message : String(err) },
+        })
+      }
+      return
+    }
+
+    if (!inboundText) {
+      // Empty transcript — likely silent audio. Tell the user.
+      await sendWhatsAppReply(from, 'I got the voice note but the audio came through empty. Could you re-send?')
+      return
+    }
+  }
+
+  // ─── Voice opt-in toggle (text only) ──────────────────────────────────────
+  if (!isVoiceNote && VOICE_TOGGLE_DISABLE.test(inboundText)) {
+    await setVoicePrefs(fromPhone, false)
+    await sendWhatsAppReply(from, 'Voice replies disabled. Send "enable voice" to turn them back on.')
+    if (sb) {
+      await sb.from('atlas_conversations').insert({
+        thread_id: threadId,
+        channel: 'whatsapp',
+        role: 'user',
+        content: inboundText,
+        metadata: { ...userMetadata, command: 'disable_voice' },
+      })
+    }
+    return
+  }
+  if (!isVoiceNote && VOICE_TOGGLE_ENABLE.test(inboundText)) {
+    await setVoicePrefs(fromPhone, true)
+    await sendWhatsAppReply(from, 'Voice replies enabled. Send "disable voice" to turn them off.')
+    if (sb) {
+      await sb.from('atlas_conversations').insert({
+        thread_id: threadId,
+        channel: 'whatsapp',
+        role: 'user',
+        content: inboundText,
+        metadata: { ...userMetadata, command: 'enable_voice' },
+      })
+    }
+    return
+  }
 
   if (sb) {
     await sb.from('atlas_conversations').insert({
       thread_id: threadId,
       channel: 'whatsapp',
       role: 'user',
-      content: body,
-      metadata: { from, messageSid },
+      content: inboundText,
+      metadata: userMetadata,
     })
   }
 
-  const assistantText = await runChatTurn({ threadId, channel: 'whatsapp', message: body })
+  // Run the chat turn — emits the assistant row with combined metadata.
+  const assistantMetadata: Record<string, unknown> = { from_voice_note: isVoiceNote }
+  const assistantText = await runChatTurn({
+    threadId,
+    channel: 'whatsapp',
+    message: inboundText,
+    assistantMetadata,
+  })
 
-  const reply = await sendWhatsAppReply(from, assistantText)
-  if ('error' in reply) {
-    console.error('[whatsapp-inbound] reply failed:', reply.error)
-  } else {
-    console.log(`[whatsapp-inbound] replied with sid=${reply.sid}`)
+  await sendAtlasReply({
+    toWhatsApp: from,
+    threadId,
+    replyText: assistantText,
+    triggeredByVoiceNote: isVoiceNote,
+  })
+}
+
+// Sends the reply back to the user. Always sends a text body; additionally
+// generates an ElevenLabs voice note when the user has voice replies enabled
+// and the ElevenLabs monthly budget gate has not been tripped.
+async function sendAtlasReply(params: {
+  toWhatsApp: string
+  threadId: string
+  replyText: string
+  triggeredByVoiceNote: boolean
+}): Promise<void> {
+  const { toWhatsApp, threadId, replyText, triggeredByVoiceNote } = params
+  const fromPhone = toWhatsApp.replace('whatsapp:', '')
+  if (!replyText) return
+
+  // 1. Always send text first so the user gets *something* even if voice fails.
+  const textResult = await sendWhatsAppReply(toWhatsApp, replyText)
+  if ('error' in textResult) {
+    console.error('[whatsapp-inbound] reply failed:', textResult.error)
+    return
+  }
+  console.log(`[whatsapp-inbound] replied with sid=${textResult.sid}`)
+
+  // 2. Determine whether to also send a voice note.
+  const prefs = await getVoicePrefs(fromPhone)
+  if (!prefs.voice_replies_enabled) {
+    console.log(`[whatsapp-inbound] voice replies disabled for ${fromPhone}`)
+    return
+  }
+
+  // Budget gate — skip TTS if monthly ElevenLabs spend is past the cap.
+  const monthSpend = await getMonthlyProviderSpendUsd('elevenlabs')
+  const projected = monthSpend + estimateTtsCostUsd(Math.min(replyText.length, VOICE_NOTE_MAX_CHARS))
+  if (monthSpend >= ELEVENLABS_BUDGET_GATE_USD || projected >= ELEVENLABS_BUDGET_GATE_USD) {
+    console.warn(
+      `[whatsapp-inbound] skipping voice reply — elevenlabs month_to_date=${monthSpend.toFixed(2)} gate=${ELEVENLABS_BUDGET_GATE_USD}`,
+    )
+    return
+  }
+
+  try {
+    const voiceId = prefs.preferred_voice_id || VOICE_DEFAULT
+    const tts = await generateVoiceNote(replyText, voiceId)
+
+    // Defense in depth: hard-truncate by bytes too. ElevenLabs Turbo at 32 kHz mono
+    // is well under the 2 MB ceiling for 1500 chars, but we still bail out rather
+    // than send a malformed payload to Twilio.
+    if (tts.audio.length === 0 || tts.audio.length > VOICE_OUT_MAX_BYTES) {
+      console.warn(`[whatsapp-inbound] voice audio out of bounds (${tts.audio.length}); skipping`)
+      return
+    }
+
+    const messageId = randomUUID()
+    const upload = await uploadVoiceNote({ audio: tts.audio, threadId, messageId })
+
+    const mediaResult = await sendWhatsAppMedia(toWhatsApp, upload.signedUrl)
+    if ('error' in mediaResult) {
+      console.error('[whatsapp-inbound] voice media send failed:', mediaResult.error)
+      return
+    }
+    console.log(`[whatsapp-inbound] voice note sent sid=${mediaResult.sid} bytes=${tts.audio.length}`)
+
+    // Cost log for the outbound TTS leg.
+    void recordElevenLabsTtsCost(tts.charCount, voiceId, {
+      transport: 'whatsapp_voice_note',
+      truncated: tts.truncated,
+      thread_id: threadId,
+      message_id: messageId,
+      triggered_by_voice_note: triggeredByVoiceNote,
+    })
+
+    // Annotate the assistant row so we can audit which turns produced voice.
+    const sb = getSupabaseClient()
+    if (sb) {
+      const { data: latest } = await sb
+        .from('atlas_conversations')
+        .select('id, metadata')
+        .eq('thread_id', threadId)
+        .eq('role', 'atlas')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (latest) {
+        const merged = {
+          ...((latest as { metadata: Record<string, unknown> }).metadata ?? {}),
+          has_voice_reply: true,
+          voice_id: voiceId,
+          voice_truncated: tts.truncated,
+          voice_message_sid: mediaResult.sid,
+          voice_storage_path: upload.path,
+          voice_bytes: tts.audio.length,
+        }
+        await sb
+          .from('atlas_conversations')
+          .update({ metadata: merged })
+          .eq('id', (latest as { id: string }).id)
+      }
+    }
+  } catch (err) {
+    console.error('[whatsapp-inbound] voice reply error:', err)
   }
 }
 
