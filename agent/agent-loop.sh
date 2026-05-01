@@ -613,14 +613,22 @@ run_task() {
     HEAD_AFTER=$(git rev-parse HEAD)
 
     if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
-      # Gate on verifier verdict before pushing, then designer gate (UI tasks only)
+      # Push BEFORE running gates. Reason: Verifier and Designer audit by
+      # inspecting their own clone of origin/main, not Builder's local commit.
+      # Without this push-first ordering, Verifier's files-exist check sees the
+      # OLD origin state and fails with "files missing" for any spec that
+      # creates new files. The trade-off: broken code briefly hits main between
+      # push and verifier-fail, but npm run build is gated on Builder's side
+      # before reaching here, so at minimum the code compiles.
+      git push origin main || {
+        echo "$LOOP_TAG push failed (pre-gate)"
+        /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
+        return 1
+      }
+
+      # Now gate on verifier + designer using the actually-pushed commit.
       if run_verifier_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER" && \
          run_designer_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER"; then
-        git push origin main || {
-          echo "$LOOP_TAG push failed"
-          /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
-          return 1
-        }
         mkdir -p .agent/tasks/done
         mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
         git add .agent/
@@ -634,13 +642,16 @@ run_task() {
           /usr/local/bin/notify-whatsapp.sh "⚠️ $TASK_NAME marked done but produced 0 file changes — agent likely failed silently. Investigate." || true
         fi
       else
-        echo "$LOOP_TAG verifier blocked push — moving task to failed/"
+        # Code already pushed above; gates failed. Move spec to failed/ for
+        # human review; the verifier_gate / designer_gate functions have
+        # already auto-queued a remediation spec.
+        echo "$LOOP_TAG gates failed after push — task moved to failed/, remediation queued"
         mkdir -p .agent/tasks/failed
         mv "$IN_PROGRESS_FILE" ".agent/tasks/failed/$TASK_NAME.md" 2>/dev/null || true
         git add .agent/ 2>/dev/null || true
-        git commit -m "chore(agent): $TASK_NAME → failed (verifier blocked)" 2>/dev/null || true
+        git commit -m "chore(agent): $TASK_NAME → failed (gates blocked, code on main)" 2>/dev/null || true
         git push origin main 2>/dev/null || true
-        /usr/local/bin/notify-whatsapp.sh "🔍 Verifier blocked: $TASK_NAME — remediation queued" || true
+        /usr/local/bin/notify-whatsapp.sh "🔍 Gates failed for $TASK_NAME — code on main, remediation queued" || true
       fi
     else
       # No commits at all — suspicious but mark done anyway
