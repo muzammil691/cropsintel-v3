@@ -25,13 +25,32 @@ import {
   createSession,
   findSessionByToken,
   touchSessionLastSeen,
+  touchMemberLogin,
   revokeSession,
+  revokeAllSessionsForMember,
   listSessionsForPhone,
+  consumeInviteAndCreateMember,
   sendOtpViaWhatsApp,
+  roleAtLeast,
   OTP_TTL_SECONDS,
   OTP_MAX_ATTEMPTS,
   OTP_RATE_LIMIT_MAX,
+  type Role,
 } from './lib/auth'
+import {
+  listMembers,
+  listPendingInvites,
+  createOrRefreshInvite,
+  revokeInvite,
+  getMember,
+  getInvite,
+  updateMember,
+  recordTeamAudit,
+  listTeamAudit,
+  sendInviteWhatsApp,
+  sendInviteRevokedWhatsApp,
+  sendElevationRequestWhatsApp,
+} from './lib/team'
 import { uploadVoiceNote, VOICE_OUT_MAX_BYTES } from './lib/voice-note-storage'
 import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
@@ -78,12 +97,15 @@ function getSystemPrompt(): string {
   return buildHonestyPrompt({ trustMode: getCurrentMode() })
 }
 
-// Authenticated principal — either a real user session (phone) or the
+// Authenticated principal — either a real user session (phone+role) or the
 // service-to-service legacy bearer (Builder, conductor cron). Retains a
 // `sessionId === 'service'` sentinel so the rest of the server can branch.
+// Phase 1.10ao: role is carried for tool-dispatch authorization.
 export interface AuthPrincipal {
   phone: string
   sessionId: string
+  role: Role
+  memberId: string | null
 }
 
 // Phase 1.10aj — Atlas now requires either a user session token (issued via
@@ -98,9 +120,10 @@ async function authenticate(req: IncomingMessage): Promise<AuthPrincipal | null>
   if (!token) return null
 
   // Service bearer — used by Builder and conductor cron. Only this exact
-  // value, never anything user-derivable.
+  // value, never anything user-derivable. Treated as 'owner' for role checks
+  // so existing in-cluster paths keep working unchanged.
   if (ATLAS_API_TOKEN && token === ATLAS_API_TOKEN) {
-    return { phone: 'service', sessionId: 'service' }
+    return { phone: 'service', sessionId: 'service', role: 'owner', memberId: null }
   }
 
   // User session token — look up sha256(token) in atlas_sessions.
@@ -110,7 +133,11 @@ async function authenticate(req: IncomingMessage): Promise<AuthPrincipal | null>
   // Fire-and-forget last_seen touch so /atlas/auth/sessions reflects activity.
   touchSessionLastSeen(session.id).catch(() => {})
 
-  return { phone: session.phone, sessionId: session.id }
+  // Defensive: legacy sessions (issued before 1.10ao) may have no role cached.
+  // Treat them as 'viewer' until they re-auth — fail closed.
+  const role: Role = (session.role as Role | null) ?? 'viewer'
+
+  return { phone: session.phone, sessionId: session.id, role, memberId: session.member_id }
 }
 
 // Convenience: return 401 + null when unauthenticated, principal when ok.
@@ -228,10 +255,11 @@ export async function runChatTurn(params: {
   channel: string
   message: string
   overrideToken?: string
+  callerRole?: Role
   onEvent?: (event: string, data: unknown) => void
   assistantMetadata?: Record<string, unknown>
 }): Promise<string> {
-  const { threadId, channel, message, overrideToken, onEvent, assistantMetadata } = params
+  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata } = params
   const sb = getSupabaseClient()
   const trustMode = getCurrentMode()
 
@@ -314,6 +342,7 @@ export async function runChatTurn(params: {
         initiatedBy: `${channel}:${threadId}`,
         trustMode,
         overrideToken,
+        callerRole,
       })
 
       onEvent?.('tool_result', { tool: toolName, ...dispatchResult })
@@ -398,7 +427,8 @@ export async function runChatTurn(params: {
 }
 
 export async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!(await requireAuth(req, res))) return
+  const principal = await requireAuth(req, res)
+  if (!principal) return
 
   const body = await readBody(req)
   let payload: { thread_id: string; channel: string; message: string }
@@ -444,6 +474,7 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
       channel: payload.channel || 'web',
       message: payload.message,
       overrideToken,
+      callerRole: principal.role,
       onEvent: sendEvent,
     })
 
@@ -663,12 +694,19 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
     })
   }
 
+  // Look up the sender's role from atlas_members so the WhatsApp chat path
+  // honours role-based tool gates the same way the web chat does. Unknown
+  // phones (no member row) default to 'viewer' — fail closed.
+  const allow = await isPhoneAllowed(fromPhone)
+  const callerRole: Role = allow.allowed ? allow.role : 'viewer'
+
   // Run the chat turn — emits the assistant row with combined metadata.
   const assistantMetadata: Record<string, unknown> = { from_voice_note: isVoiceNote }
   const assistantText = await runChatTurn({
     threadId,
     channel: 'whatsapp',
     message: inboundText,
+    callerRole,
     assistantMetadata,
   })
 
@@ -1198,10 +1236,19 @@ export async function startServer(): Promise<void> {
       try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
       const phone = (payload.phone ?? '').trim()
       if (!phone) { json(res, 400, { error: 'phone required' }); return }
-      // Allowlist: never allow OTP requests for anything outside the configured list.
-      if (!isPhoneAllowed(phone)) {
-        json(res, 403, { error: 'phone_not_allowed' })
-        return
+      // DB-backed allowlist (Phase 1.10ao): active member OR pending invite.
+      // Suspended/revoked accounts fail at this gate; not_invited as well.
+      const allow = await isPhoneAllowed(phone)
+      if (!allow.allowed) {
+        if (allow.reason === 'suspended') { json(res, 403, { error: 'account_suspended' }); return }
+        if (allow.reason === 'revoked') { json(res, 403, { error: 'account_revoked' }); return }
+        if (allow.reason === 'pending_invite') {
+          // Allow OTP for an invitee — first-login path consumes the invite on verify.
+          // Fall through.
+        } else {
+          json(res, 403, { error: 'phone_not_allowed' })
+          return
+        }
       }
       // Rate limit BEFORE generating + sending so floods don't burn Twilio cost.
       const recent = await countRecentOtpRequests(phone)
@@ -1232,7 +1279,11 @@ export async function startServer(): Promise<void> {
       const phone = (payload.phone ?? '').trim()
       const code = (payload.code ?? '').trim()
       if (!phone || !code) { json(res, 400, { error: 'phone and code required' }); return }
-      if (!isPhoneAllowed(phone)) { json(res, 401, { error: 'invalid_credentials' }); return }
+      const allow = await isPhoneAllowed(phone)
+      if (!allow.allowed && allow.reason !== 'pending_invite') {
+        json(res, 401, { error: 'invalid_credentials' })
+        return
+      }
 
       const otp = await findActiveOtp(phone)
       if (!otp) { json(res, 401, { error: 'invalid_credentials' }); return }
@@ -1258,6 +1309,48 @@ export async function startServer(): Promise<void> {
       // recently issued spare can't be used to mint a second session silently.
       await burnAllOtpsForPhone(phone)
 
+      // First-login flow: consume the invite + create the member row atomically.
+      let memberId: string
+      let role: Role
+      if (allow.allowed) {
+        memberId = allow.memberId
+        role = allow.role
+      } else {
+        // pending_invite path
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'session_persist_failed' }); return }
+        const { data: inviteRow } = await sb
+          .from('atlas_invites')
+          .select('id, role, display_name, invited_by')
+          .eq('id', allow.inviteId)
+          .maybeSingle()
+        if (!inviteRow) { json(res, 401, { error: 'invalid_credentials' }); return }
+        const inv = inviteRow as { id: string; role: 'admin' | 'operator' | 'viewer'; display_name: string | null; invited_by: string }
+        const consumed = await consumeInviteAndCreateMember({
+          inviteId: inv.id,
+          phone,
+          role: inv.role,
+          displayName: inv.display_name,
+          invitedBy: inv.invited_by,
+        })
+        if (!consumed) { json(res, 503, { error: 'session_persist_failed' }); return }
+        memberId = consumed.memberId
+        role = inv.role
+        // Audit the consumption.
+        await recordTeamAudit({
+          actorId: inv.invited_by,
+          actorPhone: 'system',
+          action: 'invite_consumed',
+          targetMemberId: memberId,
+          targetInviteId: inv.id,
+          targetPhone: phone,
+          details: { role },
+        })
+      }
+
+      // Stamp first_login_at + last_seen_at on the member row.
+      await touchMemberLogin(memberId)
+
       const userAgent = (req.headers['user-agent'] as string | undefined) ?? null
       const fwd = (req.headers['x-forwarded-for'] as string | undefined)
         ?? (req.socket?.remoteAddress ?? '')
@@ -1265,12 +1358,14 @@ export async function startServer(): Promise<void> {
 
       const session = await createSession({
         phone,
+        memberId,
+        role,
         userAgent: userAgent ?? undefined,
         ip: ip ?? undefined,
       })
       if (!session) { json(res, 503, { error: 'session_persist_failed' }); return }
 
-      json(res, 200, { ok: true, token: session.token, session_id: session.sessionId })
+      json(res, 200, { ok: true, token: session.token, session_id: session.sessionId, role })
       return
     }
 
@@ -1296,6 +1391,9 @@ export async function startServer(): Promise<void> {
           phone: 'service',
           session_id: 'service',
           device_label: 'service',
+          role: 'owner',
+          member_id: null,
+          display_name: 'service',
           created_at: null,
           last_seen_at: null,
         })
@@ -1306,7 +1404,7 @@ export async function startServer(): Promise<void> {
       if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
       const { data } = await sb
         .from('atlas_sessions')
-        .select('id, phone, device_label, created_at, last_seen_at')
+        .select('id, phone, device_label, created_at, last_seen_at, role, member_id')
         .eq('id', principal.sessionId)
         .maybeSingle()
       if (!data) { json(res, 401, { error: 'Unauthorized' }); return }
@@ -1316,11 +1414,21 @@ export async function startServer(): Promise<void> {
         device_label: string | null
         created_at: string
         last_seen_at: string
+        role: string | null
+        member_id: string | null
+      }
+      let displayName: string | null = null
+      if (row.member_id) {
+        const m = await getMember(row.member_id)
+        displayName = m?.display_name ?? null
       }
       json(res, 200, {
         phone: row.phone,
         session_id: row.id,
         device_label: row.device_label,
+        role: row.role ?? principal.role,
+        member_id: row.member_id,
+        display_name: displayName,
         created_at: row.created_at,
         last_seen_at: row.last_seen_at,
       })
@@ -1565,6 +1673,292 @@ export async function startServer(): Promise<void> {
         json(res, 200, { ok: true, id })
         return
       }
+    }
+
+    // ─── Team management routes (Phase 1.10ao) ──────────────────────────────
+    // Read endpoints require admin+; write endpoints require owner. Owner
+    // cannot demote/revoke themselves through the UI (DB-only operation).
+
+    if (url === '/atlas/team/members' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const members = await listMembers()
+      json(res, 200, { members })
+      return
+    }
+
+    if (url === '/atlas/team/invites' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const invites = await listPendingInvites()
+      // Strip invite_token from the read endpoint so it never leaks server logs
+      // / proxy access logs / browser history. Owner can fetch the URL by
+      // re-issuing or via the create-invite response.
+      const sanitized = invites.map(({ invite_token: _t, ...rest }) => {
+        void _t
+        return rest
+      })
+      json(res, 200, { invites: sanitized })
+      return
+    }
+
+    if (url === '/atlas/team/invite' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (principal.role !== 'owner' || !principal.memberId) {
+        json(res, 403, { error: 'role_insufficient', required: 'owner' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { phone?: string; role?: 'admin' | 'operator' | 'viewer'; display_name?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      const phone = (payload.phone ?? '').trim()
+      const inviteRole = payload.role
+      if (!phone) { json(res, 400, { error: 'phone required' }); return }
+      if (!inviteRole || !['admin', 'operator', 'viewer'].includes(inviteRole)) {
+        json(res, 400, { error: 'role must be admin|operator|viewer' })
+        return
+      }
+      const result = await createOrRefreshInvite({
+        phone,
+        role: inviteRole,
+        displayName: (payload.display_name ?? '').trim() || null,
+        invitedBy: principal.memberId,
+      })
+      if (!result) { json(res, 503, { error: 'invite_persist_failed' }); return }
+
+      const inviterMember = await getMember(principal.memberId)
+      const inviterName = inviterMember?.display_name ?? 'the Atlas owner'
+      const sent = await sendInviteWhatsApp({
+        phone,
+        role: inviteRole,
+        inviterName,
+        token: result.invite.invite_token,
+      })
+
+      await recordTeamAudit({
+        actorId: principal.memberId,
+        actorPhone: principal.phone,
+        action: result.isNew ? 'invite_created' : 'invite_refreshed',
+        targetInviteId: result.invite.id,
+        targetPhone: phone,
+        details: { role: inviteRole, whatsapp_sent: sent },
+      })
+
+      json(res, 200, {
+        ok: true,
+        invite: {
+          id: result.invite.id,
+          phone: result.invite.phone,
+          role: result.invite.role,
+          display_name: result.invite.display_name,
+          expires_at: result.invite.expires_at,
+          created_at: result.invite.created_at,
+        },
+        is_new: result.isNew,
+        whatsapp_sent: sent,
+      })
+      return
+    }
+
+    {
+      const revokeMatch = url.match(/^\/atlas\/team\/invites\/([0-9a-f-]{36})\/revoke$/i)
+      if (revokeMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (principal.role !== 'owner' || !principal.memberId) {
+          json(res, 403, { error: 'role_insufficient', required: 'owner' })
+          return
+        }
+        const id = revokeMatch[1]
+        const inviteBefore = await getInvite(id)
+        const revoked = await revokeInvite(id)
+        if (!revoked) { json(res, 404, { error: 'invite_not_found_or_already_resolved' }); return }
+        const sent = inviteBefore ? await sendInviteRevokedWhatsApp(inviteBefore.phone) : false
+        await recordTeamAudit({
+          actorId: principal.memberId,
+          actorPhone: principal.phone,
+          action: 'invite_revoked',
+          targetInviteId: revoked.id,
+          targetPhone: revoked.phone,
+          details: { whatsapp_sent: sent },
+        })
+        json(res, 200, { ok: true, id: revoked.id })
+        return
+      }
+    }
+
+    {
+      const memberMatch = url.match(/^\/atlas\/team\/members\/([0-9a-f-]{36})$/i)
+      if (memberMatch && method === 'PATCH') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (principal.role !== 'owner' || !principal.memberId) {
+          json(res, 403, { error: 'role_insufficient', required: 'owner' })
+          return
+        }
+        const id = memberMatch[1]
+        const body = await readBody(req)
+        let payload: { role?: Role; display_name?: string | null; status?: 'active' | 'suspended' | 'revoked'; notes?: string | null }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+
+        const target = await getMember(id)
+        if (!target) { json(res, 404, { error: 'member_not_found' }); return }
+
+        // Owner cannot change their own role/status (DB-only operation).
+        if (target.id === principal.memberId) {
+          if (payload.role !== undefined && payload.role !== 'owner') {
+            json(res, 403, { error: 'cannot_demote_self' })
+            return
+          }
+          if (payload.status !== undefined && payload.status !== 'active') {
+            json(res, 403, { error: 'cannot_revoke_self' })
+            return
+          }
+        }
+        // Owner role is reserved — never assign or remove via API.
+        if (target.role === 'owner' && payload.role !== undefined && payload.role !== 'owner') {
+          json(res, 403, { error: 'cannot_demote_owner' })
+          return
+        }
+        if (payload.role === 'owner' && target.role !== 'owner') {
+          json(res, 403, { error: 'cannot_promote_to_owner' })
+          return
+        }
+
+        if (payload.role !== undefined && !['admin', 'operator', 'viewer', 'owner'].includes(payload.role)) {
+          json(res, 400, { error: 'invalid_role' })
+          return
+        }
+        if (payload.status !== undefined && !['active', 'suspended', 'revoked'].includes(payload.status)) {
+          json(res, 400, { error: 'invalid_status' })
+          return
+        }
+
+        const result = await updateMember({
+          id,
+          role: payload.role,
+          displayName: payload.display_name,
+          status: payload.status,
+          notes: payload.notes,
+        })
+        if (!result) { json(res, 503, { error: 'member_persist_failed' }); return }
+
+        await recordTeamAudit({
+          actorId: principal.memberId,
+          actorPhone: principal.phone,
+          action: 'member_updated',
+          targetMemberId: result.member.id,
+          targetPhone: result.member.phone,
+          details: {
+            role: payload.role,
+            status: payload.status,
+            display_name: payload.display_name,
+            sessions_revoked: result.sessionsRevoked,
+          },
+        })
+
+        json(res, 200, { ok: true, member: result.member, sessions_revoked: result.sessionsRevoked })
+        return
+      }
+    }
+
+    {
+      const sessionsMatch = url.match(/^\/atlas\/team\/members\/([0-9a-f-]{36})\/sessions\/revoke-all$/i)
+      if (sessionsMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (principal.role !== 'owner' || !principal.memberId) {
+          json(res, 403, { error: 'role_insufficient', required: 'owner' })
+          return
+        }
+        const id = sessionsMatch[1]
+        const target = await getMember(id)
+        if (!target) { json(res, 404, { error: 'member_not_found' }); return }
+        const count = await revokeAllSessionsForMember(id)
+        await recordTeamAudit({
+          actorId: principal.memberId,
+          actorPhone: principal.phone,
+          action: 'sessions_revoked_all',
+          targetMemberId: target.id,
+          targetPhone: target.phone,
+          details: { sessions_revoked: count },
+        })
+        json(res, 200, { ok: true, sessions_revoked: count })
+        return
+      }
+    }
+
+    if (url === '/atlas/team/audit-log' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (principal.role !== 'owner') {
+        json(res, 403, { error: 'role_insufficient', required: 'owner' })
+        return
+      }
+      const entries = await listTeamAudit(100)
+      json(res, 200, { entries })
+      return
+    }
+
+    if (url === '/atlas/team/request-elevation' && method === 'POST') {
+      // Any authed member may request elevation; the server WhatsApps the owner.
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const body = await readBody(req)
+      let payload: { tool?: string; required_role?: Role; context?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.tool || !payload.required_role) {
+        json(res, 400, { error: 'tool and required_role required' })
+        return
+      }
+
+      // Look up the active owner phone.
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+      const { data: owner } = await sb
+        .from('atlas_members')
+        .select('id, phone, display_name')
+        .eq('role', 'owner')
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle()
+      if (!owner) { json(res, 503, { error: 'no_active_owner' }); return }
+      const ownerRow = owner as { id: string; phone: string; display_name: string | null }
+
+      const requesterMember = principal.memberId ? await getMember(principal.memberId) : null
+      const sent = await sendElevationRequestWhatsApp({
+        ownerPhone: ownerRow.phone,
+        requesterPhone: principal.phone,
+        requesterDisplayName: requesterMember?.display_name ?? null,
+        tool: payload.tool,
+        requiredRole: payload.required_role,
+      })
+
+      await recordTeamAudit({
+        actorId: principal.memberId ?? ownerRow.id,
+        actorPhone: principal.phone,
+        action: 'elevation_requested',
+        targetMemberId: ownerRow.id,
+        targetPhone: ownerRow.phone,
+        details: {
+          tool: payload.tool,
+          required_role: payload.required_role,
+          context: payload.context ?? null,
+          whatsapp_sent: sent,
+        },
+      })
+
+      json(res, 200, { ok: true, whatsapp_sent: sent })
+      return
     }
 
     if (url === '/whatsapp/inbound' && method === 'POST') {

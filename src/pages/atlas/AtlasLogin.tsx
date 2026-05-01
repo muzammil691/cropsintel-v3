@@ -6,7 +6,7 @@
 // every page mount via /atlas/auth/me.
 
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,7 +23,13 @@ const OTP_LENGTH = 6
 
 export default function AtlasLogin() {
   const navigate = useNavigate()
-  const [phone, setPhone] = useState(DEFAULT_PHONE)
+  const [searchParams] = useSearchParams()
+  // 1.10ao: invite flow lands here with `?phone=...&invite=<token>`. We
+  // pre-fill the phone field so the invitee doesn't have to retype, and
+  // surface a banner so they know their invite is recognized.
+  const inviteToken = searchParams.get('invite') ?? ''
+  const presetPhone = searchParams.get('phone') ?? ''
+  const [phone, setPhone] = useState(presetPhone || DEFAULT_PHONE)
   const [stage, setStage] = useState<'phone' | 'code'>('phone')
   const [digits, setDigits] = useState<string[]>(() => Array(OTP_LENGTH).fill(''))
   const [submitting, setSubmitting] = useState(false)
@@ -147,6 +153,11 @@ export default function AtlasLogin() {
               ? 'Enter your phone number; we will WhatsApp you a 6-digit code.'
               : `We sent a code to ${phone}. Enter it below.`}
           </p>
+          {inviteToken && stage === 'phone' && (
+            <p className="mt-2 rounded border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 px-2 py-1 text-[11px] text-emerald-800 dark:text-emerald-300">
+              Invite link recognised — sign in with the phone number that received the WhatsApp.
+            </p>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           {stage === 'phone' && (
@@ -256,6 +267,8 @@ export default function AtlasLogin() {
 function humanError(err: unknown, fallback: string): string {
   const msg = err instanceof Error ? err.message : String(err ?? '')
   if (msg.includes('phone_not_allowed')) return 'This phone is not authorized to sign in to Atlas.'
+  if (msg.includes('account_suspended')) return 'This account is suspended. Ask the owner to reactivate it.'
+  if (msg.includes('account_revoked')) return 'This account has been revoked. Contact the owner if this is a mistake.'
   if (msg.includes('rate_limited')) return 'Too many code requests. Wait 15 minutes and try again.'
   if (msg.includes('too_many_attempts')) return 'Too many wrong attempts. Request a new code.'
   if (msg.includes('invalid_credentials')) return 'That code is wrong or expired. Try again or request a new one.'

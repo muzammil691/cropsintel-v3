@@ -3,6 +3,7 @@ import { getSupabaseClient } from './supabase'
 import { checkBudget } from './cost-gate'
 import { checkInvariants } from './invariants'
 import { hasVerifier, verifySideEffect } from './verify-side-effects'
+import { roleAtLeast, type Role } from './auth'
 import { TrustMode, ToolDispatchVerification } from '../types'
 
 export interface DispatchRequest {
@@ -11,6 +12,39 @@ export interface DispatchRequest {
   initiatedBy: string // 'cron' | 'chat:<thread_id>' | 'auto'
   trustMode: TrustMode
   overrideToken?: string
+  // Phase 1.10ao — role gate. Service callers (Builder cron, conductor)
+  // bypass with role 'owner' so existing in-cluster paths keep working.
+  // User-initiated dispatches MUST pass the principal's role.
+  callerRole?: Role
+}
+
+// Minimum role required to invoke each tool. Read tools default to 'viewer';
+// queue-mutating ops require 'operator'; agent-restart / WhatsApp / cancel
+// require 'admin'; owner-only mutations are gated outside dispatch (in the
+// /atlas/team/* routes). Tools missing from this map default to 'admin'.
+export const TOOL_ROLE_REQUIREMENTS: Partial<Record<ToolName, Role>> = {
+  // Read-only
+  'memory.search': 'viewer',
+  'builder.list_queue': 'viewer',
+  'builder.list_done': 'viewer',
+  'builder.queue_order': 'viewer',
+  'verifier.recent_runs': 'viewer',
+  'designer.review_spec': 'viewer',
+  'designer.audit_commit': 'viewer',
+  'status.snapshot': 'viewer',
+  // Operator: spec authorship + queue mutation
+  'memory.ingest': 'operator',
+  'builder.queue_spec': 'operator',
+  'builder.set_priority': 'operator',
+  'builder.set_dependencies': 'operator',
+  'verifier.audit': 'operator',
+  'council.write_spec': 'operator',
+  // Admin: agent restarts, WhatsApp send, cancellation, Atlas spec authorship
+  'adela.trigger_scrape': 'admin',
+  'whatsapp.send': 'admin',
+  'builder.cancel_task': 'admin',
+  'atlas.draft_spec': 'admin',
+  'atlas.propose_and_queue': 'admin',
 }
 
 export interface DispatchResult {
@@ -36,6 +70,22 @@ const READ_ONLY_TOOLS = new Set<ToolName>([
 
 export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   const start = Date.now()
+
+  // Role gating (Phase 1.10ao). Service callers (cron, in-cluster Builder)
+  // are passed `callerRole: 'owner'` from server.ts; user dispatches carry
+  // the principal's role from the session row. If a tool isn't in the map,
+  // default to 'admin' — fail closed.
+  if (req.callerRole) {
+    const required = TOOL_ROLE_REQUIREMENTS[req.tool] ?? 'admin'
+    if (!roleAtLeast(req.callerRole, required)) {
+      return {
+        dispatchId: '',
+        status: 'blocked',
+        error: `role '${req.callerRole}' insufficient; '${req.tool}' requires '${required}'`,
+        durationMs: Date.now() - start,
+      }
+    }
+  }
 
   // Trust mode gating (no DB needed for blocks)
   if (req.trustMode === 'stopped') {

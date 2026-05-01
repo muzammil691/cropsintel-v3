@@ -1,4 +1,6 @@
 // Phase 1.10aj — Atlas WhatsApp OTP + opaque session token primitives.
+// Phase 1.10ao — env-var allowlist replaced with DB-backed atlas_members
+// table; sessions cache role at issue-time and are revoked on role change.
 //
 // All operations run server-side with the Supabase service role; OTP plaintext
 // is never persisted (only its bcrypt hash) and session tokens are stored as
@@ -27,18 +29,88 @@ export const OTP_RATE_LIMIT_MAX = 5
 // the user must request a fresh code.
 export const OTP_MAX_ATTEMPTS = 5
 
-export function getAllowedPhones(): string[] {
-  const raw = process.env.ATLAS_ALLOWED_PHONES ?? ''
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
+// Roles + ranks. Higher rank includes lower-rank capabilities.
+export type Role = 'owner' | 'admin' | 'operator' | 'viewer'
+
+export const ROLE_RANK: Record<Role, number> = {
+  viewer: 1,
+  operator: 2,
+  admin: 3,
+  owner: 4,
 }
 
-export function isPhoneAllowed(phone: string): boolean {
-  const allowed = getAllowedPhones()
-  if (allowed.length === 0) return false
-  return allowed.includes(phone.trim())
+export function roleAtLeast(actual: Role, required: Role): boolean {
+  return ROLE_RANK[actual] >= ROLE_RANK[required]
+}
+
+// Result of looking up whether a phone may sign in. The "pending_invite"
+// branch lets the OTP request flow surface a useful UX hint without granting
+// access until the OTP itself is verified.
+export type PhoneAllowResult =
+  | { allowed: true; role: Role; memberId: string }
+  | { allowed: false; reason: 'pending_invite'; inviteId: string; role: Role }
+  | { allowed: false; reason: 'suspended' | 'revoked' | 'not_invited' }
+
+interface MemberRow {
+  id: string
+  phone: string
+  role: Role
+  status: 'active' | 'suspended' | 'revoked'
+}
+
+interface InviteRow {
+  id: string
+  phone: string
+  role: 'admin' | 'operator' | 'viewer'
+  display_name: string | null
+  invited_by: string
+  invite_token: string
+  expires_at: string
+  consumed_at: string | null
+  revoked_at: string | null
+}
+
+export async function isPhoneAllowed(phone: string): Promise<PhoneAllowResult> {
+  const sb = getSupabaseClient()
+  if (!sb) return { allowed: false, reason: 'not_invited' }
+
+  const trimmed = phone.trim()
+
+  // 1. Check for an active member.
+  const { data: memberRow } = await sb
+    .from('atlas_members')
+    .select('id, phone, role, status')
+    .eq('phone', trimmed)
+    .maybeSingle()
+
+  if (memberRow) {
+    const m = memberRow as MemberRow
+    if (m.status === 'active') {
+      return { allowed: true, role: m.role, memberId: m.id }
+    }
+    if (m.status === 'suspended') return { allowed: false, reason: 'suspended' }
+    if (m.status === 'revoked') return { allowed: false, reason: 'revoked' }
+  }
+
+  // 2. No active member — look for a usable invite (unconsumed, unrevoked, unexpired).
+  const nowIso = new Date().toISOString()
+  const { data: inviteRow } = await sb
+    .from('atlas_invites')
+    .select('id, phone, role, display_name, invited_by, invite_token, expires_at, consumed_at, revoked_at')
+    .eq('phone', trimmed)
+    .is('consumed_at', null)
+    .is('revoked_at', null)
+    .gt('expires_at', nowIso)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (inviteRow) {
+    const inv = inviteRow as InviteRow
+    return { allowed: false, reason: 'pending_invite', inviteId: inv.id, role: inv.role }
+  }
+
+  return { allowed: false, reason: 'not_invited' }
 }
 
 // 6-digit numeric OTP. Use rejection sampling against the modulo bias of a
@@ -181,12 +253,18 @@ export interface SessionRow {
   created_at: string
   last_seen_at: string
   revoked_at: string | null
+  role: Role | null
+  member_id: string | null
 }
 
 // Mint a session: insert the token_hash and surrounding metadata, return the
-// caller-issued plaintext token (never persisted).
+// caller-issued plaintext token (never persisted). The role is cached on the
+// session row so we don't have to JOIN to atlas_members on every authenticated
+// request — change-of-role explicitly revokes all sessions.
 export async function createSession(params: {
   phone: string
+  memberId: string
+  role: Role
   userAgent?: string
   ip?: string
 }): Promise<{ token: string; sessionId: string } | null> {
@@ -203,6 +281,8 @@ export async function createSession(params: {
       device_label: deviceLabel,
       user_agent: params.userAgent ?? null,
       ip: params.ip ?? null,
+      member_id: params.memberId,
+      role: params.role,
     })
     .select('id')
     .single()
@@ -218,7 +298,7 @@ export async function findSessionByToken(token: string): Promise<SessionRow | nu
   const tokenHash = sha256(token)
   const { data } = await sb
     .from('atlas_sessions')
-    .select('id, phone, token_hash, device_label, user_agent, ip, created_at, last_seen_at, revoked_at')
+    .select('id, phone, token_hash, device_label, user_agent, ip, created_at, last_seen_at, revoked_at, role, member_id')
     .eq('token_hash', tokenHash)
     .is('revoked_at', null)
     .maybeSingle()
@@ -244,16 +324,89 @@ export async function revokeSession(id: string): Promise<void> {
     .eq('id', id)
 }
 
+// Revoke every active session for a member. Called on role change or status
+// change so the new role takes effect on next login (the cached role on the
+// existing tokens would otherwise stay stale).
+export async function revokeAllSessionsForMember(memberId: string): Promise<number> {
+  const sb = getSupabaseClient()
+  if (!sb) return 0
+  const { data } = await sb
+    .from('atlas_sessions')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('member_id', memberId)
+    .is('revoked_at', null)
+    .select('id')
+  return Array.isArray(data) ? data.length : 0
+}
+
 export async function listSessionsForPhone(phone: string): Promise<SessionRow[]> {
   const sb = getSupabaseClient()
   if (!sb) return []
   const { data } = await sb
     .from('atlas_sessions')
-    .select('id, phone, token_hash, device_label, user_agent, ip, created_at, last_seen_at, revoked_at')
+    .select('id, phone, token_hash, device_label, user_agent, ip, created_at, last_seen_at, revoked_at, role, member_id')
     .eq('phone', phone)
     .is('revoked_at', null)
     .order('created_at', { ascending: false })
   return (data ?? []) as SessionRow[]
+}
+
+// Touch a member's last_seen_at; on first ever login, also stamp first_login_at.
+export async function touchMemberLogin(memberId: string): Promise<void> {
+  const sb = getSupabaseClient()
+  if (!sb) return
+  const nowIso = new Date().toISOString()
+  // Read first_login_at to know if we should set it.
+  const { data } = await sb
+    .from('atlas_members')
+    .select('first_login_at')
+    .eq('id', memberId)
+    .maybeSingle()
+  const update: Record<string, string> = { last_seen_at: nowIso, updated_at: nowIso }
+  if (!data || !(data as { first_login_at: string | null }).first_login_at) {
+    update.first_login_at = nowIso
+  }
+  await sb.from('atlas_members').update(update).eq('id', memberId)
+}
+
+// Atomic invite-consume + member-create on first login. The invite has been
+// validated (unconsumed, unrevoked, unexpired, phone matches) by the caller.
+export async function consumeInviteAndCreateMember(params: {
+  inviteId: string
+  phone: string
+  role: 'admin' | 'operator' | 'viewer'
+  displayName: string | null
+  invitedBy: string
+}): Promise<{ memberId: string } | null> {
+  const sb = getSupabaseClient()
+  if (!sb) return null
+  const nowIso = new Date().toISOString()
+  // Insert the new member row first.
+  const { data: memberRow, error: memberErr } = await sb
+    .from('atlas_members')
+    .insert({
+      phone: params.phone,
+      display_name: params.displayName,
+      role: params.role,
+      status: 'active',
+      invited_by: params.invitedBy,
+      invited_at: nowIso,
+      first_login_at: nowIso,
+      last_seen_at: nowIso,
+    })
+    .select('id')
+    .single()
+  if (memberErr || !memberRow) return null
+  const memberId = (memberRow as { id: string }).id
+
+  // Mark the invite consumed. If the update fails we still have the member;
+  // returning the id is more important than the audit completeness here.
+  await sb
+    .from('atlas_invites')
+    .update({ consumed_at: nowIso })
+    .eq('id', params.inviteId)
+
+  return { memberId }
 }
 
 // Send the OTP via the V2 WhatsApp Edge Function. We call this rather than

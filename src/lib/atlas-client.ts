@@ -59,10 +59,15 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 // AtlasAuthGuard validates the token on mount via fetchAtlasMe().
 // ──────────────────────────────────────────────────────────────────────────
 
+export type AtlasRole = 'owner' | 'admin' | 'operator' | 'viewer'
+
 export interface AtlasMe {
   phone: string
   session_id: string
   device_label: string | null
+  role: AtlasRole
+  member_id: string | null
+  display_name: string | null
   created_at: string | null
   last_seen_at: string | null
 }
@@ -671,3 +676,148 @@ export function streamChat(
 
   return () => controller.abort()
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Team management (Phase 1.10ao)
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface AtlasTeamMember {
+  id: string
+  phone: string
+  display_name: string | null
+  role: AtlasRole
+  status: 'active' | 'suspended' | 'revoked'
+  invited_by: string | null
+  invited_at: string
+  first_login_at: string | null
+  last_seen_at: string | null
+  notes: string | null
+  active_session_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AtlasTeamInvite {
+  id: string
+  phone: string
+  role: 'admin' | 'operator' | 'viewer'
+  display_name: string | null
+  invited_by: string
+  expires_at: string
+  consumed_at: string | null
+  revoked_at: string | null
+  created_at: string
+}
+
+export interface AtlasTeamAuditEntry {
+  id: string
+  actor_id: string | null
+  actor_phone: string | null
+  action: string
+  target_member_id: string | null
+  target_invite_id: string | null
+  target_phone: string | null
+  details: Record<string, unknown> | null
+  created_at: string
+}
+
+export async function fetchTeamMembers(): Promise<AtlasTeamMember[]> {
+  const data = await fetchJson<{ members?: AtlasTeamMember[] }>(
+    `${ATLAS_URL}/atlas/team/members`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.members) ? data!.members! : []
+}
+
+export async function fetchTeamInvites(): Promise<AtlasTeamInvite[]> {
+  const data = await fetchJson<{ invites?: AtlasTeamInvite[] }>(
+    `${ATLAS_URL}/atlas/team/invites`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.invites) ? data!.invites! : []
+}
+
+export interface CreateInviteResponse {
+  ok: true
+  invite: {
+    id: string
+    phone: string
+    role: 'admin' | 'operator' | 'viewer'
+    display_name: string | null
+    expires_at: string
+    created_at: string
+  }
+  is_new: boolean
+  whatsapp_sent: boolean
+}
+
+export async function createTeamInvite(params: {
+  phone: string
+  role: 'admin' | 'operator' | 'viewer'
+  display_name?: string
+}): Promise<CreateInviteResponse> {
+  return fetchJson<CreateInviteResponse>(`${ATLAS_URL}/atlas/team/invite`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+}
+
+export async function revokeTeamInvite(id: string): Promise<void> {
+  await fetchJson<{ ok: true; id: string }>(
+    `${ATLAS_URL}/atlas/team/invites/${encodeURIComponent(id)}/revoke`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function updateTeamMember(
+  id: string,
+  patch: {
+    role?: AtlasRole
+    display_name?: string | null
+    status?: 'active' | 'suspended' | 'revoked'
+    notes?: string | null
+  },
+): Promise<{ ok: true; member: AtlasTeamMember; sessions_revoked: number }> {
+  return fetchJson<{ ok: true; member: AtlasTeamMember; sessions_revoked: number }>(
+    `${ATLAS_URL}/atlas/team/members/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  )
+}
+
+export async function revokeAllMemberSessions(
+  id: string,
+): Promise<{ ok: true; sessions_revoked: number }> {
+  return fetchJson<{ ok: true; sessions_revoked: number }>(
+    `${ATLAS_URL}/atlas/team/members/${encodeURIComponent(id)}/sessions/revoke-all`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function fetchTeamAuditLog(): Promise<AtlasTeamAuditEntry[]> {
+  const data = await fetchJson<{ entries?: AtlasTeamAuditEntry[] }>(
+    `${ATLAS_URL}/atlas/team/audit-log`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.entries) ? data!.entries! : []
+}
+
+export async function requestElevation(params: {
+  tool: string
+  required_role: AtlasRole
+  context?: string
+}): Promise<{ ok: true; whatsapp_sent: boolean }> {
+  return fetchJson<{ ok: true; whatsapp_sent: boolean }>(
+    `${ATLAS_URL}/atlas/team/request-elevation`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    },
+  )
+}
+

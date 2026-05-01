@@ -30,7 +30,7 @@ interface CockpitChatProps {
   prefill?: string
   onPrefillConsumed?: () => void
   tts?: UseTtsResult
-  onSlashNavigate: (tab: 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts') => void
+  onSlashNavigate: (tab: 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team') => void
 }
 
 const SAMPLE_PROMPTS = [

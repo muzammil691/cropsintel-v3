@@ -23,6 +23,7 @@ const AtlasAgentsTab = lazy(() => import('./tabs/AtlasAgentsTab'))
 const AtlasAuditTab = lazy(() => import('./tabs/AtlasAuditTab'))
 const AtlasWorkflowTab = lazy(() => import('./tabs/AtlasWorkflowTab'))
 const AtlasArtifactsTab = lazy(() => import('./tabs/AtlasArtifactsTab'))
+const AtlasTeamTab = lazy(() => import('./tabs/AtlasTeamTab'))
 
 const VALID_TABS: ReadonlyArray<AtlasTabKey> = ATLAS_TABS.map((t) => t.key)
 const DEFAULT_TAB: AtlasTabKey = 'plan'
@@ -95,13 +96,14 @@ export function AtlasCockpit() {
       audit: failed24h,
       workflows: 'mute' as const,
       artifacts: pendingArtifacts,
+      team: 'mute' as const,
     }
   }, [artifacts.pendingSpecs.length, artifacts.designAudits.length, artifacts.openForks.length, status?.failed_24h])
 
   // Handler invoked when a tool inside the chat needs to deep-link to a tab
   // (e.g. /plan, /workflow). The slash-menu routes navigation commands here.
   const handleSlashNavigate = useCallback(
-    (tab: 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts') => {
+    (tab: AtlasTabKey) => {
       setActiveTab(tab)
     },
     [setActiveTab],
@@ -248,6 +250,8 @@ function ActiveTab({
       return <AtlasWorkflowTab />
     case 'artifacts':
       return <AtlasArtifactsTab artifacts={artifacts} />
+    case 'team':
+      return <AtlasTeamTab />
   }
 }
 

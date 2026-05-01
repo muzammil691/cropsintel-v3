@@ -29,6 +29,7 @@ const Atlas = lazy(() => import("./pages/Atlas"))
 const AtlasBrain = lazy(() => import("./pages/AtlasBrain"))
 const AtlasPD = lazy(() => import("./pages/AtlasPD"))
 const AtlasLogin = lazy(() => import("./pages/atlas/AtlasLogin"))
+const AtlasInviteAccept = lazy(() => import("./pages/atlas/AtlasInviteAccept"))
 const NotFound = lazy(() => import("./pages/NotFound"))
 const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
@@ -123,6 +124,9 @@ export default function App() {
 
           {/* Atlas login — public, but redirects to /atlas if a session token already exists */}
           <Route path="/atlas/login" element={<AtlasLogin />} />
+
+          {/* Atlas invite acceptance landing — explains the flow then forwards to /atlas/login */}
+          <Route path="/atlas/invite" element={<AtlasInviteAccept />} />
 
           {/* Atlas admin — gated by WhatsApp-OTP session (Phase 1.10aj). */}
           <Route path="/atlas" element={<AtlasAuthGuard><Atlas /></AtlasAuthGuard>} />
