@@ -29,6 +29,9 @@ export interface DesignerReview {
   }
   costUsd: number
   durationMs: number
+  headBefore?: string
+  headAfter?: string
+  screenshotUrl?: string
 }
 
 export interface ChangedFile {

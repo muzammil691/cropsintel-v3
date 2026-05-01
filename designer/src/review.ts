@@ -129,6 +129,9 @@ export async function auditCommit(args: {
       aiJudgment: {},
       costUsd: 0,
       durationMs: Date.now() - startedAt,
+      headBefore: args.headBefore,
+      headAfter: args.headAfter,
+      screenshotUrl: args.screenshotUrl,
     }
   }
 
@@ -187,5 +190,8 @@ export async function auditCommit(args: {
     },
     costUsd: claude.costUsd + vision.costUsd,
     durationMs: Date.now() - startedAt,
+    headBefore: args.headBefore,
+    headAfter: args.headAfter,
+    screenshotUrl: args.screenshotUrl,
   }
 }

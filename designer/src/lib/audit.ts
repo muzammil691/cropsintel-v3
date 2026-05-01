@@ -26,19 +26,28 @@ export async function writeDesignerRun(review: DesignerReview): Promise<void> {
     }
   }
 
-  const { error } = await supabase.from('designer_runs').insert({
-    task_id: review.taskId,
-    operation: review.operation,
-    verdict: review.verdict,
-    confidence: review.confidence,
-    gaps: review.gaps,
-    ai_judgment: aiJudgment,
-    cost_usd: review.costUsd,
-    duration_ms: review.durationMs,
-  })
+  const { data, error } = await supabase
+    .from('designer_runs')
+    .insert({
+      task_id: review.taskId,
+      operation: review.operation,
+      verdict: review.verdict,
+      confidence: review.confidence,
+      gaps: review.gaps,
+      ai_judgment: aiJudgment,
+      cost_usd: review.costUsd,
+      duration_ms: review.durationMs,
+      head_before: review.headBefore ?? null,
+      head_after: review.headAfter ?? null,
+      screenshot_url: review.screenshotUrl ?? null,
+    })
+    .select('id')
+    .single()
 
   if (error) {
     console.error('[designer] Failed to write audit log:', error.message)
+  } else if (data?.id) {
+    console.log(`[designer] audit row written id=${data.id}`)
   }
 
   // Cost tracking — atlas_cost_log under service='designer'
