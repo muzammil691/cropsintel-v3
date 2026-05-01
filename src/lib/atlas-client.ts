@@ -1,15 +1,32 @@
 // Atlas API client — wraps all HTTP calls to the Atlas Railway service.
-// SECURITY NOTE: VITE_ATLAS_API_TOKEN is baked into the client bundle.
-// This is acceptable for single-user v0.1 (Muzammil only). Replace with a
-// Supabase Auth-gated proxy in a follow-up task. See .agent/questions/phase-1.10k-q.md.
+//
+// Phase 1.10aj: tokens live in localStorage under ATLAS_SESSION_TOKEN_KEY and
+// are issued by /atlas/auth/verify-otp after a WhatsApp OTP login. We no
+// longer read VITE_ATLAS_API_TOKEN — that value used to be baked into the
+// GitHub Pages bundle and was extractable by anyone viewing source.
 
 const ATLAS_URL =
   import.meta.env.VITE_ATLAS_URL ??
   'https://courteous-simplicity-production.up.railway.app'
-const ATLAS_TOKEN = import.meta.env.VITE_ATLAS_API_TOKEN as string | undefined
+
+export const ATLAS_SESSION_TOKEN_KEY = 'atlas_session_token'
+
+export class AtlasUnauthorizedError extends Error {
+  status = 401
+  constructor(message = 'Atlas session is unauthorized') {
+    super(message)
+    this.name = 'AtlasUnauthorizedError'
+  }
+}
+
+function getSessionToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(ATLAS_SESSION_TOKEN_KEY)
+}
 
 function authHeaders(): Record<string, string> {
-  return ATLAS_TOKEN ? { Authorization: `Bearer ${ATLAS_TOKEN}` } : {}
+  const token = getSessionToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 // Centralized JSON fetch — never returns non-OK garbage as parsed JSON,
@@ -18,6 +35,10 @@ function authHeaders(): Record<string, string> {
 // a useful Error.
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
+  if (res.status === 401) {
+    const body = await res.text().catch(() => '')
+    throw new AtlasUnauthorizedError(`${init?.method ?? 'GET'} ${url} → 401${body ? `: ${body.slice(0, 200)}` : ''}`)
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`${init?.method ?? 'GET'} ${url} → ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`)
@@ -29,6 +50,90 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new Error(`${url} returned non-JSON body: ${text.slice(0, 200)}`)
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Auth (Phase 1.10aj) — WhatsApp OTP issued by Atlas server.
+// Login flow: requestAtlasOtp(phone) → user receives WhatsApp code →
+//             verifyAtlasOtp(phone, code) → token persisted to localStorage.
+// AtlasAuthGuard validates the token on mount via fetchAtlasMe().
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface AtlasMe {
+  phone: string
+  session_id: string
+  device_label: string | null
+  created_at: string | null
+  last_seen_at: string | null
+}
+
+export interface AtlasSession {
+  id: string
+  device_label: string | null
+  user_agent: string | null
+  created_at: string
+  last_seen_at: string
+  current: boolean
+}
+
+export async function requestAtlasOtp(phone: string): Promise<{ ok: true; expires_in: number }> {
+  return fetchJson<{ ok: true; expires_in: number }>(`${ATLAS_URL}/atlas/auth/request-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  })
+}
+
+export async function verifyAtlasOtp(
+  phone: string,
+  code: string,
+): Promise<{ ok: true; token: string; session_id: string }> {
+  return fetchJson<{ ok: true; token: string; session_id: string }>(
+    `${ATLAS_URL}/atlas/auth/verify-otp`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code }),
+    },
+  )
+}
+
+export async function fetchAtlasMe(): Promise<AtlasMe> {
+  return fetchJson<AtlasMe>(`${ATLAS_URL}/atlas/auth/me`, {
+    headers: authHeaders(),
+  })
+}
+
+export async function logoutAtlas(): Promise<void> {
+  try {
+    await fetchJson<{ ok: true }>(`${ATLAS_URL}/atlas/auth/logout`, {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+  } catch {
+    // Even if the server call fails, we still clear local state.
+  }
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(ATLAS_SESSION_TOKEN_KEY)
+  }
+}
+
+export async function fetchAtlasSessions(): Promise<AtlasSession[]> {
+  const data = await fetchJson<{ sessions?: AtlasSession[] }>(
+    `${ATLAS_URL}/atlas/auth/sessions`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.sessions) ? data!.sessions! : []
+}
+
+export async function revokeAtlasSession(id: string): Promise<void> {
+  await fetchJson<{ ok: true; id: string }>(
+    `${ATLAS_URL}/atlas/auth/sessions/${encodeURIComponent(id)}/revoke`,
+    {
+      method: 'POST',
+      headers: authHeaders(),
+    },
+  )
 }
 
 export type TrustMode = 'passive' | 'chat' | 'confirm' | 'auto' | 'stopped'
@@ -402,7 +507,8 @@ export function openTtsWs(
 ): TtsWsHandle {
   const wsUrl = ATLAS_URL.replace(/^http/, 'ws') + '/atlas/tts-ws'
   // Token is passed via Sec-WebSocket-Protocol — server validates `bearer.<token>` and echoes back.
-  const protocols = ATLAS_TOKEN ? [`bearer.${ATLAS_TOKEN}`] : undefined
+  const sessionToken = getSessionToken()
+  const protocols = sessionToken ? [`bearer.${sessionToken}`] : undefined
   let state: 'connecting' | 'open' | 'closed' = 'connecting'
   let ws: WebSocket
   try {

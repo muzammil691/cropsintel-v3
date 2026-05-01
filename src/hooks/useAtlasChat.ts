@@ -5,8 +5,28 @@ import {
   type ChatMessage,
   type ToolCallChip,
 } from '@/lib/atlas-client'
+import { supabase } from '@/lib/supabase'
 
 const DEFAULT_THREAD = 'web-default'
+
+// Server stores roles as 'user' | 'atlas'; the UI consumes 'user' | 'atlas' too,
+// but fetchChatHistory's GET /atlas/conversations endpoint normalises atlas →
+// 'assistant' for some callers. The Realtime subscription gets RAW DB rows, so
+// we do the normalisation here.
+function normaliseRealtimeRow(row: {
+  id: string
+  role: string
+  content: string
+  metadata?: Record<string, unknown> | null
+  created_at: string
+}): ChatMessage {
+  return {
+    id: row.id,
+    role: row.role === 'atlas' ? 'atlas' : 'user',
+    content: row.content,
+    created_at: row.created_at,
+  }
+}
 
 export interface UseAtlasChatResult {
   messages: ChatMessage[]
@@ -39,6 +59,49 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
       })
     return () => {
       cancelled = true
+    }
+  }, [threadId])
+
+  // Phase 1.10aj — Live multi-device sync. The browser opens a Supabase
+  // Realtime channel scoped to this thread; INSERTs from any source (the
+  // user's phone via WhatsApp, another open tab, the live-mode session)
+  // appear here within ~1–2 s. We dedup against optimistic local rows so the
+  // sender's own message doesn't appear twice.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`atlas-chat:${threadId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'atlas_conversations',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload) => {
+          const raw = payload.new as {
+            id: string
+            role: string
+            content: string
+            metadata?: Record<string, unknown> | null
+            created_at: string
+          }
+          if (!raw?.id) return
+          const incoming = normaliseRealtimeRow(raw)
+          setMessages((prev) => {
+            // Already present (server echo of our optimistic row, or a second
+            // delivery on reconnect) → skip.
+            if (prev.some((m) => m.id === incoming.id)) return prev
+            // If we're mid-stream and the latest assistant message is the
+            // optimistic placeholder we just appended, leave it alone — the
+            // SSE stream will keep filling its content. Avoid double-rendering.
+            return [...prev, incoming]
+          })
+        },
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
     }
   }, [threadId])
 

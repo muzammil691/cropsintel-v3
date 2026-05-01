@@ -11,8 +11,27 @@ import {
   sendWhatsAppMedia,
   downloadTwilioMedia,
   validateTwilioSignature,
-  phoneToThreadId,
 } from './lib/twilio'
+import {
+  isPhoneAllowed,
+  generateOtpCode,
+  insertOtp,
+  countRecentOtpRequests,
+  findActiveOtp,
+  compareOtp,
+  incrementOtpAttempts,
+  markOtpUsed,
+  burnAllOtpsForPhone,
+  createSession,
+  findSessionByToken,
+  touchSessionLastSeen,
+  revokeSession,
+  listSessionsForPhone,
+  sendOtpViaWhatsApp,
+  OTP_TTL_SECONDS,
+  OTP_MAX_ATTEMPTS,
+  OTP_RATE_LIMIT_MAX,
+} from './lib/auth'
 import { uploadVoiceNote, VOICE_OUT_MAX_BYTES } from './lib/voice-note-storage'
 import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
@@ -59,10 +78,52 @@ function getSystemPrompt(): string {
   return buildHonestyPrompt({ trustMode: getCurrentMode() })
 }
 
-function authenticate(req: IncomingMessage): boolean {
-  if (!ATLAS_API_TOKEN) return true
-  const auth = req.headers['authorization'] ?? ''
-  return auth === `Bearer ${ATLAS_API_TOKEN}`
+// Authenticated principal — either a real user session (phone) or the
+// service-to-service legacy bearer (Builder, conductor cron). Retains a
+// `sessionId === 'service'` sentinel so the rest of the server can branch.
+export interface AuthPrincipal {
+  phone: string
+  sessionId: string
+}
+
+// Phase 1.10aj — Atlas now requires either a user session token (issued via
+// /atlas/auth/verify-otp) OR the service bearer (ATLAS_API_TOKEN, used by
+// Builder + conductor cron). User-issued tokens are 64-hex-char opaque random
+// strings; only the sha256 hash is persisted. The legacy ATLAS_API_TOKEN path
+// is kept exactly for the in-cluster service caller and nothing else.
+async function authenticate(req: IncomingMessage): Promise<AuthPrincipal | null> {
+  const auth = (req.headers['authorization'] as string | undefined) ?? ''
+  if (!auth.startsWith('Bearer ')) return null
+  const token = auth.slice(7).trim()
+  if (!token) return null
+
+  // Service bearer — used by Builder and conductor cron. Only this exact
+  // value, never anything user-derivable.
+  if (ATLAS_API_TOKEN && token === ATLAS_API_TOKEN) {
+    return { phone: 'service', sessionId: 'service' }
+  }
+
+  // User session token — look up sha256(token) in atlas_sessions.
+  const session = await findSessionByToken(token)
+  if (!session) return null
+
+  // Fire-and-forget last_seen touch so /atlas/auth/sessions reflects activity.
+  touchSessionLastSeen(session.id).catch(() => {})
+
+  return { phone: session.phone, sessionId: session.id }
+}
+
+// Convenience: return 401 + null when unauthenticated, principal when ok.
+async function requireAuth(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<AuthPrincipal | null> {
+  const principal = await authenticate(req)
+  if (!principal) {
+    json(res, 401, { error: 'Unauthorized' })
+    return null
+  }
+  return principal
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -337,10 +398,7 @@ export async function runChatTurn(params: {
 }
 
 export async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authenticate(req)) {
-    json(res, 401, { error: 'Unauthorized' })
-    return
-  }
+  if (!(await requireAuth(req, res))) return
 
   const body = await readBody(req)
   let payload: { thread_id: string; channel: string; message: string }
@@ -500,9 +558,15 @@ interface ProcessParams {
   mediaType0?: string
 }
 
+// Single-user system (Phase 1.10aj): collapse all channels onto one thread so
+// the user's phone WhatsApp, the open web tab, and live mode all share one
+// timeline. This is what the Realtime subscription on the dashboard listens
+// to — change here also requires updating the channel filter in the browser.
+const ATLAS_SINGLE_THREAD_ID = 'web-default'
+
 async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
   const { from, body, messageSid, numMedia, mediaUrl0, mediaType0 } = params
-  const threadId = phoneToThreadId(from)
+  const threadId = ATLAS_SINGLE_THREAD_ID
   const sb = getSupabaseClient()
   const fromPhone = from.replace('whatsapp:', '')
 
@@ -718,7 +782,7 @@ async function sendAtlasReply(params: {
 }
 
 async function handleTtsVoices(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+  if (!(await requireAuth(req, res))) return
   try {
     const voices = await listVoices()
     const summary = voices.map(v => ({
@@ -735,7 +799,7 @@ async function handleTtsVoices(req: IncomingMessage, res: ServerResponse): Promi
 }
 
 async function handleTts(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+  if (!(await requireAuth(req, res))) return
 
   const body = await readBody(req)
   let payload: { text?: string; voice_id?: string }
@@ -807,7 +871,7 @@ async function handleTts(req: IncomingMessage, res: ServerResponse): Promise<voi
 }
 
 async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+  if (!(await requireAuth(req, res))) return
 
   const contentType = req.headers['content-type'] ?? ''
   const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
@@ -884,8 +948,7 @@ async function handleStt(req: IncomingMessage, res: ServerResponse): Promise<voi
 // Browser opens its own WS to `/atlas/tts-ws` (Bearer token in Sec-WebSocket-Protocol);
 // this handler opens an upstream WS to ElevenLabs `stream-input`, pipes text → audio
 // chunks back to the dashboard, and tracks character count for cost logging.
-function authenticateWs(req: IncomingMessage): { ok: boolean; protocol?: string } {
-  if (!ATLAS_API_TOKEN) return { ok: true }
+async function authenticateWs(req: IncomingMessage): Promise<{ ok: boolean; protocol?: string }> {
   // Browsers can't set a Bearer header on a WebSocket; clients pass the token via
   // Sec-WebSocket-Protocol as `bearer.<token>` (echoed back as the chosen subprotocol).
   const proto = req.headers['sec-websocket-protocol']
@@ -894,7 +957,17 @@ function authenticateWs(req: IncomingMessage): { ok: boolean; protocol?: string 
     .map((s) => s.trim())
     .filter(Boolean)
   for (const o of offers) {
-    if (o.startsWith('bearer.') && o.slice('bearer.'.length) === ATLAS_API_TOKEN) {
+    if (!o.startsWith('bearer.')) continue
+    const token = o.slice('bearer.'.length)
+    if (!token) continue
+    // Service bearer for Builder / cron callers.
+    if (ATLAS_API_TOKEN && token === ATLAS_API_TOKEN) {
+      return { ok: true, protocol: o }
+    }
+    // User session token issued by /atlas/auth/verify-otp.
+    const session = await findSessionByToken(token)
+    if (session) {
+      touchSessionLastSeen(session.id).catch(() => {})
       return { ok: true, protocol: o }
     }
   }
@@ -915,15 +988,17 @@ function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
       socket.destroy()
       return
     }
-    const auth = authenticateWs(req)
-    if (!auth.ok) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-      socket.destroy()
-      return
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req, auth.protocol)
-    })
+    void (async () => {
+      const auth = await authenticateWs(req)
+      if (!auth.ok) {
+        try { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n') } catch { /* ignore */ }
+        socket.destroy()
+        return
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req, auth.protocol)
+      })
+    })()
   })
 
   wss.on('connection', (ws: WsWebSocket, _req: IncomingMessage, protocol?: string) => {
@@ -1113,8 +1188,190 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // ─── Auth endpoints (Phase 1.10aj) ──────────────────────────────────────
+    // Public: /atlas/auth/request-otp, /atlas/auth/verify-otp.
+    // Auth required: logout, me, sessions, sessions/:id/revoke.
+
+    if (url === '/atlas/auth/request-otp' && method === 'POST') {
+      const body = await readBody(req)
+      let payload: { phone?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      const phone = (payload.phone ?? '').trim()
+      if (!phone) { json(res, 400, { error: 'phone required' }); return }
+      // Allowlist: never allow OTP requests for anything outside the configured list.
+      if (!isPhoneAllowed(phone)) {
+        json(res, 403, { error: 'phone_not_allowed' })
+        return
+      }
+      // Rate limit BEFORE generating + sending so floods don't burn Twilio cost.
+      const recent = await countRecentOtpRequests(phone)
+      if (recent >= OTP_RATE_LIMIT_MAX) {
+        json(res, 429, { error: 'rate_limited', retry_after_sec: 15 * 60 })
+        return
+      }
+      const code = generateOtpCode()
+      const inserted = await insertOtp(phone, code)
+      if (!inserted) {
+        json(res, 503, { error: 'otp_persist_failed' })
+        return
+      }
+      const sent = await sendOtpViaWhatsApp(phone, code)
+      if (!sent) {
+        // Don't leak that the row was created — but we must respond honestly.
+        json(res, 502, { error: 'whatsapp_send_failed' })
+        return
+      }
+      json(res, 200, { ok: true, expires_in: OTP_TTL_SECONDS })
+      return
+    }
+
+    if (url === '/atlas/auth/verify-otp' && method === 'POST') {
+      const body = await readBody(req)
+      let payload: { phone?: string; code?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      const phone = (payload.phone ?? '').trim()
+      const code = (payload.code ?? '').trim()
+      if (!phone || !code) { json(res, 400, { error: 'phone and code required' }); return }
+      if (!isPhoneAllowed(phone)) { json(res, 401, { error: 'invalid_credentials' }); return }
+
+      const otp = await findActiveOtp(phone)
+      if (!otp) { json(res, 401, { error: 'invalid_credentials' }); return }
+
+      // Attempt cap — burn ALL outstanding OTPs for this phone so the attacker
+      // can't grind on any of the rows they may have stacked up.
+      if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+        await burnAllOtpsForPhone(phone)
+        json(res, 401, { error: 'too_many_attempts' })
+        return
+      }
+
+      const matches = await compareOtp(code, otp.code_hash)
+      if (!matches) {
+        await incrementOtpAttempts(otp.id, otp.attempts)
+        json(res, 401, { error: 'invalid_credentials' })
+        return
+      }
+
+      // Mark this OTP used + mint a session.
+      await markOtpUsed(otp.id)
+      // Defense-in-depth: also burn any other unused codes for this phone so a
+      // recently issued spare can't be used to mint a second session silently.
+      await burnAllOtpsForPhone(phone)
+
+      const userAgent = (req.headers['user-agent'] as string | undefined) ?? null
+      const fwd = (req.headers['x-forwarded-for'] as string | undefined)
+        ?? (req.socket?.remoteAddress ?? '')
+      const ip = (typeof fwd === 'string' ? fwd.split(',')[0] : '').trim() || null
+
+      const session = await createSession({
+        phone,
+        userAgent: userAgent ?? undefined,
+        ip: ip ?? undefined,
+      })
+      if (!session) { json(res, 503, { error: 'session_persist_failed' }); return }
+
+      json(res, 200, { ok: true, token: session.token, session_id: session.sessionId })
+      return
+    }
+
+    if (url === '/atlas/auth/logout' && method === 'POST') {
+      const principal = await authenticate(req)
+      if (!principal || principal.sessionId === 'service') {
+        // Service callers don't have a real session to revoke. Return 401 so
+        // the dashboard treats it as a failed logout and clears local state.
+        json(res, 401, { error: 'Unauthorized' })
+        return
+      }
+      await revokeSession(principal.sessionId)
+      json(res, 200, { ok: true })
+      return
+    }
+
+    if (url === '/atlas/auth/me' && method === 'GET') {
+      const principal = await authenticate(req)
+      if (!principal) { json(res, 401, { error: 'Unauthorized' }); return }
+      // Service callers — return a stub so internal probes can still introspect.
+      if (principal.sessionId === 'service') {
+        json(res, 200, {
+          phone: 'service',
+          session_id: 'service',
+          device_label: 'service',
+          created_at: null,
+          last_seen_at: null,
+        })
+        return
+      }
+      // Look the session row back up to surface device_label / timestamps to the UI.
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+      const { data } = await sb
+        .from('atlas_sessions')
+        .select('id, phone, device_label, created_at, last_seen_at')
+        .eq('id', principal.sessionId)
+        .maybeSingle()
+      if (!data) { json(res, 401, { error: 'Unauthorized' }); return }
+      const row = data as {
+        id: string
+        phone: string
+        device_label: string | null
+        created_at: string
+        last_seen_at: string
+      }
+      json(res, 200, {
+        phone: row.phone,
+        session_id: row.id,
+        device_label: row.device_label,
+        created_at: row.created_at,
+        last_seen_at: row.last_seen_at,
+      })
+      return
+    }
+
+    if (url === '/atlas/auth/sessions' && method === 'GET') {
+      const principal = await authenticate(req)
+      if (!principal) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (principal.sessionId === 'service') { json(res, 200, { sessions: [] }); return }
+      const rows = await listSessionsForPhone(principal.phone)
+      json(res, 200, {
+        sessions: rows.map((r) => ({
+          id: r.id,
+          device_label: r.device_label,
+          user_agent: r.user_agent,
+          created_at: r.created_at,
+          last_seen_at: r.last_seen_at,
+          current: r.id === principal.sessionId,
+        })),
+      })
+      return
+    }
+
+    {
+      const revokeMatch = url.match(/^\/atlas\/auth\/sessions\/([0-9a-f-]{36})\/revoke$/i)
+      if (revokeMatch && method === 'POST') {
+        const principal = await authenticate(req)
+        if (!principal) { json(res, 401, { error: 'Unauthorized' }); return }
+        if (principal.sessionId === 'service') { json(res, 403, { error: 'forbidden' }); return }
+        // Authorize: only sessions belonging to the same phone may be revoked.
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+        const targetId = revokeMatch[1]
+        const { data } = await sb
+          .from('atlas_sessions')
+          .select('id, phone')
+          .eq('id', targetId)
+          .maybeSingle()
+        if (!data || (data as { phone: string }).phone !== principal.phone) {
+          json(res, 404, { error: 'not_found' })
+          return
+        }
+        await revokeSession(targetId)
+        json(res, 200, { ok: true, id: targetId })
+        return
+      }
+    }
+
     if (url === '/atlas/mode' && method === 'GET') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       json(res, 200, getModeMetadata())
       return
     }
@@ -1123,7 +1380,7 @@ export async function startServer(): Promise<void> {
     // Returns the most recent N messages in chronological order so the UI can
     // re-hydrate the chat after a page refresh.
     if (method === 'GET' && url.startsWith('/atlas/conversations/')) {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       const parsed = new URL(url, 'http://_')
       const threadId = decodeURIComponent(parsed.pathname.replace('/atlas/conversations/', ''))
       if (!threadId) { json(res, 400, { error: 'threadId required' }); return }
@@ -1153,7 +1410,7 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/mode' && method === 'POST') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       const body = await readBody(req)
       let payload: { mode: TrustMode; setBy?: string }
       try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
@@ -1196,13 +1453,13 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/costs' && method === 'GET') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       json(res, 200, await getBurnRate())
       return
     }
 
     if (url === '/atlas/status' && method === 'GET') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       const sbStatus = getSupabaseClient()
       if (!sbStatus) { json(res, 503, { error: 'Supabase not configured' }); return }
       const { data } = await sbStatus.from('atlas_snapshots').select('*').order('taken_at', { ascending: false }).limit(1).maybeSingle()
@@ -1211,7 +1468,7 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/artifacts/pending-specs' && method === 'GET') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { specs: [] }); return }
       const { data, error } = await sb
@@ -1226,7 +1483,7 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/artifacts/design-audits' && method === 'GET') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { audits: [] }); return }
       const { data, error } = await sb
@@ -1241,7 +1498,7 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/artifacts/open-forks' && method === 'GET') {
-      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      if (!(await requireAuth(req, res))) return
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { forks: [] }); return }
       // "Open" = decisions awaiting a human pick. Schema requires chosen_option NOT NULL,
@@ -1262,7 +1519,7 @@ export async function startServer(): Promise<void> {
     {
       const decideMatch = url.match(/^\/atlas\/artifacts\/forks\/([0-9a-f-]{36})\/decide$/i)
       if (decideMatch && method === 'POST') {
-        if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+        if (!(await requireAuth(req, res))) return
         const sb = getSupabaseClient()
         if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
         const id = decideMatch[1]
@@ -1292,7 +1549,7 @@ export async function startServer(): Promise<void> {
     {
       const approveMatch = url.match(/^\/atlas\/decisions\/([0-9a-f-]{36})\/approve$/i)
       if (approveMatch && method === 'POST') {
-        if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+        if (!(await requireAuth(req, res))) return
         const sb = getSupabaseClient()
         if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
         const id = approveMatch[1]
@@ -1315,10 +1572,7 @@ export async function startServer(): Promise<void> {
       return
     }
 
-    if (!authenticate(req)) {
-      json(res, 401, { error: 'Unauthorized' })
-      return
-    }
+    if (!(await requireAuth(req, res))) return
 
     json(res, 404, { error: 'Not found' })
   })

@@ -10,6 +10,7 @@ import { LoadingScreen } from "@/components/auth/LoadingScreen"
 import NotImplemented from "@/components/NotImplemented"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { DrAtlasAssistant } from "@/components/atlas/DrAtlasAssistant"
+import { AtlasAuthGuard } from "@/components/atlas/AtlasAuthGuard"
 import { useAuth } from "@/contexts/AuthContext"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -27,6 +28,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"))
 const Atlas = lazy(() => import("./pages/Atlas"))
 const AtlasBrain = lazy(() => import("./pages/AtlasBrain"))
 const AtlasPD = lazy(() => import("./pages/AtlasPD"))
+const AtlasLogin = lazy(() => import("./pages/atlas/AtlasLogin"))
 const NotFound = lazy(() => import("./pages/NotFound"))
 const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
@@ -119,14 +121,17 @@ export default function App() {
             }
           />
 
-          {/* Atlas admin — single-user Muzammil; no auth guard in v0.1 */}
-          <Route path="/atlas" element={<Atlas />} />
+          {/* Atlas login — public, but redirects to /atlas if a session token already exists */}
+          <Route path="/atlas/login" element={<AtlasLogin />} />
+
+          {/* Atlas admin — gated by WhatsApp-OTP session (Phase 1.10aj). */}
+          <Route path="/atlas" element={<AtlasAuthGuard><Atlas /></AtlasAuthGuard>} />
 
           {/* Atlas Brain — Multi-Brain debate console (admin/team only; gated inside the page) */}
-          <Route path="/atlas-brain" element={<AtlasBrain />} />
+          <Route path="/atlas-brain" element={<AtlasAuthGuard><AtlasBrain /></AtlasAuthGuard>} />
 
           {/* Atlas PD — Project Development cockpit (admin/team only; gated inside the page) */}
-          <Route path="/atlas-pd" element={<AtlasPD />} />
+          <Route path="/atlas-pd" element={<AtlasAuthGuard><AtlasPD /></AtlasAuthGuard>} />
 
           {/* Admin — maxons_team tier required */}
           <Route path="/admin" element={<AdminLayout />}>

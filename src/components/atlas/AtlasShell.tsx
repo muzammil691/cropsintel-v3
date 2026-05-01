@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { MessageCircle, Layers, Activity, Sparkles, X } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { MessageCircle, Layers, Activity, Sparkles, X, LogOut } from 'lucide-react'
 import { AtlasTopNav } from './AtlasTopNav'
 import { TrustModeBadge } from './TrustModeBadge'
 import { VoiceToggle } from './VoiceToggle'
@@ -17,11 +18,12 @@ import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import { useArtifacts } from '@/hooks/useArtifacts'
 import { useTts } from '@/hooks/useTts'
 import { useLiveMode } from '@/hooks/useLiveMode'
-import type { TrustMode } from '@/lib/atlas-client'
+import { logoutAtlas, type TrustMode } from '@/lib/atlas-client'
 
 type MobileTab = 'chat' | 'artifacts' | 'status'
 
 export function AtlasShell() {
+  const navigate = useNavigate()
   const { status, costs, loading, error } = useAtlasStatus()
   const artifacts = useArtifacts()
   const tts = useTts()
@@ -29,7 +31,17 @@ export function AtlasShell() {
 
   const [prefill, setPrefill] = useState<string | undefined>()
   const [modeOverride, setModeOverride] = useState<TrustMode | undefined>()
+  const [loggingOut, setLoggingOut] = useState(false)
   const displayMode: TrustMode = modeOverride ?? status?.trust_mode ?? 'passive'
+
+  async function handleLogout() {
+    setLoggingOut(true)
+    try {
+      await logoutAtlas()
+    } finally {
+      navigate('/atlas/login', { replace: true })
+    }
+  }
 
   const [tab, setTab] = useState<MobileTab>('chat')
   const [tabletStatusOpen, setTabletStatusOpen] = useState(false)
@@ -96,11 +108,26 @@ export function AtlasShell() {
             </div>
           </div>
 
-          <WizardBar
-            onPrefill={setPrefill}
-            currentMode={displayMode}
-            onModeChange={(m) => setModeOverride(m)}
-          />
+          <div className="flex items-center gap-2">
+            <WizardBar
+              onPrefill={setPrefill}
+              currentMode={displayMode}
+              onModeChange={(m) => setModeOverride(m)}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleLogout()}
+              disabled={loggingOut}
+              aria-label="Sign out of Atlas"
+              title="Sign out"
+              className="hidden md:inline-flex"
+            >
+              <LogOut className="size-4" />
+              <span className="ml-1.5 hidden lg:inline">{loggingOut ? 'Signing out…' : 'Sign out'}</span>
+            </Button>
+          </div>
         </div>
 
         {/* Mobile-only secondary toolbar (voice + live mode below the wizard row) */}
@@ -127,6 +154,17 @@ export function AtlasShell() {
               else void liveMode.start()
             }}
           />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void handleLogout()}
+            disabled={loggingOut}
+            aria-label="Sign out of Atlas"
+            className="ml-auto"
+          >
+            <LogOut className="size-4" />
+          </Button>
         </div>
 
         {ttsBanner && (
