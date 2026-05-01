@@ -6,29 +6,25 @@
 
 ## Gaps to fix
 
-1. **[high] shadcn-usage** — MigrationBanner uses raw <button> for dismiss action instead of shadcn Button component
-   Fix: Replace raw button with <Button variant="ghost" size="sm" onClick={clearMigrationNotice} aria-label="Dismiss">✕</Button>
-   Where: src/App.tsx:45
+1. **[high] shadcn-usage** — DecisionLogTab uses raw <button> elements for verdict filter pills (lines 52-72) instead of shadcn Button component. Design system states: 'always shadcn/ui — never raw HTML for clickable'.
+   Fix: Replace raw <button> with <Button variant="ghost" size="sm"> or create a custom filter button variant using shadcn Button as base
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:52
 
-2. **[high] accessibility** — Date inputs in DecisionLogTab have <label htmlFor=...> but labels are not wrapping <Label> components from shadcn, breaking the design system pattern
-   Fix: Import { Label } from '@/components/ui/label' and wrap: <Label htmlFor="decision-from-date">From</Label>
+2. **[high] shadcn-usage** — ProposalsTab uses raw <button> for status filter chips (visible in truncated diff, line ~90+). All interactive elements must use shadcn Button component per design system.
+   Fix: Replace raw <button> with <Button variant="outline" size="sm"> for filter chips, ensuring consistent interactive styling
+   Where: src/components/atlas-pd/ProposalsTab.tsx:90
+
+3. **[medium] accessibility** — DecisionLogTab date inputs use both htmlFor labels AND separate aria-label attributes (lines 76, 79), creating redundant/conflicting labeling. WCAG best practice is to use visible <label> with htmlFor only.
+   Fix: Remove aria-label="From date" and aria-label="To date" attributes since visible <label htmlFor=...> elements already provide accessible names
    Where: src/components/atlas-pd/DecisionLogTab.tsx:76
 
-3. **[high] states** — Filter chip buttons in DecisionLogTab.tsx (lines 57-71) lack focus-visible ring states despite being keyboard-interactive
-   Fix: Add 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50' to button className
+4. **[medium] mobile-responsive** — DecisionLogTab filter controls use flex-wrap but buttons don't specify min touch targets. Design system requires min-h-[44px] for interactive elements, but buttons only have h-7 (28px).
+   Fix: Increase button height to min-h-[44px] or h-11 for adequate touch targets on mobile, or add py-2.5 to raw buttons
    Where: src/components/atlas-pd/DecisionLogTab.tsx:57
 
-4. **[high] states** — Filter chip buttons in ProposalsTab.tsx receive focus-visible styling (line 109) but verdict filter chips do NOT (DecisionLogTab line 57-71 comparison shows inconsistency)
-   Fix: Apply same focus-visible pattern from ProposalsTab to DecisionLogTab verdict buttons
-   Where: src/components/atlas-pd/DecisionLogTab.tsx:64
-
-5. **[medium] accessibility** — Search input in EvidenceTab.tsx has aria-label and id but no visible <Label> component pairing, violating the 'All form inputs: <Label htmlFor=...> paired' rule
-   Fix: Add <Label htmlFor="evidence-search" className="sr-only">Filter evidence</Label> above the input for screen readers
-   Where: src/components/atlas-pd/EvidenceTab.tsx:86
-
-6. **[medium] accessibility** — Select dropdown in ProposalDetailModal.tsx (line 237) has aria-label but no visible <Label> component, breaking the design system's Label pairing requirement
-   Fix: Import Label from shadcn and add <Label htmlFor="evidence-link-type">Evidence type</Label> above select, assign matching id
-   Where: src/components/atlas-pd/ProposalDetailModal.tsx:237
+5. **[medium] states** — Raw <button> elements in DecisionLogTab missing :disabled state styling. Design system requires ':disabled (opacity-50 cursor-not-allowed)' on every interactive element.
+   Fix: Add disabled prop handling and className: 'disabled:opacity-50 disabled:cursor-not-allowed' to all filter buttons
+   Where: src/components/atlas-pd/DecisionLogTab.tsx:52
 
 ## Acceptance criteria
 
