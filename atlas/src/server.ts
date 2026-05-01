@@ -1168,6 +1168,106 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    if (url === '/atlas/artifacts/pending-specs' && method === 'GET') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { specs: [] }); return }
+      const { data, error } = await sb
+        .from('atlas_pending_specs')
+        .select('id, thread_id, spec_markdown, filename, drafted_at, expires_at')
+        .is('resolved_at', null)
+        .order('drafted_at', { ascending: false })
+        .limit(20)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { specs: data ?? [] })
+      return
+    }
+
+    if (url === '/atlas/artifacts/design-audits' && method === 'GET') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { audits: [] }); return }
+      const { data, error } = await sb
+        .from('designer_runs')
+        .select('id, task_id, operation, verdict, confidence, gaps, cost_usd, duration_ms, created_at')
+        .eq('verdict', 'fail')
+        .order('created_at', { ascending: false })
+        .limit(10)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { audits: data ?? [] })
+      return
+    }
+
+    if (url === '/atlas/artifacts/open-forks' && method === 'GET') {
+      if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { forks: [] }); return }
+      // "Open" = decisions awaiting a human pick. Schema requires chosen_option NOT NULL,
+      // so the fork-author writes the literal string 'PENDING' until a human resolves it.
+      // We additionally include rows where chosen_option IS NULL for forward-compat.
+      const { data, error } = await sb
+        .from('atlas_decisions')
+        .select('id, decided_at, fork_question, options_considered, rationale, related_phase, chosen_option')
+        .or('chosen_option.is.null,chosen_option.eq.PENDING')
+        .order('decided_at', { ascending: false })
+        .limit(20)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { forks: data ?? [] })
+      return
+    }
+
+    // Match /atlas/artifacts/forks/<uuid>/decide
+    {
+      const decideMatch = url.match(/^\/atlas\/artifacts\/forks\/([0-9a-f-]{36})\/decide$/i)
+      if (decideMatch && method === 'POST') {
+        if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+        const id = decideMatch[1]
+        const body = await readBody(req)
+        let payload: { chosen?: string; rationale?: string }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        if (!payload.chosen || typeof payload.chosen !== 'string') {
+          json(res, 400, { error: '`chosen` is required' })
+          return
+        }
+        const { error } = await sb
+          .from('atlas_decisions')
+          .update({
+            chosen_option: payload.chosen,
+            rationale: payload.rationale ?? null,
+            decided_by: 'user',
+            decided_at: new Date().toISOString(),
+          })
+          .eq('id', id)
+        if (error) { json(res, 500, { error: error.message }); return }
+        json(res, 200, { ok: true, id, chosen: payload.chosen })
+        return
+      }
+    }
+
+    // Match /atlas/decisions/<uuid>/approve  (legacy Approve-ADR wizard)
+    {
+      const approveMatch = url.match(/^\/atlas\/decisions\/([0-9a-f-]{36})\/approve$/i)
+      if (approveMatch && method === 'POST') {
+        if (!authenticate(req)) { json(res, 401, { error: 'Unauthorized' }); return }
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+        const id = approveMatch[1]
+        const { error } = await sb
+          .from('atlas_decisions')
+          .update({
+            chosen_option: 'APPROVED',
+            decided_by: 'user',
+            decided_at: new Date().toISOString(),
+          })
+          .eq('id', id)
+        if (error) { json(res, 500, { error: error.message }); return }
+        json(res, 200, { ok: true, id })
+        return
+      }
+    }
+
     if (url === '/whatsapp/inbound' && method === 'POST') {
       await handleWhatsAppInbound(req, res)
       return

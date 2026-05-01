@@ -7,6 +7,7 @@ import { VoiceToggle } from '@/components/atlas/VoiceToggle'
 import { VoicePicker } from '@/components/atlas/VoicePicker'
 import { LiveModeButton } from '@/components/atlas/LiveModeButton'
 import { LiveModePanel } from '@/components/atlas/LiveModePanel'
+import { AtlasShell } from '@/components/atlas/AtlasShell'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
@@ -15,6 +16,20 @@ import { useLiveMode } from '@/hooks/useLiveMode'
 import type { TrustMode } from '@/lib/atlas-client'
 
 export default function Atlas() {
+  // Feature flag: ?legacyAtlas=1 falls back to the v1 two-pane layout while
+  // the new shell is bedding in. Removed once the new shell is verified.
+  const useLegacy =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('legacyAtlas') === '1'
+
+  if (!useLegacy) {
+    return <AtlasShell />
+  }
+
+  return <LegacyAtlas />
+}
+
+function LegacyAtlas() {
   const { status, costs, loading, error } = useAtlasStatus()
   const tts = useTts()
   const liveMode = useLiveMode({
@@ -22,17 +37,12 @@ export default function Atlas() {
     voiceId: tts.voiceId,
   })
 
-  // Chat prefill — driven by WizardBar actions
   const [prefill, setPrefill] = useState<string | undefined>()
-
-  // Local mode override (optimistic) until next status poll
   const [modeOverride, setModeOverride] = useState<TrustMode | undefined>()
   const displayMode: TrustMode = modeOverride ?? status?.trust_mode ?? 'passive'
 
-  // Mobile tab selection
   const [tab, setTab] = useState<'chat' | 'status'>('chat')
 
-  // Surface budget-block / TTS errors as an inline banner.
   const [ttsBanner, setTtsBanner] = useState<string | null>(null)
   useEffect(() => {
     if (tts.budgetBlocked) {
@@ -46,12 +56,10 @@ export default function Atlas() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* PWA install / offline banner */}
       <div className="px-4 md:px-6 pt-3 empty:hidden">
         <PwaInstallPrompt />
       </div>
 
-      {/* Header */}
       <header className="border-b px-4 md:px-6 py-3 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3 shrink-0">
           <h1 className="text-xl font-semibold">Atlas</h1>
@@ -103,7 +111,6 @@ export default function Atlas() {
         </div>
       )}
 
-      {/* Mobile tab bar */}
       <nav className="md:hidden flex border-b text-sm font-medium">
         <button
           className={`flex-1 py-2 text-center transition-colors ${tab === 'chat' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
@@ -119,9 +126,7 @@ export default function Atlas() {
         </button>
       </nav>
 
-      {/* Desktop: two-column layout. Mobile: tabbed. */}
       <main className="p-4 max-w-screen-2xl mx-auto">
-        {/* Desktop grid */}
         <div className="hidden md:grid md:grid-cols-[1.5fr_1fr] gap-4">
           <section>
             <ErrorBoundary>
@@ -139,7 +144,6 @@ export default function Atlas() {
           </aside>
         </div>
 
-        {/* Mobile tabs */}
         <div className="md:hidden">
           {tab === 'chat' && (
             <ErrorBoundary>
@@ -160,7 +164,6 @@ export default function Atlas() {
         </div>
       </main>
 
-      {/* Live conversation overlay */}
       {liveMode.active && (
         <ErrorBoundary>
           <LiveModePanel

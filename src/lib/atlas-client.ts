@@ -146,6 +146,89 @@ export async function approveDecision(id: string): Promise<void> {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Artifact panel (1.10w): pending specs, design audits, open forks
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface PendingSpec {
+  id: string
+  thread_id: string
+  spec_markdown: string
+  filename: string
+  drafted_at: string
+  expires_at: string
+}
+
+export interface DesignAuditGap {
+  check?: string
+  severity?: 'high' | 'medium' | 'low' | string
+  description?: string
+  fix?: string
+  file?: string
+  line?: number | string
+}
+
+export interface DesignAudit {
+  id: string
+  task_id: string
+  operation: 'review-spec' | 'audit-commit' | string
+  verdict: 'pass' | 'fail' | 'unknown' | string
+  confidence: number | null
+  gaps: DesignAuditGap[]
+  cost_usd: number
+  duration_ms: number | null
+  created_at: string
+}
+
+export interface OpenFork {
+  id: string
+  decided_at: string
+  fork_question: string
+  options_considered: Record<string, unknown> | unknown[] | null
+  rationale: string | null
+  related_phase: string | null
+  chosen_option: string | null
+}
+
+export async function fetchPendingSpecs(): Promise<PendingSpec[]> {
+  const data = await fetchJson<{ specs?: PendingSpec[] }>(
+    `${ATLAS_URL}/atlas/artifacts/pending-specs`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.specs) ? data!.specs! : []
+}
+
+export async function fetchDesignAudits(): Promise<DesignAudit[]> {
+  const data = await fetchJson<{ audits?: DesignAudit[] }>(
+    `${ATLAS_URL}/atlas/artifacts/design-audits`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.audits) ? data!.audits! : []
+}
+
+export async function fetchOpenForks(): Promise<OpenFork[]> {
+  const data = await fetchJson<{ forks?: OpenFork[] }>(
+    `${ATLAS_URL}/atlas/artifacts/open-forks`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.forks) ? data!.forks! : []
+}
+
+export async function decideFork(
+  id: string,
+  chosen: string,
+  rationale?: string,
+): Promise<void> {
+  await fetchJson<{ ok: true; id: string; chosen: string }>(
+    `${ATLAS_URL}/atlas/artifacts/forks/${encodeURIComponent(id)}/decide`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chosen, rationale }),
+    },
+  )
+}
+
 export async function fetchChatHistory(
   threadId: string,
   limit = 50,
