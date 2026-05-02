@@ -62,6 +62,82 @@ export function createServer(): express.Application {
     }
   })
 
+  // POST /write-spec — Atlas spec-draft.ts contract.
+  //
+  // Atlas's draftSpec() pipeline calls this endpoint with `{ phase, context }`
+  // and expects `{ spec_markdown, cost_usd }` back. Previously this route
+  // didn't exist; spec-draft hit 404 every time, fell back to Claude-direct
+  // drafting, and the multi-brain debate lost its primary draft input. The
+  // entire propose_and_queue path silently degraded.
+  //
+  // Internally we wrap council() with a write-spec question template and
+  // surface output.adrMarkdown as spec_markdown. The shape mirrors the
+  // older councilWriteSpec() helper in atlas/src/lib/tools.ts so both Atlas
+  // call sites converge on this route.
+  app.post('/write-spec', async (req: Request, res: Response) => {
+    const { phase, context } = req.body as {
+      phase?: string
+      context?: string | Record<string, unknown>
+    }
+
+    if (!phase || typeof phase !== 'string' || phase.trim().length === 0) {
+      res.status(400).json({ error: 'phase is required' })
+      return
+    }
+
+    const contextStr = typeof context === 'string'
+      ? context
+      : context !== undefined
+        ? JSON.stringify(context)
+        : ''
+
+    const question = [
+      `Draft a CropsIntel V3 task spec for Phase ${phase.trim()}.`,
+      ``,
+      contextStr ? `Goal / additional context (from caller):\n${contextStr}` : '',
+      ``,
+      `Output the full spec body as adrMarkdown. The spec MUST contain (case-insensitive):`,
+      `  - "# Task: Phase <X.Y> — <name>" heading`,
+      `  - "**Master plan reference:**" line`,
+      `  - "**Estimated effort:**" line`,
+      `  - "**Model:**" line`,
+      `  - "model:" frontmatter line`,
+      `  - "## Goal" section`,
+      `  - "## Files" or "## Architecture" section`,
+      `  - "## Success criteria" section (these become Verifier check inputs)`,
+      `  - "## Risks + mitigations" section`,
+      `  - "## NEVER list" section (Builder hard constraints)`,
+      ``,
+      `Foundation-first rule: do not propose a feature whose dependencies aren't`,
+      `already shipped. If a dependency is missing, name it in Risks + mitigations`,
+      `and recommend the dependency phase first.`,
+    ].filter(Boolean).join('\n')
+
+    const input: CouncilInput = {
+      question,
+      context: typeof context === 'object' && context !== null
+        ? context
+        : contextStr ? { goal: contextStr } : undefined,
+      mode: 'runtime' as CouncilMode,
+      depth: 'quick',
+      invokedBy: req.headers['x-invoked-by']?.toString() ?? 'atlas-spec-draft',
+    }
+
+    try {
+      const output = await council(input)
+      res.json({
+        spec_markdown: output.adrMarkdown,
+        cost_usd: output.costUsd,
+        run_id: output.runId,
+        confidence: output.confidence,
+        duration_ms: output.durationMs,
+      })
+    } catch (err) {
+      console.error('[Council:server] /write-spec error:', err instanceof Error ? err.message : err)
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' })
+    }
+  })
+
   return app
 }
 

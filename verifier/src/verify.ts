@@ -82,14 +82,42 @@ export async function verify(
         `Gemini 2.5 Pro (confidence ${geminiJudgment.confidence}%): ${geminiJudgment.notes}`
 
       if (!o3Judgment.passed) {
-        // Deduplicate gaps from both models before pushing
+        // Both AI judges said FAIL. Their gaps must carry severity='fail' so
+        // the final passed = !hasFail(gaps) computation actually reflects the
+        // judges' verdict. Prior bug: judges sometimes emit severity='warn' or
+        // 'medium', and hasFail() only triggers on 'fail' — so verdict=pass
+        // shipped despite both judges saying fail (observed on phase-1.10b).
+        //
+        // We promote ALL judge gaps to severity='fail' under agreement-fail.
+        // The judges' own severity field is preserved as `judgeSeverity` in
+        // the description so it isn't lost.
         const seen = new Set<string>()
         for (const g of [...o3Judgment.gaps, ...geminiJudgment.gaps]) {
           const key = `${g.check}:${g.actual}`
           if (!seen.has(key)) {
             seen.add(key)
-            gaps.push(g)
+            gaps.push({
+              ...g,
+              severity: 'fail',
+              actual: g.severity && g.severity !== 'fail'
+                ? `${g.actual} [judge-severity=${g.severity}]`
+                : g.actual,
+            })
           }
+        }
+
+        // Belt-and-braces: if dedup somehow yielded zero gaps despite both
+        // judges saying fail, synthesize one so the run can't accidentally
+        // pass. This keeps verdict aligned with judgment even on degenerate
+        // judge output (empty gaps array, malformed shape, etc.).
+        if (gaps.filter(g => g.severity === 'fail').length === 0) {
+          gaps.push({
+            check: 'ai-judgment-agreement-fail',
+            severity: 'fail',
+            expected: 'Both judges PASS or specific gaps to remediate',
+            actual: 'Both o3 and Gemini judged FAIL but emitted zero usable gaps',
+            remediation: 'Re-run the spec through Builder; if the issue persists, check judge prompt outputs in judgmentCallNotes.',
+          })
         }
       }
     } else {
@@ -102,7 +130,25 @@ export async function verify(
       })
       judgmentCallNotes = `DISAGREEMENT — escalated to Council.\n${councilTiebreak.finalDecision}`
       if (!councilTiebreak.passes) {
-        gaps.push(...councilTiebreak.gaps)
+        // Same rule as agreement-fail: promote council tiebreak gaps to fail.
+        for (const g of councilTiebreak.gaps) {
+          gaps.push({
+            ...g,
+            severity: 'fail',
+            actual: g.severity && g.severity !== 'fail'
+              ? `${g.actual} [council-severity=${g.severity}]`
+              : g.actual,
+          })
+        }
+        if (gaps.filter(g => g.severity === 'fail').length === 0) {
+          gaps.push({
+            check: 'council-tiebreak-fail',
+            severity: 'fail',
+            expected: 'Council to PASS or emit specific gaps',
+            actual: 'Council tiebreak ruled FAIL but emitted zero usable gaps',
+            remediation: 'Inspect councilTiebreak.finalDecision in judgmentCallNotes.',
+          })
+        }
       }
     }
   }
