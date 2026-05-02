@@ -101,6 +101,7 @@ async function runHeartbeat(): Promise<void> {
     await reorderQueueIfPriorityInversion(trustMode)
     await memoryIngestAfterShips(trustMode)
     await verifierAuditAfterShips(trustMode)
+    await markVerifiedBuildAttempts(trustMode)
     // Phase 1.10aw-rem: opt-in WhatsApp ping when a task ships. Sibling pass
     // (does not modify the audit/ingest behavior); no-op unless
     // WHATSAPP_NOTIFY_NUMBER is set.
@@ -1312,6 +1313,11 @@ async function verifierAuditAfterShips(trustMode: TrustMode): Promise<void> {
   }
   if (shipEntries.length === 0) return
 
+  // Phase 6: flip 'queued' atlas_build_attempts to 'shipped' for each detected
+  // ship. Done before the recheck loop so the shipped row is observable even
+  // if the recheck takes a few cycles.
+  await markBuildAttemptsAsShipped(shipEntries)
+
   const windowKey = shipEntries.map(e => `${e.sha}:${e.taskId}`).sort().join(',')
   if (recheckedShipWindows.has(windowKey)) return
   recheckedShipWindows.add(windowKey)
@@ -1351,6 +1357,120 @@ async function verifierAuditAfterShips(trustMode: TrustMode): Promise<void> {
       console.log(`[atlas-conductor] verifier.audit(${taskId} @ ${sha.slice(0, 8)}) fired post-ship — superseding stale fail`)
     } catch (err) {
       console.warn(`[atlas-conductor] post-ship verifier audit for ${taskId} failed:`, err instanceof Error ? err.message : err)
+    }
+  }
+}
+
+// Phase 6 of agent-loop redesign — atlas_build_attempts state transitions.
+//
+// markBuildAttemptsAsShipped: when ship commits are detected, flip the most
+// recent 'queued' row for each task_id to 'shipped' with shipped_at + the
+// commit SHA recorded in the spec_filename's matching row. Best-effort.
+//
+// markVerifiedBuildAttempts: heartbeat pass that finds 'shipped' rows whose
+// task_id has a passing verifier_runs row in the last hour, flips them to
+// 'verified' + completed_at. Idempotent — only updates rows where verified_at
+// IS NULL.
+//
+// Pair with the Phase 6b extension to memory/src/ingest/agent-history.ts that
+// also pulls verified attempts so Memory's agent-history index records
+// successful completions, not just failures.
+
+async function markBuildAttemptsAsShipped(
+  shipEntries: Array<{ sha: string; taskId: string }>,
+): Promise<void> {
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  for (const { sha, taskId } of shipEntries) {
+    try {
+      // Find the most recent 'queued' (or 'planned') row for this task and flip
+      // it. We accept 'planned' as a fallback for cases where builderQueueSpec
+      // didn't get to flip planned → queued (network blip, race, etc.).
+      const { data } = await sb
+        .from('atlas_build_attempts')
+        .select('id, status')
+        .eq('task_id', taskId)
+        .in('status', ['queued', 'planned'])
+        .order('planned_at', { ascending: false })
+        .limit(1)
+      const row = (data ?? [])[0] as { id: string; status: string } | undefined
+      if (!row) continue
+
+      const { error } = await sb
+        .from('atlas_build_attempts')
+        .update({ status: 'shipped', shipped_at: new Date().toISOString() })
+        .eq('id', row.id)
+      if (error) {
+        console.warn(
+          `[atlas-conductor] failed to mark build_attempt ${row.id} as shipped: ${error.message}`,
+        )
+        continue
+      }
+      console.log(
+        `[atlas-conductor] build_attempt ${row.id} (${taskId}) → shipped @ ${sha.slice(0, 8)}`,
+      )
+    } catch (err) {
+      console.warn(
+        `[atlas-conductor] markBuildAttemptsAsShipped error for ${taskId}:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+}
+
+async function markVerifiedBuildAttempts(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto') return
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  // Find 'shipped' rows whose task_id has a passing verifier_runs row written
+  // since shipped_at. The latest-per-task collapse on /atlas/verifier/runs
+  // already considers a passing row authoritative, so this transition mirrors
+  // what the audit-feed already shows.
+  const { data: shippedRows } = await sb
+    .from('atlas_build_attempts')
+    .select('id, task_id, shipped_at')
+    .eq('status', 'shipped')
+    .is('verified_at', null)
+    .order('shipped_at', { ascending: false })
+    .limit(50)
+
+  if (!shippedRows || shippedRows.length === 0) return
+
+  for (const row of shippedRows as Array<{ id: string; task_id: string; shipped_at: string | null }>) {
+    if (!row.shipped_at) continue
+    try {
+      const { data: vRows } = await sb
+        .from('verifier_runs')
+        .select('passed, ran_at')
+        .eq('task_id', row.task_id)
+        .gte('ran_at', row.shipped_at)
+        .order('ran_at', { ascending: false })
+        .limit(1)
+      const latest = (vRows ?? [])[0] as { passed: boolean | null } | undefined
+      if (!latest) continue
+      if (latest.passed !== true) continue
+
+      const nowIso = new Date().toISOString()
+      const { error } = await sb
+        .from('atlas_build_attempts')
+        .update({ status: 'verified', verified_at: nowIso, completed_at: nowIso })
+        .eq('id', row.id)
+      if (error) {
+        console.warn(
+          `[atlas-conductor] failed to mark build_attempt ${row.id} as verified: ${error.message}`,
+        )
+        continue
+      }
+      console.log(
+        `[atlas-conductor] build_attempt ${row.id} (${row.task_id}) → verified`,
+      )
+    } catch (err) {
+      console.warn(
+        `[atlas-conductor] markVerifiedBuildAttempts error for ${row.task_id}:`,
+        err instanceof Error ? err.message : err,
+      )
     }
   }
 }

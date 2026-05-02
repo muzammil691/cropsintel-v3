@@ -22,6 +22,7 @@ import { IngestResult, RawChunk } from '../types'
 
 const VERIFIER_LIMIT = 200
 const DESIGNER_LIMIT = 200
+const BUILD_ATTEMPT_LIMIT = 200
 
 interface VerifierRow {
   task_id: string | null
@@ -83,6 +84,32 @@ function renderVerifierRow(r: VerifierRow): string {
       if (fix) lines.push(`    remediation: ${fix}`)
     }
   }
+  return lines.join('\n')
+}
+
+interface BuildAttemptRow {
+  task_id: string | null
+  spec_filename: string | null
+  primary_domain: string | null
+  status: string | null
+  attempt_number: number | null
+  cost_usd: number | string | null
+  shipped_at: string | null
+  verified_at: string | null
+  failure_gaps: unknown
+}
+
+function renderBuildAttemptRow(r: BuildAttemptRow): string {
+  const lines: string[] = []
+  const verb = r.status === 'verified' ? 'completed successfully' : (r.status ?? 'unknown')
+  lines.push(`[atlas_build_attempts ${verb}]`)
+  lines.push(`task_id: ${r.task_id ?? 'unknown'}`)
+  lines.push(`spec_filename: ${r.spec_filename ?? 'unknown'}`)
+  lines.push(`primary_domain: ${r.primary_domain ?? 'unknown'}`)
+  lines.push(`attempt_number: ${r.attempt_number ?? '?'}`)
+  if (r.cost_usd != null) lines.push(`cost_usd: ${r.cost_usd}`)
+  if (r.shipped_at) lines.push(`shipped_at: ${r.shipped_at}`)
+  if (r.verified_at) lines.push(`verified_at: ${r.verified_at}`)
   return lines.join('\n')
 }
 
@@ -190,6 +217,46 @@ export async function ingestAgentHistory(): Promise<IngestResult> {
     totalSkipped += skipped
     totalCost += costUsd
     console.log(`[agent-history] designer_runs: +${inserted}, skipped ${skipped}, $${costUsd.toFixed(4)}`)
+  }
+
+  // ─── atlas_build_attempts (verified) ─────────────────────────────────────────
+  // Phase 6 of agent-loop redesign: surface successful completions as positive
+  // memory traces so spec-draft.fetchPriorIncidents — which today only sees
+  // failures — can also see "this scope was successfully built before, here's
+  // the spec_filename + primary_domain + attempt_number." Future drafts use
+  // that as prior-art context, not just don't-repeat-this guidance.
+  const { data: buildAttemptRows, error: bErr } = await sb
+    .from('atlas_build_attempts')
+    .select('task_id, spec_filename, primary_domain, status, attempt_number, cost_usd, shipped_at, verified_at, failure_gaps')
+    .eq('status', 'verified')
+    .order('verified_at', { ascending: false })
+    .limit(BUILD_ATTEMPT_LIMIT)
+
+  if (bErr) {
+    errors.push(`atlas_build_attempts query failed: ${bErr.message}`)
+  } else if (buildAttemptRows && buildAttemptRows.length > 0) {
+    const chunks: RawChunk[] = buildAttemptRows.map((row, idx) => {
+      const r = row as BuildAttemptRow
+      return {
+        source,
+        source_path: `build-attempt/${r.task_id ?? 'unknown'}#${r.attempt_number ?? 0}`,
+        source_section: 'verified',
+        content: renderBuildAttemptRow(r),
+        chunk_index: VERIFIER_LIMIT + DESIGNER_LIMIT + idx,
+        metadata: {
+          kind: 'build_attempt',
+          task_id: r.task_id,
+          status: r.status,
+          primary_domain: r.primary_domain,
+          attempt_number: r.attempt_number,
+        },
+      }
+    })
+    const { inserted, skipped, costUsd } = await embedAndStore(chunks)
+    totalInserted += inserted
+    totalSkipped += skipped
+    totalCost += costUsd
+    console.log(`[agent-history] atlas_build_attempts (verified): +${inserted}, skipped ${skipped}, $${costUsd.toFixed(4)}`)
   }
 
   const result: IngestResult = {
