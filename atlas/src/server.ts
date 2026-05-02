@@ -112,6 +112,20 @@ import {
   shouldRecall,
   formatRecallSystemMessage,
 } from './lib/chat-summarizer'
+import {
+  resolveProjectForRequest,
+  setSessionLastProject,
+  listProjectsForMember,
+  getProjectBySlug,
+  createProject,
+  addProjectMember,
+  removeProjectMember,
+  listProjectMembers,
+  getMembership,
+  namespaceThreadId,
+  CROPSINTEL_PROJECT_SLUG,
+  type ProjectRow,
+} from './lib/project-context'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -221,11 +235,17 @@ function getSystemPrompt(): string {
 // service-to-service legacy bearer (Builder, conductor cron). Retains a
 // `sessionId === 'service'` sentinel so the rest of the server can branch.
 // Phase 1.10ao: role is carried for tool-dispatch authorization.
+// Phase 1.10av: every authenticated request now resolves to exactly one
+// project — projectId / projectSlug / projectRole are the per-project view of
+// access. Per-project tables MUST scope every read/write by `projectId`.
 export interface AuthPrincipal {
   phone: string
   sessionId: string
   role: Role
   memberId: string | null
+  projectId: string
+  projectSlug: string
+  projectRole: Role
 }
 
 // Phase 1.10aj — Atlas now requires either a user session token (issued via
@@ -243,7 +263,34 @@ async function authenticate(req: IncomingMessage): Promise<AuthPrincipal | null>
   // value, never anything user-derivable. Treated as 'owner' for role checks
   // so existing in-cluster paths keep working unchanged.
   if (ATLAS_API_TOKEN && token === ATLAS_API_TOKEN) {
-    return { phone: 'service', sessionId: 'service', role: 'owner', memberId: null }
+    const project = await resolveProjectForRequest({
+      req,
+      sessionId: 'service',
+      memberId: null,
+    })
+    if (!project) {
+      // Service path always has access; only the bootstrap window can hit
+      // this branch (no projects seeded yet). Fall back to a sentinel so the
+      // legacy paths keep working.
+      return {
+        phone: 'service',
+        sessionId: 'service',
+        role: 'owner',
+        memberId: null,
+        projectId: '',
+        projectSlug: CROPSINTEL_PROJECT_SLUG,
+        projectRole: 'owner',
+      }
+    }
+    return {
+      phone: 'service',
+      sessionId: 'service',
+      role: 'owner',
+      memberId: null,
+      projectId: project.id,
+      projectSlug: project.slug,
+      projectRole: 'owner',
+    }
   }
 
   // User session token — look up sha256(token) in atlas_sessions.
@@ -281,7 +328,27 @@ async function authenticate(req: IncomingMessage): Promise<AuthPrincipal | null>
     }
   }
 
-  return { phone: session.phone, sessionId: session.id, role, memberId }
+  const project = await resolveProjectForRequest({
+    req,
+    sessionId: session.id,
+    memberId,
+  })
+  if (!project) {
+    // Authenticated but no project access → treat as 401-equivalent at the
+    // wrapper layer (requireAuth surfaces 403). Returning null here keeps
+    // the unauthenticated path intact for non-project-scoped endpoints.
+    return null
+  }
+
+  return {
+    phone: session.phone,
+    sessionId: session.id,
+    role,
+    memberId,
+    projectId: project.id,
+    projectSlug: project.slug,
+    projectRole: project.role,
+  }
 }
 
 // Convenience: return 401 + null when unauthenticated, principal when ok.
@@ -408,18 +475,25 @@ export async function runChatTurn(params: {
   // The handler prepends a synthetic system note so Claude knows the user
   // pointed at that exact span of prior conversation.
   replayContext?: { rangeStartAt?: string; summaryLong?: string } | null
+  // Phase 1.10av — project scoping. Every conversation row is filed under
+  // exactly one project; queries always filter by project_id to keep multi-
+  // project Atlas data isolated.
+  projectId?: string
+  projectSlug?: string
 }): Promise<string> {
-  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata, attachments, replayContext } = params
+  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata, attachments, replayContext, projectId, projectSlug } = params
   const sb = getSupabaseClient()
   const trustMode = getCurrentMode()
 
-  // Load recent conversation history (last 20 messages)
+  // Load recent conversation history (last 20 messages, scoped to project)
   let messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = []
   if (sb) {
-    const { data: history } = await sb
+    let historyQuery = sb
       .from('atlas_conversations')
       .select('role, content')
       .eq('thread_id', threadId)
+    if (projectId) historyQuery = historyQuery.eq('project_id', projectId)
+    const { data: history } = await historyQuery
       .order('created_at', { ascending: false })
       .limit(20)
     messages = (history ?? []).reverse().map(m => ({
@@ -649,8 +723,10 @@ export async function runChatTurn(params: {
       role: 'atlas',
       content: assistantText,
       metadata: { totalCostUsd, iterations: iteration, ...(assistantMetadata ?? {}) },
+      project_id: projectId ?? null,
     })
   }
+  void projectSlug
 
   // Phase 1.10ar — fire-and-forget rolling summarizer. NEVER block the chat
   // response on this. The function self-rate-limits (5 min per thread) and
@@ -706,14 +782,19 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
     return
   }
 
+  // Phase 1.10av — namespace the thread by project so multi-project Atlas
+  // keeps chat isolated. Legacy clients sending `web-default` get auto-prefixed.
+  const namespacedThreadId = namespaceThreadId(principal.projectSlug, payload.thread_id)
+
   const sb = getSupabaseClient()
   if (sb) {
     await sb.from('atlas_conversations').insert({
-      thread_id: payload.thread_id,
+      thread_id: namespacedThreadId,
       channel: payload.channel || 'web',
       role: 'user',
       content: payload.message,
       metadata: cleanAttachments.length > 0 ? { attachments: cleanAttachments } : {},
+      project_id: principal.projectId || null,
     })
   }
 
@@ -733,7 +814,7 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
 
   try {
     const assistantText = await runChatTurn({
-      threadId: payload.thread_id,
+      threadId: namespacedThreadId,
       channel: payload.channel || 'web',
       message: payload.message,
       overrideToken,
@@ -741,9 +822,11 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
       onEvent: sendEvent,
       attachments: cleanAttachments,
       replayContext: payload.replay_context ?? null,
+      projectId: principal.projectId || undefined,
+      projectSlug: principal.projectSlug,
     })
 
-    sendEvent('done', { thread_id: payload.thread_id })
+    sendEvent('done', { thread_id: namespacedThreadId })
     res.end()
 
     void assistantText // already persisted inside runChatTurn
@@ -1024,9 +1107,16 @@ const ATLAS_SINGLE_THREAD_ID = 'web-default'
 
 async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
   const { from, body, messageSid, numMedia, mediaUrl0, mediaType0 } = params
-  const threadId = ATLAS_SINGLE_THREAD_ID
   const sb = getSupabaseClient()
   const fromPhone = from.replace('whatsapp:', '')
+
+  // Phase 1.10av — WhatsApp inbound goes to the default project (cropsintel-v3
+  // for now). Per-user project routing for WhatsApp is a future spec; until
+  // then every WhatsApp message lives under the cropsintel-v3 namespace.
+  const wsProject = await getProjectBySlug(CROPSINTEL_PROJECT_SLUG)
+  const wsProjectId = wsProject?.id ?? null
+  const wsProjectSlug = wsProject?.slug ?? CROPSINTEL_PROJECT_SLUG
+  const threadId = namespaceThreadId(wsProjectSlug, ATLAS_SINGLE_THREAD_ID)
 
   let inboundText = body
   let isVoiceNote = false
@@ -1069,6 +1159,7 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
           role: 'user',
           content: '[voice note: transcription failed]',
           metadata: { ...userMetadata, voice_note: true, transcription_error: err instanceof Error ? err.message : String(err) },
+          project_id: wsProjectId,
         })
       }
       return
@@ -1092,6 +1183,7 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
         role: 'user',
         content: inboundText,
         metadata: { ...userMetadata, command: 'disable_voice' },
+        project_id: wsProjectId,
       })
     }
     return
@@ -1106,6 +1198,7 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
         role: 'user',
         content: inboundText,
         metadata: { ...userMetadata, command: 'enable_voice' },
+        project_id: wsProjectId,
       })
     }
     return
@@ -1118,6 +1211,7 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
       role: 'user',
       content: inboundText,
       metadata: userMetadata,
+      project_id: wsProjectId,
     })
   }
 
@@ -1152,6 +1246,7 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
           from_voice_note: isVoiceNote,
           dispatch_cost_usd: result.cost_usd ?? 0,
         },
+        project_id: wsProjectId,
       })
     }
     await sendAtlasReply({
@@ -1171,6 +1266,8 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
     message: inboundText,
     callerRole,
     assistantMetadata,
+    projectId: wsProjectId ?? undefined,
+    projectSlug: wsProjectSlug,
   })
 
   await sendAtlasReply({
@@ -2087,18 +2184,22 @@ export async function startServer(): Promise<void> {
         ? url.match(/^\/atlas\/conversations\/([^/?]+)\/summaries(?:\?(.*))?$/)
         : null
       if (summaryMatch) {
-        if (!(await requireAuth(req, res))) return
-        const threadId = decodeURIComponent(summaryMatch[1])
-        if (!threadId) { json(res, 400, { error: 'threadId required' }); return }
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        const rawThreadId = decodeURIComponent(summaryMatch[1])
+        if (!rawThreadId) { json(res, 400, { error: 'threadId required' }); return }
+        const threadId = namespaceThreadId(principal.projectSlug, rawThreadId)
         const qs = new URLSearchParams(summaryMatch[2] ?? '')
         const limitRaw = qs.get('limit')
         const limit = Math.min(Math.max(parseInt(limitRaw ?? '30', 10) || 30, 1), 200)
         const sb = getSupabaseClient()
         if (!sb) { json(res, 200, { summaries: [] }); return }
-        const { data, error } = await sb
+        let q = sb
           .from('atlas_chat_summaries')
           .select('id, range_start_at, range_end_at, range_start_msg_id, range_end_msg_id, message_count, summary_short, topics, created_at')
           .eq('thread_id', threadId)
+        if (principal.projectId) q = q.eq('project_id', principal.projectId)
+        const { data, error } = await q
           .order('range_end_at', { ascending: false })
           .limit(limit)
         if (error) {
@@ -2114,18 +2215,22 @@ export async function startServer(): Promise<void> {
     // Returns the most recent N messages in chronological order so the UI can
     // re-hydrate the chat after a page refresh.
     if (method === 'GET' && url.startsWith('/atlas/conversations/')) {
-      if (!(await requireAuth(req, res))) return
+      const principal = await requireAuth(req, res)
+      if (!principal) return
       const parsed = new URL(url, 'http://_')
-      const threadId = decodeURIComponent(parsed.pathname.replace('/atlas/conversations/', ''))
-      if (!threadId) { json(res, 400, { error: 'threadId required' }); return }
+      const rawThreadId = decodeURIComponent(parsed.pathname.replace('/atlas/conversations/', ''))
+      if (!rawThreadId) { json(res, 400, { error: 'threadId required' }); return }
+      const threadId = namespaceThreadId(principal.projectSlug, rawThreadId)
       const limitRaw = parsed.searchParams.get('limit')
       const limit = Math.min(Math.max(parseInt(limitRaw ?? '50', 10) || 50, 1), 200)
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, []); return }
-      const { data, error } = await sb
+      let q = sb
         .from('atlas_conversations')
         .select('id, role, content, metadata, created_at')
         .eq('thread_id', threadId)
+      if (principal.projectId) q = q.eq('project_id', principal.projectId)
+      const { data, error } = await q
         .order('created_at', { ascending: false })
         .limit(limit)
       if (error) {
@@ -2212,13 +2317,16 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/artifacts/pending-specs' && method === 'GET') {
-      if (!(await requireAuth(req, res))) return
+      const principal = await requireAuth(req, res)
+      if (!principal) return
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { specs: [] }); return }
-      const { data, error } = await sb
+      let q = sb
         .from('atlas_pending_specs')
         .select('id, thread_id, spec_markdown, filename, drafted_at, expires_at')
         .is('resolved_at', null)
+      if (principal.projectId) q = q.eq('project_id', principal.projectId)
+      const { data, error } = await q
         .order('drafted_at', { ascending: false })
         .limit(20)
       if (error) { json(res, 500, { error: error.message }); return }
@@ -2242,16 +2350,19 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/atlas/artifacts/open-forks' && method === 'GET') {
-      if (!(await requireAuth(req, res))) return
+      const principal = await requireAuth(req, res)
+      if (!principal) return
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { forks: [] }); return }
       // "Open" = decisions awaiting a human pick. Schema requires chosen_option NOT NULL,
       // so the fork-author writes the literal string 'PENDING' until a human resolves it.
       // We additionally include rows where chosen_option IS NULL for forward-compat.
-      const { data, error } = await sb
+      let q = sb
         .from('atlas_decisions')
         .select('id, decided_at, fork_question, options_considered, rationale, related_phase, chosen_option')
         .or('chosen_option.is.null,chosen_option.eq.PENDING')
+      if (principal.projectId) q = q.eq('project_id', principal.projectId)
+      const { data, error } = await q
         .order('decided_at', { ascending: false })
         .limit(20)
       if (error) { json(res, 500, { error: error.message }); return }
@@ -2595,6 +2706,163 @@ export async function startServer(): Promise<void> {
 
       json(res, 200, { ok: true, whatsapp_sent: sent })
       return
+    }
+
+    // ─── Multi-project routes (Phase 1.10av) ────────────────────────────────
+    // Atlas hosts N projects; CropsIntel V3 is project #1. Each member has a
+    // role per project (atlas_project_members). Every per-project read/write
+    // anywhere in this server filters by principal.projectId.
+
+    if (url === '/atlas/projects' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const projects = await listProjectsForMember(principal.memberId)
+      json(res, 200, {
+        projects,
+        current: { id: principal.projectId, slug: principal.projectSlug, role: principal.projectRole },
+      })
+      return
+    }
+
+    if (url === '/atlas/projects' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      // Only owners (global) can create new projects. The creator is auto-
+      // attached as 'owner' on the new project.
+      if (principal.role !== 'owner' || !principal.memberId) {
+        json(res, 403, { error: 'role_insufficient', required: 'owner' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { slug?: string; display_name?: string; description?: string; repo_url?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.slug || !payload.display_name) {
+        json(res, 400, { error: 'slug and display_name required' })
+        return
+      }
+      const created = await createProject({
+        slug: payload.slug,
+        displayName: payload.display_name,
+        description: payload.description ?? null,
+        repoUrl: payload.repo_url ?? null,
+        createdBy: principal.memberId,
+      })
+      if (!created.ok) { json(res, 400, { error: created.error }); return }
+      // Auto-attach the creator as owner of the new project.
+      await addProjectMember({
+        projectId: created.project.id,
+        memberId: principal.memberId,
+        role: 'owner',
+      })
+      json(res, 200, { ok: true, project: created.project })
+      return
+    }
+
+    {
+      const projectMatch = url.match(/^\/atlas\/projects\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/i)
+      if (projectMatch && method === 'GET') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        const slug = projectMatch[1].toLowerCase()
+        const project = await getProjectBySlug(slug)
+        if (!project) { json(res, 404, { error: 'project_not_found' }); return }
+        const ms = await getMembership(principal.memberId, project.id)
+        if (!ms) { json(res, 403, { error: 'no_project_access' }); return }
+        if (!roleAtLeast(ms.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const members = await listProjectMembers(project.id)
+        json(res, 200, { project, members, your_role: ms.role })
+        return
+      }
+    }
+
+    {
+      const selectMatch = url.match(/^\/atlas\/projects\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\/select$/i)
+      if (selectMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (principal.sessionId === 'service') {
+          json(res, 403, { error: 'service_principal_cannot_switch' })
+          return
+        }
+        const slug = selectMatch[1].toLowerCase()
+        const project = await getProjectBySlug(slug)
+        if (!project || project.status !== 'active') { json(res, 404, { error: 'project_not_found' }); return }
+        const ms = await getMembership(principal.memberId, project.id)
+        if (!ms) { json(res, 403, { error: 'no_project_access' }); return }
+        await setSessionLastProject(principal.sessionId, project.id)
+        json(res, 200, { ok: true, project: { id: project.id, slug: project.slug, display_name: project.display_name }, role: ms.role })
+        return
+      }
+    }
+
+    {
+      const memberAddMatch = url.match(/^\/atlas\/projects\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\/members$/i)
+      if (memberAddMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        const slug = memberAddMatch[1].toLowerCase()
+        const project = await getProjectBySlug(slug)
+        if (!project) { json(res, 404, { error: 'project_not_found' }); return }
+        const ms = await getMembership(principal.memberId, project.id)
+        if (!ms || !roleAtLeast(ms.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const body = await readBody(req)
+        let payload: { member_id?: string; role?: Role }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        if (!payload.member_id || !payload.role) {
+          json(res, 400, { error: 'member_id and role required' })
+          return
+        }
+        if (!['owner', 'admin', 'operator', 'viewer'].includes(payload.role)) {
+          json(res, 400, { error: 'invalid_role' })
+          return
+        }
+        // Only owners may grant the project-level 'owner' role.
+        if (payload.role === 'owner' && ms.role !== 'owner') {
+          json(res, 403, { error: 'only_owner_can_grant_owner' })
+          return
+        }
+        const result = await addProjectMember({
+          projectId: project.id,
+          memberId: payload.member_id,
+          role: payload.role,
+        })
+        if (!result.ok) { json(res, 500, { error: result.error ?? 'persist_failed' }); return }
+        json(res, 200, { ok: true })
+        return
+      }
+    }
+
+    {
+      const memberRemoveMatch = url.match(/^\/atlas\/projects\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\/members\/([0-9a-f-]{36})$/i)
+      if (memberRemoveMatch && method === 'DELETE') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        const slug = memberRemoveMatch[1].toLowerCase()
+        const targetMemberId = memberRemoveMatch[2]
+        const project = await getProjectBySlug(slug)
+        if (!project) { json(res, 404, { error: 'project_not_found' }); return }
+        const ms = await getMembership(principal.memberId, project.id)
+        if (!ms || ms.role !== 'owner') {
+          json(res, 403, { error: 'role_insufficient', required: 'owner' })
+          return
+        }
+        // Don't let the owner accidentally remove themselves from a project
+        // they're the only owner of — leaves it orphaned.
+        if (targetMemberId === principal.memberId) {
+          json(res, 403, { error: 'cannot_remove_self' })
+          return
+        }
+        const result = await removeProjectMember(project.id, targetMemberId)
+        if (!result.ok) { json(res, 500, { error: result.error ?? 'persist_failed' }); return }
+        json(res, 200, { ok: true })
+        return
+      }
     }
 
     if (url === '/whatsapp/inbound' && method === 'POST') {

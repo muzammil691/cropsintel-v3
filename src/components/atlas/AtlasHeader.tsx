@@ -11,6 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { TrustModeBadge } from './TrustModeBadge'
+import { ProjectSwitcher } from './projects/ProjectSwitcher'
 import {
   fetchAtlasMe,
   logoutAtlas,
@@ -119,7 +120,7 @@ export function AtlasHeader({
     <header
       className="h-12 border-b border-slate-200 dark:border-slate-800 bg-white/85 dark:bg-slate-950/85 backdrop-blur sticky top-0 z-30 px-3 md:px-4 flex items-center gap-3"
     >
-      {/* Left: logo + title + status pill + trust mode */}
+      {/* Left: logo + title + project chip + status pill + trust mode */}
       <div className="flex items-center gap-2 min-w-0">
         <span className="grid place-items-center size-7 rounded-md bg-emerald-600 text-white shrink-0">
           <Sparkles className="size-4" aria-hidden />
@@ -128,6 +129,7 @@ export function AtlasHeader({
           Atlas <span className="hidden sm:inline text-slate-400 font-normal">Conductor</span>
         </h1>
         <span className="hidden md:block h-5 w-px bg-slate-200 dark:bg-slate-800" />
+        <ProjectSwitcher globalRole={me?.role ?? null} />
         <StatusPill kind={overallStatus} loading={loading && !status} />
         <button
           type="button"

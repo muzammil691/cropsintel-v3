@@ -1694,3 +1694,100 @@ export async function assignArtifactToTeam(
   )
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Phase 1.10av — multi-project Atlas
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface AtlasProject {
+  id: string
+  slug: string
+  display_name: string
+  description: string | null
+  repo_url: string | null
+  status: 'active' | 'archived'
+  role: AtlasRole
+}
+
+export interface AtlasProjectListResponse {
+  projects: AtlasProject[]
+  current: { id: string; slug: string; role: AtlasRole }
+}
+
+export async function fetchAtlasProjects(): Promise<AtlasProjectListResponse> {
+  return fetchJson<AtlasProjectListResponse>(`${ATLAS_URL}/atlas/projects`, {
+    headers: authHeaders(),
+  })
+}
+
+export async function selectAtlasProject(slug: string): Promise<{
+  ok: true
+  project: { id: string; slug: string; display_name: string }
+  role: AtlasRole
+}> {
+  return fetchJson(`${ATLAS_URL}/atlas/projects/${encodeURIComponent(slug)}/select`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+}
+
+export async function createAtlasProject(input: {
+  slug: string
+  display_name: string
+  description?: string
+  repo_url?: string
+}): Promise<{ ok: true; project: AtlasProject }> {
+  return fetchJson(`${ATLAS_URL}/atlas/projects`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export interface AtlasProjectMember {
+  member_id: string
+  role: AtlasRole
+  phone: string
+  display_name: string | null
+  status: string
+}
+
+export interface AtlasProjectDetailResponse {
+  project: Omit<AtlasProject, 'role'>
+  members: AtlasProjectMember[]
+  your_role: AtlasRole
+}
+
+export async function fetchAtlasProjectDetail(slug: string): Promise<AtlasProjectDetailResponse> {
+  return fetchJson<AtlasProjectDetailResponse>(
+    `${ATLAS_URL}/atlas/projects/${encodeURIComponent(slug)}`,
+    { headers: authHeaders() },
+  )
+}
+
+export async function addAtlasProjectMember(
+  slug: string,
+  memberId: string,
+  role: AtlasRole,
+): Promise<{ ok: true }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/projects/${encodeURIComponent(slug)}/members`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_id: memberId, role }),
+    },
+  )
+}
+
+export async function removeAtlasProjectMember(
+  slug: string,
+  memberId: string,
+): Promise<{ ok: true }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/projects/${encodeURIComponent(slug)}/members/${encodeURIComponent(memberId)}`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(),
+    },
+  )
+}
