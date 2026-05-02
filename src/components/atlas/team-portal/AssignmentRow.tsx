@@ -64,6 +64,7 @@ export function AssignmentRow({ assignment, canAct, onResolve, busy }: Assignmen
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap text-sm">
             <span aria-hidden>{KIND_ICON[assignment.artifact_kind]}</span>
+            <span className="sr-only">{KIND_LABEL[assignment.artifact_kind]}:</span>
             <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
               {title}
             </span>
@@ -91,7 +92,7 @@ export function AssignmentRow({ assignment, canAct, onResolve, busy }: Assignmen
       </div>
 
       {canAct && assignment.status === 'open' && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <div className="mt-2 flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-1.5">
           <Button
             type="button"
             size="sm"

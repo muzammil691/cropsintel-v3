@@ -221,7 +221,7 @@ export function AtlasHeader({
                   onClick={() => void handleSetTrust(m)}
                   disabled={trustUpdating}
                   className={cn(
-                    'w-full text-left rounded-md border px-3 py-2 text-sm transition-colors duration-150',
+                    'w-full text-left rounded-md border px-3 py-2 text-sm transition-colors duration-200',
                     m === trustMode
                       ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200'
                       : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/60',

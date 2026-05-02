@@ -16,7 +16,7 @@ interface BatchDiagnoseToolbarProps {
 }
 
 const BTN =
-  'inline-flex items-center rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50'
+  'inline-flex items-center justify-center sm:justify-start w-full sm:w-auto rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50'
 
 export function BatchDiagnoseToolbar({
   total,
@@ -35,7 +35,7 @@ export function BatchDiagnoseToolbar({
   const hasSelection = selected > 0
   return (
     <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-2 text-[11px] space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-1.5">
         <span className="text-slate-500 dark:text-slate-400 mr-1">
           {hasSelection ? (
             <span className="font-medium text-emerald-700 dark:text-emerald-400 tabular-nums">
@@ -67,7 +67,7 @@ export function BatchDiagnoseToolbar({
       </div>
 
       {hasSelection && (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200 dark:border-slate-800 pt-2">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-1.5 border-t border-slate-200 dark:border-slate-800 pt-2">
           <button
             type="button"
             onClick={onDiagnoseAll}

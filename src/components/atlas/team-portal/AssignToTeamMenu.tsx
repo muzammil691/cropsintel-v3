@@ -181,7 +181,7 @@ export function AssignToTeamMenu({
         <ChevronDown className="size-3" />
       </Button>
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-lg">
+        <div className="absolute right-0 z-30 mt-1 w-56 sm:w-64 max-w-[calc(100vw-2rem)] rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-lg">
           <div
             role="menu"
             aria-label="Assign to team member"

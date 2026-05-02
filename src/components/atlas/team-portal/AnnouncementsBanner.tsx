@@ -53,7 +53,8 @@ export function AnnouncementsBanner({ announcements, loading }: AnnouncementsBan
           HEALTH_TONE[build_health.overall],
         )}
       >
-        <span className={cn('mt-1 size-2 rounded-full shrink-0', HEALTH_DOT[build_health.overall])} />
+        <span className={cn('mt-1 size-2 rounded-full shrink-0', HEALTH_DOT[build_health.overall])} aria-hidden />
+        <span className="sr-only">Build health: {build_health.overall}.</span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium">
             {build_health.summary || 'Build status unavailable'}
