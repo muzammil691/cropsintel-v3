@@ -1,7 +1,7 @@
-import { Layers, Inbox, Activity, FileSearch, Workflow, Boxes, Users } from 'lucide-react'
+import { Layers, Inbox, Activity, FileSearch, Workflow, Boxes, Users, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export type AtlasTabKey = 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team'
+export type AtlasTabKey = 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team' | 'preview'
 
 export interface TabSpec {
   key: AtlasTabKey
@@ -27,6 +27,7 @@ export const ATLAS_TABS: TabSpec[] = [
   { key: 'workflows', label: 'Workflows', icon: Workflow },
   { key: 'artifacts', label: 'Artifacts', icon: Boxes },
   { key: 'team', label: 'Team', icon: Users },
+  { key: 'preview', label: 'Preview', icon: Monitor },
 ]
 
 export function AtlasTabBar({ active, onChange, badges, orientation = 'horizontal' }: AtlasTabBarProps) {

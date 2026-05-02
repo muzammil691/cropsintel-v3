@@ -2744,6 +2744,25 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // Phase 1.10as — recent Designer screenshots for the cockpit Preview tab.
+    if (url.split('?')[0] === '/atlas/designer/recent-screenshots' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { screenshots: [] }); return }
+      const queryStr = url.includes('?') ? url.split('?')[1] : ''
+      const limitRaw = new URLSearchParams(queryStr).get('limit')
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? '12', 10) || 12, 1), 50)
+      const { data, error } = await sb
+        .from('designer_runs')
+        .select('id, task_id, verdict, screenshot_url, head_after, created_at')
+        .not('screenshot_url', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(limit)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { screenshots: data ?? [] })
+      return
+    }
+
     if (url === '/atlas/builder/queue' && method === 'GET') {
       if (!(await requireAuth(req, res))) return
       try {

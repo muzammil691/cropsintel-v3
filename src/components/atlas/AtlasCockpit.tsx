@@ -25,6 +25,7 @@ const AtlasAuditTab = lazy(() => import('./tabs/AtlasAuditTab'))
 const AtlasWorkflowTab = lazy(() => import('./tabs/AtlasWorkflowTab'))
 const AtlasArtifactsTab = lazy(() => import('./tabs/AtlasArtifactsTab'))
 const AtlasTeamTab = lazy(() => import('./tabs/AtlasTeamTab'))
+const AtlasPreviewTab = lazy(() => import('./tabs/AtlasPreviewTab'))
 
 const VALID_TABS: ReadonlyArray<AtlasTabKey> = ATLAS_TABS.map((t) => t.key)
 const DEFAULT_TAB: AtlasTabKey = 'plan'
@@ -99,6 +100,7 @@ export function AtlasCockpit() {
       workflows: 'mute' as const,
       artifacts: pendingArtifacts,
       team: 'mute' as const,
+      preview: 'mute' as const,
     }
   }, [artifacts.pendingSpecs.length, artifacts.designAudits.length, artifacts.openForks.length, status?.failed_24h])
 
@@ -113,6 +115,8 @@ export function AtlasCockpit() {
 
   // Handler for the header's agent-dot click → open Agents tab.
   const openAgentsTab = useCallback(() => setActiveTab('agents'), [setActiveTab])
+  // Phase 1.10as — Preview tab's "Inspect commit" jumps to the Audit tab.
+  const openAuditTab = useCallback(() => setActiveTab('audit'), [setActiveTab])
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
@@ -164,6 +168,7 @@ export function AtlasCockpit() {
                   loading={loading}
                   artifacts={artifacts}
                   onOpenAgents={openAgentsTab}
+                  onOpenAudit={openAuditTab}
                   heartbeats={heartbeats}
                 />
               </Suspense>
@@ -184,6 +189,7 @@ export function AtlasCockpit() {
                 loading={loading}
                 artifacts={artifacts}
                 onOpenAgents={openAgentsTab}
+                onOpenAudit={openAuditTab}
                 heartbeats={heartbeats}
               />
             </Suspense>
@@ -241,6 +247,7 @@ function ActiveTab({
   loading,
   artifacts,
   onOpenAgents,
+  onOpenAudit,
   heartbeats,
 }: {
   tab: AtlasTabKey
@@ -248,6 +255,7 @@ function ActiveTab({
   loading: boolean
   artifacts: ReturnType<typeof useArtifacts>
   onOpenAgents: () => void
+  onOpenAudit: () => void
   heartbeats: ReturnType<typeof useAgentHeartbeats>['heartbeats']
 }) {
   switch (tab) {
@@ -265,6 +273,8 @@ function ActiveTab({
       return <AtlasArtifactsTab artifacts={artifacts} />
     case 'team':
       return <AtlasTeamTab />
+    case 'preview':
+      return <AtlasPreviewTab onOpenAudit={onOpenAudit} />
   }
 }
 

@@ -1141,6 +1141,24 @@ export async function fetchRecentDesignerRuns(limit = 50): Promise<DesignerRunRo
   return Array.isArray(data?.runs) ? data!.runs! : []
 }
 
+// Phase 1.10as — Designer screenshots for the cockpit Preview tab.
+export interface DesignerScreenshotRow {
+  id: string
+  task_id: string
+  verdict: 'pass' | 'fail' | 'unknown' | string
+  screenshot_url: string
+  head_after: string | null
+  created_at: string
+}
+
+export async function fetchRecentScreenshots(limit = 12): Promise<DesignerScreenshotRow[]> {
+  const data = await fetchJson<{ screenshots?: DesignerScreenshotRow[] }>(
+    `${ATLAS_URL}/atlas/designer/recent-screenshots?limit=${limit}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.screenshots) ? data!.screenshots! : []
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Builder queue manager (Phase 1.10ap)
 // ──────────────────────────────────────────────────────────────────────────
