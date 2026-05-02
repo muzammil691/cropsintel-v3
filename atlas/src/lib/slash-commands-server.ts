@@ -24,6 +24,7 @@ import {
   builderListDone,
   verifierAudit,
   adelaTriggerScrape,
+  memoryIngest,
 } from './tools'
 import { getSupabaseClient } from './supabase'
 
@@ -106,6 +107,14 @@ const COMMANDS: SlashCommandSpec[] = [
     minRole: 'operator',
     estimatedCostUsd: 0.02,
     handler: handleScrape,
+  },
+  {
+    name: 'ingest',
+    description: 'Trigger memory ingest of a knowledge source',
+    argHint: '<source>',
+    minRole: 'operator',
+    estimatedCostUsd: 0.02,
+    handler: handleIngest,
   },
   {
     name: 'help',
@@ -239,14 +248,23 @@ async function handleQueue(_args: string[], _principal: AuthPrincipal): Promise<
   return `Queue (${specs.length}):\n${lines.join('\n')}${more}`
 }
 
-async function handleDone(_args: string[], _principal: AuthPrincipal): Promise<string> {
-  const { specs, count } = await builderListDone({ limit: 5 })
-  if (specs.length === 0) return 'Nothing shipped yet.'
+async function handleDone(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const filter = args[0]
+  if (filter && !/^[a-zA-Z0-9._-]{1,80}$/.test(filter)) {
+    return `Rejected: "${filter}" is not a valid filter (allowed: a-z, A-Z, 0-9, ._-, length 1-80).`
+  }
+  const { specs, count } = await builderListDone({ limit: 5, filter })
+  if (specs.length === 0) {
+    return filter ? `Nothing shipped matching "${filter}".` : 'Nothing shipped yet.'
+  }
   // builderListDone returns ascending by name; take the last 5 (most recent
   // by lexicographic spec id).
   const recent = specs.slice(-5).reverse()
   const lines = recent.map((s, i) => `${i + 1}. ${s.replace(/\.md$/, '')}`)
-  return `Last ${recent.length} shipped (of ${count} total):\n${lines.join('\n')}`
+  const header = filter
+    ? `Last ${recent.length} shipped matching "${filter}" (of ${count} total):`
+    : `Last ${recent.length} shipped (of ${count} total):`
+  return `${header}\n${lines.join('\n')}`
 }
 
 async function handleCost(_args: string[], _principal: AuthPrincipal): Promise<string> {
@@ -367,6 +385,42 @@ async function handleScrape(args: string[], _principal: AuthPrincipal): Promise<
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return `Scrape failed: ${msg}`
+  }
+}
+
+// Phase 1.10aw-rem — /ingest <source>: kicks the memory service to (re)ingest
+// a named knowledge source. Sources accepted by the memory service include
+// master-plan, workflow-doc, audits, github-history, adrs, conversations,
+// v2-codebase, v1-codebase, all. Operator-gated; memory ingest can drive
+// embedding cost so we run it through the budget gate.
+async function handleIngest(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const source = args[0]
+  if (!source) {
+    return 'Usage: /ingest <source>  (e.g. /ingest master-plan, /ingest workflow-doc, /ingest all)'
+  }
+  if (!/^[a-z][a-z0-9-]{1,40}$/.test(source)) {
+    return `Rejected: "${source}" is not a valid source name (lowercase, kebab-case, length 2-41).`
+  }
+  try {
+    const result = await memoryIngest(source) as {
+      ok?: boolean
+      ingested?: number
+      chunks?: number
+      source?: string
+      error?: string
+    } | null
+    if (!result) return `Memory returned no payload for ${source}.`
+    if (result.error) return `Ingest ${source} failed: ${result.error}`
+    const ingested = typeof result.ingested === 'number' ? result.ingested : null
+    const chunks = typeof result.chunks === 'number' ? result.chunks : null
+    const stats = [
+      ingested !== null ? `ingested: ${ingested}` : null,
+      chunks !== null ? `chunks: ${chunks}` : null,
+    ].filter(Boolean).join(' | ')
+    return `Ingest ${source}: ✅${stats ? ` | ${stats}` : ''}`
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Ingest failed: ${msg}`
   }
 }
 
