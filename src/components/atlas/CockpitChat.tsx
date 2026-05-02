@@ -336,7 +336,7 @@ export function CockpitChat({
             <Button variant="outline" onClick={() => setConfirmMention(null)}>
               Cancel
             </Button>
-            <Button onClick={confirmAndSend} className="bg-amber-600 hover:bg-amber-700 text-white transition-colors duration-200">
+            <Button onClick={confirmAndSend} className="bg-amber-600 hover:bg-amber-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-amber-600/50">
               Send
             </Button>
           </DialogFooter>

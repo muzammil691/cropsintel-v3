@@ -268,7 +268,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
       <Card className={cn(baseClass, 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200')}>
         <CardHeader className="flex items-center justify-between gap-3 p-3">
           <span className="font-semibold uppercase tracking-wider text-[10px]">Auto-remediate</span>
-          <button onClick={onClose} className={cn('text-emerald-700 dark:text-emerald-400 text-[11px] hover:underline', buttonFocus)}>
+          <button onClick={onClose} aria-label="Dismiss auto-remediate suggestion" className={cn('text-emerald-700 dark:text-emerald-400 text-[11px] hover:underline', buttonFocus)}>
             Dismiss
           </button>
         </CardHeader>
@@ -305,7 +305,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
       <Card className={cn(baseClass, 'border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 text-sky-900 dark:text-sky-200')}>
         <CardHeader className="flex items-center justify-between gap-3 p-3">
           <span className="font-semibold uppercase tracking-wider text-[10px]">Needs Claude Code</span>
-          <button onClick={onClose} className={cn('text-sky-700 dark:text-sky-400 text-[11px] hover:underline', buttonFocus)}>
+          <button onClick={onClose} aria-label="Dismiss Claude Code suggestion" className={cn('text-sky-700 dark:text-sky-400 text-[11px] hover:underline', buttonFocus)}>
             Dismiss
           </button>
         </CardHeader>
@@ -359,7 +359,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
       <Card className={cn(baseClass, 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200')}>
         <CardHeader className="flex items-center justify-between gap-3 p-3">
           <span className="font-semibold uppercase tracking-wider text-[10px]">In-app action</span>
-          <button onClick={onClose} className={cn('text-amber-700 dark:text-amber-400 text-[11px] hover:underline', buttonFocus)}>
+          <button onClick={onClose} aria-label="Dismiss in-app action" className={cn('text-amber-700 dark:text-amber-400 text-[11px] hover:underline', buttonFocus)}>
             Dismiss
           </button>
         </CardHeader>
@@ -375,7 +375,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
     <Card className={cn(baseClass, 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300')}>
       <CardHeader className="flex items-center justify-between gap-3 p-3">
         <span className="font-semibold uppercase tracking-wider text-[10px]">Discuss</span>
-        <button onClick={onClose} className={cn('text-slate-500 text-[11px] hover:underline', buttonFocus)}>
+        <button onClick={onClose} aria-label="Dismiss discussion" className={cn('text-slate-500 text-[11px] hover:underline', buttonFocus)}>
           Dismiss
         </button>
       </CardHeader>

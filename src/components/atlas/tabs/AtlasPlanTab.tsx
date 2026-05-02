@@ -58,7 +58,6 @@ export default function AtlasPlanTab() {
           variant="ghost"
           onClick={load}
           disabled={loading}
-          aria-label="Refresh plan"
           className="shrink-0 text-xs min-h-[44px] sm:min-h-0 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
         >
           <RefreshCw className={loading ? 'size-3.5 animate-spin' : 'size-3.5'} />
@@ -68,7 +67,14 @@ export default function AtlasPlanTab() {
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-slate-50/40 dark:bg-slate-900/20">
         {loading && !tree && (
-          <div className="text-xs text-slate-500 text-center py-12">Loading plan…</div>
+          <div className="space-y-3 p-3">
+            <div className="h-8 bg-slate-200 dark:bg-slate-800 rounded animate-pulse" />
+            <div className="space-y-2">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="h-6 bg-slate-200 dark:bg-slate-800 rounded animate-pulse" />
+              ))}
+            </div>
+          </div>
         )}
         {error && (
           <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-700 dark:text-red-300">
@@ -98,7 +104,7 @@ export default function AtlasPlanTab() {
           />
         )}
         {busy && busyNode && (
-          <div className="mt-2 text-[11px] text-slate-500">Queueing spec for {busyNode}…</div>
+          <div role="status" aria-live="polite" className="mt-2 text-[11px] text-slate-500">Queueing spec for {busyNode}…</div>
         )}
       </div>
     </section>

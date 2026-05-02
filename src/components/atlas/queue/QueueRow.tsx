@@ -94,10 +94,10 @@ export function QueueRow({
         )}
         {!isInFlight && canManage && (
           <>
-            <SmallButton onClick={onPriorityUp} disabled={busy} title="Increase priority (lower number)">
+            <SmallButton onClick={onPriorityUp} disabled={busy} title="Increase priority (lower number)" aria-label="Increase priority">
               <ChevronUp className="size-3" aria-hidden />
             </SmallButton>
-            <SmallButton onClick={onPriorityDown} disabled={busy} title="Decrease priority (higher number)">
+            <SmallButton onClick={onPriorityDown} disabled={busy} title="Decrease priority (higher number)" aria-label="Decrease priority">
               <ChevronDown className="size-3" aria-hidden />
             </SmallButton>
             <SmallButton onClick={onEdit} disabled={busy}>
@@ -123,12 +123,14 @@ function SmallButton({
   disabled,
   className,
   title,
+  'aria-label': ariaLabel,
 }: {
   children: React.ReactNode
   onClick?: () => void
   disabled?: boolean
   className?: string
   title?: string
+  'aria-label'?: string
 }) {
   return (
     <button
@@ -136,8 +138,9 @@ function SmallButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={ariaLabel}
       className={cn(
-        'inline-flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 transition-colors',
+        'inline-flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 transition-colors duration-200',
         'hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-slate-200 disabled:hover:bg-white',
