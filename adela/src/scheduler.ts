@@ -20,7 +20,7 @@ import { runNewsScraper } from "./scrapers/news.js"
 import { logScraperError } from "./db.js"
 import { markFinished, markStarted, registerScraper } from "./health.js"
 
-type ScraperFn = () => Promise<void>
+type ScraperFn = () => Promise<unknown>
 
 interface Job {
   name: string
@@ -28,8 +28,13 @@ interface Job {
   run: ScraperFn
 }
 
+// SCRAPER_SCHEDULE is the umbrella override (per phase-1.00e-rem spec). When
+// set it overrides the abc schedule; CRON_ABC remains as a per-job override
+// for backwards compatibility with earlier deployments.
+const ABC_SCHEDULE = process.env.SCRAPER_SCHEDULE ?? config.cron.abc
+
 const jobs: Job[] = [
-  { name: "abc", schedule: config.cron.abc, run: runAbcScraper },
+  { name: "abc", schedule: ABC_SCHEDULE, run: runAbcScraper },
   { name: "strata", schedule: config.cron.strata, run: runStrataScraper },
   { name: "news", schedule: config.cron.news, run: runNewsScraper },
 ]

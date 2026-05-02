@@ -166,9 +166,22 @@ function reportDateFromPdfPath(pdfPath: string): string | null {
 // ---------------------------------------------------------------------------
 // Main scraper export
 // ---------------------------------------------------------------------------
-export async function runAbcScraper(): Promise<void> {
-  const run = await startRun("abc")
-  console.log(`[abc] Run ${run.id} started`)
+export type AbcScraperResult =
+  | { success: true; rows_inserted: number; storage_path: string | null }
+  | { success: true; skipped: true }
+  | { success: false; error: string }
+
+export async function runAbcScraper(): Promise<AbcScraperResult> {
+  let runId: string | null = null
+  try {
+    const run = await startRun("abc")
+    runId = run.id
+    console.log(`[abc] Run ${run.id} started`)
+  } catch (startErr) {
+    const msg = startErr instanceof Error ? startErr.message : String(startErr)
+    console.error("[abc] Failed to start audit run:", msg)
+    return { success: false, error: msg }
+  }
 
   try {
     // 1. Fetch index page
@@ -213,8 +226,8 @@ export async function runAbcScraper(): Promise<void> {
 
     if (existing) {
       console.log(`[abc] Report for ${reportDate} already exists — skipping`)
-      await finishRun(run.id, "skipped", { rows_skipped: 1 })
-      return
+      await finishRun(runId, "skipped", { rows_skipped: 1 })
+      return { success: true, skipped: true }
     }
 
     // 3. Download PDF
@@ -270,14 +283,14 @@ export async function runAbcScraper(): Promise<void> {
       // Duplicate key = already existed (race condition) — treat as skipped
       if (insertErr.code === "23505") {
         console.log("[abc] Duplicate key — already ingested by another process")
-        await finishRun(run.id, "skipped", { rows_skipped: 1 })
-        return
+        await finishRun(runId, "skipped", { rows_skipped: 1 })
+        return { success: true, skipped: true }
       }
       console.error("[abc] DB insert failed:", insertErr.message)
-      await finishRun(run.id, "failed", {
-        error_message: `DB insert failed: ${insertErr.message}`.slice(0, 2000),
-      })
-      return
+      const dbErrMsg = `DB insert failed: ${insertErr.message}`.slice(0, 2000)
+      await finishRun(runId, "failed", { error_message: dbErrMsg })
+      await writeAuditLog(runId, "failed", { error_message: dbErrMsg })
+      return { success: false, error: dbErrMsg }
     }
 
     // 6b. Generic per-scrape audit row in adela_scrape_results
@@ -314,19 +327,54 @@ export async function runAbcScraper(): Promise<void> {
       console.warn("[abc] WhatsApp notification failed (non-fatal):", notifyErr)
     })
 
-    await finishRun(run.id, "success", {
+    await finishRun(runId, "success", {
       rows_inserted: 1,
       metadata: { report_date: reportDate, pdf_url: pdfUrl, storage_path: finalStoragePath },
     })
+
+    // 8. Write audit log row to adela_audit_log (per phase-1.00e-rem spec).
+    // This is always written last, even if notify failed earlier.
+    await writeAuditLog(runId, "success", {
+      report_date: extracted.report_date ?? reportDate,
+      pdf_url: pdfUrl,
+      storage_path: finalStoragePath,
+      rows_inserted: 1,
+    })
+
     console.log(`[abc] Done. Report for ${reportDate} ingested.`)
+    return { success: true, rows_inserted: 1, storage_path: finalStoragePath }
   } catch (err) {
-    // Per phase-1.00e-rem spec: log to audit and return gracefully. Never
-    // re-throw — the scheduler's safety net handles unexpected throws but
-    // the scraper itself owns its failure path through adela_runs.
+    // Per phase-1.00e-rem spec: log error and return {success: false, error}.
+    // Never re-throw — the scraper owns its full failure path.
     const msg = err instanceof Error ? err.message : String(err)
     console.error("[abc] Scraper failed:", msg)
-    await finishRun(run.id, "failed", { error_message: msg.slice(0, 2000) }).catch((auditErr) => {
+    await finishRun(runId, "failed", { error_message: msg.slice(0, 2000) }).catch((auditErr) => {
       console.error("[abc] Failed to write failure audit row:", auditErr)
     })
+    await writeAuditLog(runId, "failed", { error_message: msg.slice(0, 2000) }).catch(
+      (auditErr) => {
+        console.error("[abc] Failed to write adela_audit_log row:", auditErr)
+      }
+    )
+    return { success: false, error: msg }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// adela_audit_log writer (always last — never blocks success path)
+// ---------------------------------------------------------------------------
+async function writeAuditLog(
+  runId: string,
+  status: "success" | "failed",
+  payload: Record<string, unknown>
+): Promise<void> {
+  const { error } = await supabase.from("adela_audit_log").insert({
+    scraper: "abc",
+    run_id: runId,
+    status,
+    payload,
+  })
+  if (error) {
+    console.warn("[abc] adela_audit_log insert failed (non-fatal):", error.message)
   }
 }

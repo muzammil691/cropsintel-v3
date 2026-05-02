@@ -22,24 +22,42 @@ export interface NotifyPayload {
 const TIMEOUT_MS = 5000
 
 export async function notifyAtlas(payload: NotifyPayload): Promise<void> {
+  // ATLAS_NOTIFY_URL is the canonical full endpoint URL (per phase-1.00e-rem
+  // spec). ATLAS_URL is the legacy base form — when set, the path is appended.
+  const explicit = process.env.ATLAS_NOTIFY_URL
   const base = process.env.ATLAS_URL
-  if (!base) {
-    console.warn("[notify] ATLAS_URL not set — skipping Atlas notification:", payload)
+  let url: string
+  if (explicit) {
+    url = explicit
+  } else if (base) {
+    url = `${base.replace(/\/+$/, "")}/atlas/adela/notify`
+  } else {
+    console.warn(
+      "[notify] Neither ATLAS_NOTIFY_URL nor ATLAS_URL set — skipping Atlas notification:",
+      payload
+    )
     return
   }
 
-  const url = `${base.replace(/\/+$/, "")}/atlas/adela/notify`
-
-  try {
-    const res = await axios.post(url, payload, {
-      timeout: TIMEOUT_MS,
-      headers: { "content-type": "application/json" },
-    })
-    console.log(`[notify] Atlas notified (${res.status}):`, payload)
-  } catch (err) {
-    const ax = err as AxiosError
-    const status = ax.response?.status ?? "no-response"
-    const body = ax.response?.data ?? ax.message
-    console.warn(`[notify] Atlas notify failed (${status}):`, body)
+  // Retry once on failure per phase-1.00e-rem spec. Never block the scraper —
+  // both attempts are wrapped; the second failure is logged and swallowed.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await axios.post(url, payload, {
+        timeout: TIMEOUT_MS,
+        headers: { "content-type": "application/json" },
+      })
+      console.log(`[notify] Atlas notified (${res.status}):`, payload)
+      return
+    } catch (err) {
+      const ax = err as AxiosError
+      const status = ax.response?.status ?? "no-response"
+      const body = ax.response?.data ?? ax.message
+      if (attempt === 1) {
+        console.warn(`[notify] Atlas notify attempt 1 failed (${status}), retrying:`, body)
+        continue
+      }
+      console.warn(`[notify] Atlas notify failed after retry (${status}):`, body)
+    }
   }
 }

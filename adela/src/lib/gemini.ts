@@ -68,3 +68,57 @@ export async function extractStructured<T = Record<string, unknown>>(
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
+
+// ---------------------------------------------------------------------------
+// extractCropData — convenience wrapper for HTML inputs (phase-1.00e-rem)
+//
+// Sends the raw HTML to Gemini and asks for a flat array of crop data rows.
+// Each row is a generic key/value bag — callers are responsible for narrowing
+// to a domain shape (PriceRow, PositionRow, etc.) before persisting.
+// ---------------------------------------------------------------------------
+export interface CropDataRow {
+  variety?: string
+  size_grade?: string
+  origin_country?: string
+  destination_country?: string
+  price_per_lb_usd?: number | null
+  quantity_lbs?: number | null
+  occurred_at?: string
+  source_url?: string
+  notes?: string
+  [key: string]: unknown
+}
+
+const CROP_DATA_SCHEMA = {
+  type: "object",
+  properties: {
+    rows: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          variety: { type: "string", nullable: true },
+          size_grade: { type: "string", nullable: true },
+          origin_country: { type: "string", nullable: true },
+          destination_country: { type: "string", nullable: true },
+          price_per_lb_usd: { type: "number", nullable: true },
+          quantity_lbs: { type: "number", nullable: true },
+          occurred_at: { type: "string", nullable: true },
+          source_url: { type: "string", nullable: true },
+          notes: { type: "string", nullable: true },
+        },
+      },
+    },
+  },
+  required: ["rows"],
+}
+
+const CROP_DATA_PROMPT =
+  "Extract structured crop market data rows from the HTML below. Return ONLY valid JSON with a top-level 'rows' array; each row is a flat object with the listed properties. Use null for missing fields."
+
+export async function extractCropData(html: string): Promise<CropDataRow[]> {
+  const result = await extractStructured<{ rows?: CropDataRow[] }>(html, CROP_DATA_SCHEMA, {
+    prompt: CROP_DATA_PROMPT,
+  })
+  return Array.isArray(result?.rows) ? result.rows : []
+}

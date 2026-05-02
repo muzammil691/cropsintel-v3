@@ -80,7 +80,8 @@ needed if you want WhatsApp notifications on successful scrapes.
 | `SUPABASE_SERVICE_KEY` | yes | `sb_secret_...` | Supabase project settings → API → **Secret key** (new `sb_secret_` format) |
 | `GEMINI_API_KEY` | yes | `AIza...` | https://aistudio.google.com/app/apikey |
 | `ANTHROPIC_API_KEY` | yes | `sk-ant-...` | https://console.anthropic.com → API Keys (used by future Claude-powered scrapers + monthly briefs) |
-| `ATLAS_URL` | yes | `https://atlas.cropsintel.app` | Atlas service base URL (Adela POSTs run results here) |
+| `ATLAS_NOTIFY_URL` | yes | `https://atlas.cropsintel.app/atlas/adela/notify` | Full URL Adela POSTs scrape summaries to (per phase-1.00e-rem). `ATLAS_URL` is accepted as a legacy fallback (path appended automatically). |
+| `SCRAPER_SCHEDULE` | optional | `0 6 * * *` | Cron expression overriding the default ABC schedule (06:00 UTC daily). Useful for staging deploys that need faster cadence. |
 | `TWILIO_ACCOUNT_SID` | optional | `AC...` | https://console.twilio.com → Account Info |
 | `TWILIO_AUTH_TOKEN` | optional | `...` | https://console.twilio.com → Account Info |
 | `TWILIO_WHATSAPP_FROM` | optional | `whatsapp:+12345622692` | Your registered Maxons WhatsApp Business number |
