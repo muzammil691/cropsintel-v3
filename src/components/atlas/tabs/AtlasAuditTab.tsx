@@ -5,8 +5,10 @@ import { cn } from '@/lib/utils'
 import {
   fetchRecentVerifierRuns,
   fetchRecentDesignerRuns,
+  diagnoseArtifact,
   type VerifierRunRow,
   type DesignerRunRow,
+  type DiagnosisBucket,
 } from '@/lib/atlas-client'
 
 type FilterKey = 'all' | 'verifier' | 'designer'
@@ -59,6 +61,8 @@ export default function AtlasAuditTab() {
       commit_sha: r.commit_sha,
       created_at: r.ran_at,
       gap_count: r.gaps?.length ?? 0,
+      gaps: r.gaps as unknown[] | undefined,
+      raw: r as unknown as Record<string, unknown>,
     }))
     const designerRows: AuditRowData[] = designerRuns.map(r => ({
       id: `d:${r.id}`,
@@ -69,6 +73,7 @@ export default function AtlasAuditTab() {
       commit_sha: null,
       created_at: r.created_at,
       gap_count: countGapsFromJudgment(r.ai_judgment),
+      raw: r as unknown as Record<string, unknown>,
     }))
 
     let merged: AuditRowData[]
@@ -86,13 +91,83 @@ export default function AtlasAuditTab() {
     ).length
   }, [verifierRuns])
 
-  const handleAction: React.ComponentProps<typeof AuditRow>['onAction'] = (kind, row) => {
+  const [diagnosis, setDiagnosis] = useState<{ rowId: string; bucket: DiagnosisBucket } | null>(null)
+  const [diagnosing, setDiagnosing] = useState<string | null>(null)
+
+  const handleAction: React.ComponentProps<typeof AuditRow>['onAction'] = async (kind, row) => {
     if (kind === 'open-commit' && row.commit_sha) {
-      const url = `https://github.com/cropsintel/io/cropsintel-v3/commit/${row.commit_sha}`
+      const url = `https://github.com/muzammil691/cropsintel-v3/commit/${row.commit_sha}`
       try { window.open(url, '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
       return
     }
-    showToast(`${labelFor(kind)} flow ships in Phase B (${row.task_id}).`)
+
+    // DISCUSS: prefill the cockpit chat with a focused question.
+    if (kind === 'discuss') {
+      const summary = row.gaps && row.gaps.length > 0
+        ? row.gaps.slice(0, 3).map((g, i) => {
+            const gap = g as { check?: string; description?: string; remediation?: string }
+            return `  ${i + 1}. [${gap.check ?? 'gap'}] ${(gap.description ?? '').slice(0, 200)}`
+          }).join('\n')
+        : `  (no gap details on this row)`
+      const seed = `Discuss the ${row.source} verdict on ${row.task_id} (${row.verdict}, ${row.commit_sha ? row.commit_sha.slice(0, 7) : 'no sha'}).\n\nGaps:\n${summary}\n\nWhat do you think — should we auto-fix, queue a remediation, or escalate?`
+      window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: seed }))
+      showToast('Question sent to chat — open the chat panel.')
+      return
+    }
+
+    // DIAGNOSE + COPY CC PROMPT both call /atlas/artifacts/diagnose.
+    if (kind === 'diagnose' || kind === 'copy-cc-prompt') {
+      setDiagnosing(row.id)
+      try {
+        const bucket = await diagnoseArtifact({
+          kind: row.source === 'verifier' ? 'verifier_run' : 'designer_audit',
+          ref: row.id,
+          payload: {
+            task_id: row.task_id,
+            commit_sha: row.commit_sha,
+            verdict: row.verdict,
+            gaps: row.gaps ?? [],
+            raw: row.raw ?? {},
+          },
+        })
+
+        if (kind === 'copy-cc-prompt') {
+          if (bucket.bucket === 'claude-code') {
+            try {
+              await navigator.clipboard.writeText(bucket.prompt)
+              showToast('Claude Code prompt copied — paste into VS Code Claude Code.')
+            } catch {
+              showToast('Clipboard write failed — open Diagnose to view the prompt.')
+              setDiagnosis({ rowId: row.id, bucket })
+            }
+          } else {
+            // Diagnosis didn't classify as claude-code — surface the bucket so user sees why.
+            showToast(`Diagnose returned bucket "${bucket.bucket}" — open Diagnose for details.`)
+            setDiagnosis({ rowId: row.id, bucket })
+          }
+        } else {
+          // Diagnose: render result inline below the row.
+          setDiagnosis({ rowId: row.id, bucket })
+        }
+      } catch (e) {
+        showToast(`Diagnose failed: ${e instanceof Error ? e.message : String(e)}`)
+      } finally {
+        setDiagnosing(null)
+      }
+      return
+    }
+
+    if (kind === 'view-gaps') {
+      // Open a quick gap dump in the toast for read-only inspection.
+      const summary = row.gaps && row.gaps.length > 0
+        ? row.gaps.slice(0, 5).map(g => {
+            const gap = g as { check?: string; description?: string }
+            return `[${gap.check ?? 'gap'}] ${(gap.description ?? '').slice(0, 100)}`
+          }).join(' | ')
+        : 'No gaps recorded.'
+      showToast(summary)
+      return
+    }
   }
 
   const showToast = (msg: string) => {
@@ -148,7 +223,15 @@ export default function AtlasAuditTab() {
       ) : (
         <ol className="space-y-1.5">
           {rows.map(row => (
-            <AuditRow key={row.id} row={row} onAction={handleAction} />
+            <li key={row.id} className="space-y-1.5">
+              <AuditRow row={row} onAction={handleAction} />
+              {diagnosing === row.id && (
+                <div className="ml-6 text-[11px] text-slate-500 italic">Diagnosing…</div>
+              )}
+              {diagnosis?.rowId === row.id && (
+                <DiagnosisCard bucket={diagnosis.bucket} onClose={() => setDiagnosis(null)} />
+              )}
+            </li>
           ))}
         </ol>
       )}
@@ -166,21 +249,109 @@ export default function AtlasAuditTab() {
   )
 }
 
-function labelFor(kind: 'diagnose' | 'discuss' | 'copy-cc-prompt' | 'view-gaps' | 'open-commit'): string {
-  switch (kind) {
-    case 'diagnose': return 'Diagnose'
-    case 'discuss': return 'Discuss'
-    case 'copy-cc-prompt': return 'Copy CC Prompt'
-    case 'view-gaps': return 'View gaps'
-    case 'open-commit': return 'Open commit'
-  }
-}
-
 function normalizeDesignerVerdict(verdict: string): AuditVerdict {
   if (verdict === 'pass') return 'pass'
   if (verdict === 'fail') return 'fail'
   if (verdict === 'partial') return 'partial'
   return 'unknown'
+}
+
+function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: () => void }) {
+  const baseClass = 'ml-6 rounded-md border px-3 py-2 text-xs space-y-1.5'
+  if (bucket.bucket === 'auto-remediate') {
+    return (
+      <div className={cn(baseClass, 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200')}>
+        <div className="flex items-center justify-between">
+          <span className="font-semibold uppercase tracking-wider text-[10px]">Auto-remediate</span>
+          <button onClick={onClose} className="text-emerald-700 dark:text-emerald-400 text-[11px] hover:underline">Dismiss</button>
+        </div>
+        <p>{bucket.reason}</p>
+        <p className="font-mono text-[11px]">spec: {bucket.spec_filename}</p>
+        <button
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(bucket.spec_body)
+              window.dispatchEvent(new CustomEvent('atlas:chat-prefill', {
+                detail: `/queue ${bucket.spec_filename}\n\n(Atlas suggests auto-remediating this — spec body copied to clipboard. Approve to queue?)`,
+              }))
+            } catch { /* ignore */ }
+          }}
+          className="mt-1 rounded-md border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors duration-200"
+        >
+          Copy spec + ask Atlas to queue
+        </button>
+      </div>
+    )
+  }
+  if (bucket.bucket === 'claude-code') {
+    return (
+      <div className={cn(baseClass, 'border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 text-sky-900 dark:text-sky-200')}>
+        <div className="flex items-center justify-between">
+          <span className="font-semibold uppercase tracking-wider text-[10px]">Needs Claude Code</span>
+          <button onClick={onClose} className="text-sky-700 dark:text-sky-400 text-[11px] hover:underline">Dismiss</button>
+        </div>
+        <p>{bucket.reason}</p>
+        {bucket.affected_files?.length > 0 && (
+          <p className="font-mono text-[11px]">
+            files: {bucket.affected_files.slice(0, 3).join(', ')}
+            {bucket.affected_files.length > 3 ? ` +${bucket.affected_files.length - 3}` : ''}
+          </p>
+        )}
+        <div className="flex gap-1.5 mt-1">
+          <button
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(bucket.prompt)
+              } catch { /* ignore */ }
+            }}
+            className="rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-sky-100 dark:hover:bg-sky-900/40 transition-colors duration-200"
+          >
+            Copy prompt
+          </button>
+          <a
+            href="vscode://file/"
+            className="rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-sky-100 dark:hover:bg-sky-900/40 transition-colors duration-200 no-underline"
+          >
+            Open VS Code
+          </a>
+        </div>
+        <details className="mt-1">
+          <summary className="cursor-pointer text-[11px]">Show full prompt</summary>
+          <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900 px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap">
+            {bucket.prompt}
+          </pre>
+        </details>
+      </div>
+    )
+  }
+  if (bucket.bucket === 'in-app-action') {
+    return (
+      <div className={cn(baseClass, 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200')}>
+        <div className="flex items-center justify-between">
+          <span className="font-semibold uppercase tracking-wider text-[10px]">In-app action</span>
+          <button onClick={onClose} className="text-amber-700 dark:text-amber-400 text-[11px] hover:underline">Dismiss</button>
+        </div>
+        <p>{bucket.reason}</p>
+        <p className="font-mono text-[11px]">{bucket.label}</p>
+      </div>
+    )
+  }
+  // discuss
+  return (
+    <div className={cn(baseClass, 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300')}>
+      <div className="flex items-center justify-between">
+        <span className="font-semibold uppercase tracking-wider text-[10px]">Discuss</span>
+        <button onClick={onClose} className="text-slate-500 text-[11px] hover:underline">Dismiss</button>
+      </div>
+      <p>{bucket.reason}</p>
+      <button
+        onClick={() => window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: bucket.chat_seed }))}
+        className="mt-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200"
+      >
+        Send to chat
+      </button>
+    </div>
+  )
 }
 
 function summarizeJudgment(r: DesignerRunRow): string {

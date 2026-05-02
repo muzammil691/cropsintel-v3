@@ -107,6 +107,24 @@ export function CockpitChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill])
 
+  // Listen for cross-component prefill broadcasts (e.g. AuditTab "Discuss"
+  // button dispatches `atlas:chat-prefill` with a focused question for the
+  // chat to pick up). Decoupled via CustomEvent so we don't have to lift
+  // chat state to AtlasCockpit.
+  useEffect(() => {
+    function handler(e: Event) {
+      const detail = (e as CustomEvent<string>).detail
+      if (typeof detail === 'string' && detail.length > 0) {
+        setInput(detail)
+        textareaRef.current?.focus()
+        // Scroll the chat into view if it's collapsed (mobile bottom sheet)
+        textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+    window.addEventListener('atlas:chat-prefill', handler as EventListener)
+    return () => window.removeEventListener('atlas:chat-prefill', handler as EventListener)
+  }, [])
+
   function handleTranscript(text: string) {
     const trimmed = input.trim()
     setInput(trimmed ? `${trimmed} ${text}` : text)

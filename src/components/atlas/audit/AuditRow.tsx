@@ -13,6 +13,10 @@ export interface AuditRowData {
   commit_sha: string | null
   created_at: string
   gap_count: number
+  // Carried so the action handlers (Diagnose / Copy CC Prompt) can submit a
+  // proper payload to /atlas/artifacts/diagnose without an extra fetch.
+  gaps?: unknown[]
+  raw?: Record<string, unknown>
 }
 
 interface AuditRowProps {
