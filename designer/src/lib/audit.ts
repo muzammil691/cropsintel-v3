@@ -26,25 +26,49 @@ export async function writeDesignerRun(review: DesignerReview): Promise<void> {
     }
   }
 
-  const { data, error } = await supabase
+  const row = {
+    task_id: review.taskId,
+    operation: review.operation,
+    verdict: review.verdict,
+    confidence: review.confidence,
+    gaps: review.gaps,
+    ai_judgment: aiJudgment,
+    cost_usd: review.costUsd,
+    duration_ms: review.durationMs,
+    head_before: review.headBefore ?? null,
+    head_after: review.headAfter ?? null,
+    screenshot_url: review.screenshotUrl ?? null,
+  }
+
+  // Audit H1: UNIQUE (task_id, operation, COALESCE(head_after, '')) means
+  // a re-audit of the same commit lands as 23505 instead of a duplicate
+  // row. Treat that as "newer result wins" — overwrite the prior row's
+  // verdict/gaps/cost so the audit tab shows the latest analysis without
+  // inflating counts.
+  let { data, error } = await supabase
     .from('designer_runs')
-    .insert({
-      task_id: review.taskId,
-      operation: review.operation,
-      verdict: review.verdict,
-      confidence: review.confidence,
-      gaps: review.gaps,
-      ai_judgment: aiJudgment,
-      cost_usd: review.costUsd,
-      duration_ms: review.durationMs,
-      head_before: review.headBefore ?? null,
-      head_after: review.headAfter ?? null,
-      screenshot_url: review.screenshotUrl ?? null,
-    })
+    .insert(row)
     .select('id')
     .single()
 
-  if (error) {
+  if (error?.code === '23505') {
+    const { data: updated, error: upErr } = await supabase
+      .from('designer_runs')
+      .update(row)
+      .eq('task_id', review.taskId)
+      .eq('operation', review.operation)
+      .eq('head_after', review.headAfter ?? null)
+      .select('id')
+      .maybeSingle()
+    if (upErr) {
+      console.error('[designer] re-audit update failed:', upErr.message)
+    } else if (updated?.id) {
+      console.log(`[designer] re-audit overwrote prior row id=${updated.id}`)
+    }
+    // Reset error so cost-log step still runs.
+    error = null
+    data = updated ?? null
+  } else if (error) {
     console.error('[designer] Failed to write audit log:', error.message)
   } else if (data?.id) {
     console.log(`[designer] audit row written id=${data.id}`)

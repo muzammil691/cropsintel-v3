@@ -228,16 +228,24 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   const hasHardFail = result.gaps.some(g => g.severity === 'fail')
   const verdict = result.passed ? 'pass' : 'fail'
 
-  // Confidence: programmatic hard fails → high confidence (0.85 ≥ threshold)
-  // warn-only fails → low confidence (0.55 < threshold, won't block)
-  // pass → high confidence (0.95)
+  // Confidence contract — must stay aligned with agent-loop.sh's
+  // VERIFIER_FAIL_CONFIDENCE_THRESHOLD (default 0.3). The loop blocks the
+  // push when verdict='fail' AND confidence >= threshold. Audit H4 fixed:
+  // warn-only used to emit 0.55 which (incorrectly) blocked at threshold
+  // 0.3 — the comment said "won't block" but math said otherwise. Now:
+  //   pass        → 0.95  (well above threshold; informational)
+  //   hard fail   → 0.85  (>= threshold → blocks; deterministic check)
+  //   warn-only   → 0.20  (<  threshold → does NOT block; AI soft signal)
+  // research.ts also short-circuits Multi-Brain debate when confidence
+  // is < DEBATE_MIN_VERIFIER_CONFIDENCE (0.6) so warn-only fails skip
+  // the $0.30 debate spend and are treated as surface bugs by the loop.
   let confidence: number
   if (result.passed) {
     confidence = 0.95
   } else if (hasHardFail) {
     confidence = 0.85
   } else {
-    confidence = 0.55
+    confidence = 0.20
   }
 
   send(res, 200, {
