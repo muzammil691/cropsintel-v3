@@ -49,6 +49,21 @@ export type {
   UserGraphMembership,
 } from "@/lib/relationship-graphs"
 
+// North-star vocabulary (master plan §1) — types live in `@/lib/north-star`.
+export type {
+  OperatingModelCode,
+  OperatingModel,
+  AlmondVariety,
+  AlmondForm,
+  TradeBasis,
+  AlmondDocType,
+  NamedLayerCode,
+  NamedLayer,
+  PortalKind,
+  PortalDefinition,
+  ScopeGuardrail,
+} from "@/lib/north-star"
+
 // Insert / Update variants — use when writing to the DB
 export type CommodityInsert = Database["public"]["Tables"]["commodities"]["Insert"]
 export type CompanyInsert = Database["public"]["Tables"]["companies"]["Insert"]

@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { submitVerificationRequest } from '@/lib/verification'
+import { ALL_OPERATING_MODELS, type OperatingModelCode } from '@/lib/north-star'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -21,11 +22,11 @@ const ROLES = [
   { value: 'other', label: 'Other' },
 ]
 
-const MODELS = [
-  { value: 'A', label: 'Model A', description: 'Direct supply/procurement' },
-  { value: 'B', label: 'Model B', description: 'Brokerage & intermediary' },
-  { value: 'C', label: 'Model C', description: 'Processing & value-add' },
-] as const
+const MODELS = ALL_OPERATING_MODELS.map((m) => ({
+  value: m.code,
+  label: m.shortName,
+  description: m.description,
+}))
 
 const schema = z.object({
   company_name: z.string().min(1, 'Company name is required'),
@@ -61,11 +62,11 @@ export function VerificationRequestForm({ onSubmitted }: Props) {
 
   const selectedModels = watch('primary_models') ?? []
 
-  function toggleModel(model: 'A' | 'B' | 'C') {
+  function toggleModel(model: OperatingModelCode) {
     const next = selectedModels.includes(model)
       ? selectedModels.filter((m) => m !== model)
       : [...selectedModels, model]
-    setValue('primary_models', next as ('A' | 'B' | 'C')[])
+    setValue('primary_models', next as OperatingModelCode[])
   }
 
   function addEvidenceUrl() {
