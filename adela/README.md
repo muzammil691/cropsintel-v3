@@ -70,25 +70,26 @@ This creates `position_reports` and `adela_runs` tables with RLS.
 
 ### Step 4 — Set environment variables in Railway
 
-In the Railway service **Variables** tab, add each of these. The first six
-are required by the phase-1.00e-rem skeleton; Twilio is optional and only
-needed if you want WhatsApp notifications on successful scrapes.
+In the Railway service **Variables** tab, add each of these. The Supabase /
+Gemini / Anthropic keys are required for the runtime to start; Twilio +
+ABC_* + CRON_SCHEDULE are operational levers documented below.
 
 | Variable | Required | Value | Where to find it |
 |---|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | `sk-ant-...` | https://console.anthropic.com → API Keys (used by future Claude-powered scrapers + monthly briefs) |
 | `SUPABASE_URL` | yes | `https://hzrnohsxigrqlmzegwlb.supabase.co` | Supabase project settings → API |
 | `SUPABASE_SERVICE_KEY` | yes | `sb_secret_...` | Supabase project settings → API → **Secret key** (new `sb_secret_` format) |
 | `GEMINI_API_KEY` | yes | `AIza...` | https://aistudio.google.com/app/apikey |
-| `ANTHROPIC_API_KEY` | yes | `sk-ant-...` | https://console.anthropic.com → API Keys (used by future Claude-powered scrapers + monthly briefs) |
-| `ATLAS_NOTIFY_URL` | yes | `https://atlas.cropsintel.app/atlas/adela/notify` | Full URL Adela POSTs scrape summaries to (per phase-1.00e-rem). `ATLAS_URL` is accepted as a legacy fallback (path appended automatically). |
-| `SCRAPER_SCHEDULE` | optional | `0 6 * * *` | Cron expression overriding the default ABC schedule (06:00 UTC daily). Useful for staging deploys that need faster cadence. |
-| `TWILIO_ACCOUNT_SID` | optional | `AC...` | https://console.twilio.com → Account Info |
-| `TWILIO_AUTH_TOKEN` | optional | `...` | https://console.twilio.com → Account Info |
+| `TWILIO_ACCOUNT_SID` | optional | `AC...` | https://console.twilio.com → Account Info — required for WhatsApp notifications |
+| `TWILIO_AUTH_TOKEN` | optional | `...` | https://console.twilio.com → Account Info — required for WhatsApp notifications |
 | `TWILIO_WHATSAPP_FROM` | optional | `whatsapp:+12345622692` | Your registered Maxons WhatsApp Business number |
-| `TWILIO_WHATSAPP_TO` | optional | `whatsapp:+971562556592` | Muzammil's number |
+| `ABC_*` | optional | see below | Override the ABC scraper's source URL, base host, User-Agent, and retry policy without code changes. Recognised keys: `ABC_INDEX_URL`, `ABC_BASE_URL`, `ABC_USER_AGENT`, `ABC_RETRY_ATTEMPTS`, `ABC_RETRY_DELAY_MS` |
+| `CRON_SCHEDULE` | optional | `0 6 * * *` | Cron expression overriding the default ABC schedule (06:00 UTC daily). Useful for staging deploys that need faster cadence |
 
-> The legacy env names `V3_SUPABASE_URL` / `V3_SUPABASE_SECRET_KEY` are still
-> accepted as fallbacks for backwards compatibility with earlier deploys.
+> Legacy env names accepted as fallbacks for older deploys: `V3_SUPABASE_URL`,
+> `V3_SUPABASE_SECRET_KEY`, `SCRAPER_SCHEDULE`, `CRON_ABC`. Set
+> `TWILIO_WHATSAPP_TO` to receive the WhatsApp notifications; `ATLAS_NOTIFY_URL`
+> (or legacy `ATLAS_URL`) wires the Atlas dashboard notifier.
 
 ### Step 5 — Configure Watch Paths
 

@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
-# tini for signal handling, ca-certificates for HTTPS fetches
-RUN apk add --no-cache ca-certificates tini bash
+# tini for signal handling, ca-certificates for HTTPS fetches, wget for HEALTHCHECK
+RUN apk add --no-cache ca-certificates tini bash wget
 
 WORKDIR /app
 
@@ -22,8 +22,15 @@ RUN npx tsc \
 RUN chown -R node:node /app
 USER node
 
-# Railway sets $PORT; expose for documentation
+# Railway sets $PORT; default to 8080 inside the container
+ENV PORT=8080
 EXPOSE 8080
+
+# Container-level health check hitting the in-process /health server.
+# Railway also probes /health via its platform healthcheck; this is a belt+braces
+# liveness signal so a stuck event-loop trips a restart.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -q -O - "http://127.0.0.1:${PORT}/health" >/dev/null || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
