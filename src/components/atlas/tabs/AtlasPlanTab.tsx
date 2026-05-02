@@ -62,6 +62,7 @@ export default function AtlasPlanTab() {
           className="shrink-0 text-xs min-h-[44px] sm:min-h-0 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
         >
           <RefreshCw className={loading ? 'size-3.5 animate-spin' : 'size-3.5'} />
+          <span className="sr-only">Refresh plan</span>
         </Button>
       </div>
 
