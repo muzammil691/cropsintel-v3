@@ -95,6 +95,7 @@ async function runHeartbeat(): Promise<void> {
     // 1.10x: queue intelligence + post-ship memory ingest.
     await reorderQueueIfPriorityInversion(trustMode)
     await memoryIngestAfterShips(trustMode)
+    await verifierAuditAfterShips(trustMode)
     // 1.10ar: rolling chat-summary sweep — covers WhatsApp/voice threads
     // that don't run through the cockpit chat handler.
     await chatSummarySweep(trustMode)
@@ -1167,6 +1168,100 @@ async function memoryIngestAfterShips(trustMode: TrustMode): Promise<void> {
       console.log(`[atlas-conductor] memory.ingest(${source}) fired after ${shipCommits.length} ship commit(s)`)
     } catch (err) {
       console.warn(`[atlas-conductor] memory.ingest(${source}) after-ship dispatch failed:`, err)
+    }
+  }
+}
+
+// After Builder ships a spec, the verifier_runs row for that spec might
+// still be from a pre-ship audit (when the implementation files didn't exist
+// yet). Without an explicit recheck, that fail row persists forever — every
+// future audit-feed read sees an old failure for a task that has actually
+// been completed, and the diagnose-batch endpoint keeps generating
+// fix-prompts demanding files that already exist.
+//
+// This pass extracts task_ids from ship-commit subjects and re-runs verifier
+// at the new HEAD. The fresh verifier_runs row supersedes the old one via
+// the latest-per-task dedup at /atlas/verifier/runs.
+
+const recheckedShipWindows = new Set<string>()
+
+function extractTaskIdFromShipSubject(subject: string): string | null {
+  // Match "feat: phase-X.Y-name (autonomous agent...)"
+  const featMatch = subject.match(/^feat:\s+(phase-[a-z0-9.-]+?)(?:\s+\(autonomous|\s*$|\s+—|\s+-)/i)
+  if (featMatch) return featMatch[1]
+  // Match "chore(agent): phase-X.Y-name → done"
+  const choreMatch = subject.match(/chore\(agent\):\s*(phase-[a-z0-9.-]+?)\s*→\s*done/i)
+  if (choreMatch) return choreMatch[1]
+  return null
+}
+
+async function verifierAuditAfterShips(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto') return
+  let stdout: string
+  try {
+    const result = await withGitLock('conductor:ship-recheck-log', () => execFileP(
+      'git',
+      ['log', '--since=6 minutes ago', '--pretty=format:%H%x09%s'],
+      { cwd: REPO_ROOT },
+    ))
+    stdout = result.stdout
+  } catch (err) {
+    console.warn('[atlas-conductor] git log for ship-recheck failed:', err)
+    return
+  }
+  const lines = stdout.split('\n').filter(Boolean)
+  if (lines.length === 0) return
+
+  // Pull (commit_sha, task_id) for each ship commit. Skip commits we can't
+  // parse a task_id from.
+  const shipEntries: Array<{ sha: string; taskId: string }> = []
+  for (const line of lines) {
+    const [sha, subj] = line.split('\t')
+    if (!sha || !subj) continue
+    const taskId = extractTaskIdFromShipSubject(subj)
+    if (taskId) shipEntries.push({ sha, taskId })
+  }
+  if (shipEntries.length === 0) return
+
+  const windowKey = shipEntries.map(e => `${e.sha}:${e.taskId}`).sort().join(',')
+  if (recheckedShipWindows.has(windowKey)) return
+  recheckedShipWindows.add(windowKey)
+  if (recheckedShipWindows.size > 50) {
+    const first = recheckedShipWindows.values().next().value
+    if (first !== undefined) recheckedShipWindows.delete(first)
+  }
+
+  // Only recheck tasks whose latest verifier_runs row is still a fail. If
+  // the autonomous Builder loop already wrote a passing row for the new
+  // commit, the dedup feed will hide the old fail without our help.
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  for (const { sha, taskId } of shipEntries) {
+    try {
+      const { data } = await sb
+        .from('verifier_runs')
+        .select('passed, ran_at, commit_sha')
+        .eq('task_id', taskId)
+        .order('ran_at', { ascending: false })
+        .limit(1)
+      const latest = (data ?? [])[0] as { passed: boolean | null; commit_sha: string | null } | undefined
+      if (!latest) continue
+      if (latest.passed === true) continue
+      // If the latest fail was already against this exact commit, no point
+      // rechecking — the audit ran against the post-ship state and still
+      // failed. Operators should look at the row, not auto-rerun.
+      if (latest.commit_sha === sha) continue
+
+      await dispatch({
+        tool: 'verifier.audit' as ToolName,
+        arguments: { taskId, headBefore: latest.commit_sha ?? sha, headAfter: sha },
+        initiatedBy: 'cron',
+        trustMode: 'auto',
+      })
+      console.log(`[atlas-conductor] verifier.audit(${taskId} @ ${sha.slice(0, 8)}) fired post-ship — superseding stale fail`)
+    } catch (err) {
+      console.warn(`[atlas-conductor] post-ship verifier audit for ${taskId} failed:`, err instanceof Error ? err.message : err)
     }
   }
 }
