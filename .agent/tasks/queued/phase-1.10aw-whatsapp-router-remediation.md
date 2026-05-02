@@ -1,3 +1,6 @@
+---
+priority: 2
+---
 # Task: Phase 1.10aw-rem — Atlas WhatsApp Router Full Implementation
 
 ## Goal
