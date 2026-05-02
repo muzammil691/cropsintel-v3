@@ -7,7 +7,9 @@ Adela is a standalone Node.js service that runs cron-scheduled scrapers to inges
 - Runs daily at **06:00 UTC**: fetches the latest Almond Board of California (ABC) position report
 - Downloads the PDF, sends it to Gemini Pro for structured extraction
 - Writes results to `position_reports` table in V3 Supabase
-- Sends a WhatsApp notification when a new report is ingested
+- Writes a generic per-scrape audit row to `adela_scrape_results`
+- Notifies Atlas (`POST $ATLAS_URL/atlas/adela/notify`) on success
+- Sends a WhatsApp notification when a new report is ingested (optional)
 - Records every run (success/skip/fail) in `adela_runs` for audit
 
 ## Repository structure
@@ -25,8 +27,14 @@ adela/
 │   ├── gemini.ts           ← Gemini Pro extraction wrapper
 │   ├── notify.ts           ← WhatsApp via Twilio
 │   ├── audit.ts            ← adela_runs write helpers
+│   ├── lib/
+│   │   ├── supabase.ts     ← env-flexible client + bucket bootstrap
+│   │   ├── gemini.ts       ← extractStructured() wrapper
+│   │   └── notify.ts       ← Atlas POST notifier
 │   └── scrapers/
 │       └── abc.ts          ← ABC position report scraper
+└── supabase/
+    └── migrations/         ← adela_scrape_results table
 ```
 
 ---
@@ -62,17 +70,24 @@ This creates `position_reports` and `adela_runs` tables with RLS.
 
 ### Step 4 — Set environment variables in Railway
 
-In the Railway service **Variables** tab, add each of these:
+In the Railway service **Variables** tab, add each of these. The first six
+are required by the phase-1.00e-rem skeleton; Twilio is optional and only
+needed if you want WhatsApp notifications on successful scrapes.
 
-| Variable | Value | Where to find it |
-|---|---|---|
-| `V3_SUPABASE_URL` | `https://hzrnohsxigrqlmzegwlb.supabase.co` | Supabase project settings → API |
-| `V3_SUPABASE_SECRET_KEY` | `sb_secret_...` | Supabase project settings → API → **Secret key** (the new format starting with `sb_secret_`) |
-| `GEMINI_API_KEY` | `AIza...` | https://aistudio.google.com/app/apikey |
-| `TWILIO_ACCOUNT_SID` | `AC...` | https://console.twilio.com → Account Info |
-| `TWILIO_AUTH_TOKEN` | `...` | https://console.twilio.com → Account Info |
-| `TWILIO_WHATSAPP_FROM` | `whatsapp:+12345622692` | Your registered Maxons WhatsApp Business number |
-| `TWILIO_WHATSAPP_TO` | `whatsapp:+971562556592` | Muzammil's number |
+| Variable | Required | Value | Where to find it |
+|---|---|---|---|
+| `SUPABASE_URL` | yes | `https://hzrnohsxigrqlmzegwlb.supabase.co` | Supabase project settings → API |
+| `SUPABASE_SERVICE_KEY` | yes | `sb_secret_...` | Supabase project settings → API → **Secret key** (new `sb_secret_` format) |
+| `GEMINI_API_KEY` | yes | `AIza...` | https://aistudio.google.com/app/apikey |
+| `ANTHROPIC_API_KEY` | yes | `sk-ant-...` | https://console.anthropic.com → API Keys (used by future Claude-powered scrapers + monthly briefs) |
+| `ATLAS_URL` | yes | `https://atlas.cropsintel.app` | Atlas service base URL (Adela POSTs run results here) |
+| `TWILIO_ACCOUNT_SID` | optional | `AC...` | https://console.twilio.com → Account Info |
+| `TWILIO_AUTH_TOKEN` | optional | `...` | https://console.twilio.com → Account Info |
+| `TWILIO_WHATSAPP_FROM` | optional | `whatsapp:+12345622692` | Your registered Maxons WhatsApp Business number |
+| `TWILIO_WHATSAPP_TO` | optional | `whatsapp:+971562556592` | Muzammil's number |
+
+> The legacy env names `V3_SUPABASE_URL` / `V3_SUPABASE_SECRET_KEY` are still
+> accepted as fallbacks for backwards compatibility with earlier deploys.
 
 ### Step 5 — Configure Watch Paths
 
@@ -96,14 +111,14 @@ Click **Deploy** (or Railway will auto-deploy when the branch is detected). Buil
 
 1. Check Railway logs — you should see:
    ```
-   [adela] Starting Adela v1.0 — CropsIntel runtime nervous system
-   [adela] Time: 2026-04-29T...
-   [scheduler] Registered job: abc-position-reports @ 0 6 * * *
-   [adela] Ready. Waiting for scheduled jobs...
+   [adela] Starting Adela v1.1 — CropsIntel runtime nervous system
+   [adela] Time: 2026-05-02T...
+   [scheduler] Registered: abc @ 0 6 * * *
+   [adela] Ready. Scheduler armed; health server up.
    ```
 2. Within ~5 minutes of startup, a WhatsApp message arrives:
    ```
-   🤖 Adela online. Cron jobs registered. Scraping almonds.org daily at 06:00 UTC.
+   🤖 Adela v1.1 online. Cron jobs registered. ABC scrape at 06:00 UTC daily.
    ```
 
 ---

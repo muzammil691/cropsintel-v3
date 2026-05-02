@@ -8,8 +8,10 @@ export const config = {
   },
 
   cron: {
-    // Phase 1.6a — Adela cadence per task spec
-    abc: process.env.CRON_ABC ?? "*/15 * * * *",      // every 15 min
+    // Phase 1.00e-rem — abc runs once daily at 06:00 UTC (ABC posts the
+    // monthly position report overnight US time, so 06:00 UTC is well after
+    // it lands). Strata + news still run on their faster cadences.
+    abc: process.env.CRON_ABC ?? "0 6 * * *",         // 06:00 UTC daily
     strata: process.env.CRON_STRATA ?? "0 * * * *",   // top of every hour
     news: process.env.CRON_NEWS ?? "*/30 * * * *",    // every 30 min
   },

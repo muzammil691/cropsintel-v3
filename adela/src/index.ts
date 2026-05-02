@@ -37,10 +37,13 @@ startHealthServer(config.health.port)
 // 2. Register and start cron jobs
 startScheduler()
 
-// 3. Startup notification (non-fatal if Twilio not configured)
-notifyWhatsApp(
-  `🤖 Adela v1.1 online. ABC ${config.cron.abc}, Strata ${config.cron.strata}, news ${config.cron.news}.`
-).catch((err) => console.warn("[adela] Startup notification failed:", err))
+// 3. Startup notification (non-fatal if Twilio not configured).
+// Keep this message in sync with the matching block in adela/README.md.
+const STARTUP_MESSAGE = "🤖 Adela v1.1 online. Cron jobs registered. ABC scrape at 06:00 UTC daily."
+
+notifyWhatsApp(STARTUP_MESSAGE).catch((err) =>
+  console.warn("[adela] Startup notification failed:", err)
+)
 
 // 4. Keep process alive — never exit on uncaught errors
 process.on("uncaughtException", (err) => {

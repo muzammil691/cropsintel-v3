@@ -7,10 +7,15 @@
  * Steps:
  *  1. Fetch index page, extract latest PDF href
  *  2. Check whether this report_date is already in position_reports (idempotent)
- *  3. Download PDF, store in Supabase Storage adela-raw/abc/
- *  4. Send to Gemini Pro for structured extraction (strict JSON schema)
- *  5. Validate with Zod, INSERT into position_reports
- *  6. Send WhatsApp notification
+ *  3. Download PDF
+ *  4. Upload raw PDF to Supabase Storage bucket adela-raw/abc/
+ *  5. Send to Gemini Pro for structured extraction (strict JSON schema)
+ *  6. Validate with Zod, INSERT into position_reports + adela_scrape_results
+ *  7. Notify Atlas (rows_inserted, storage_path) and WhatsApp
+ *
+ * Failures: log to adela_runs and return gracefully — the catch block must
+ * never re-throw upward (per phase-1.00e-rem task spec). The scheduler's
+ * outer try/catch is a safety net only.
  */
 
 import { load as cheerioLoad } from "cheerio"
@@ -18,6 +23,8 @@ import { z } from "zod"
 import { supabase } from "../supabase.js"
 import { extractPdfJson } from "../gemini.js"
 import { notifyWhatsApp } from "../notify.js"
+import { notifyAtlas } from "../lib/notify.js"
+import { ensureStorageBucket } from "../lib/supabase.js"
 import { startRun, finishRun } from "../audit.js"
 import { config } from "../config.js"
 
@@ -216,7 +223,8 @@ export async function runAbcScraper(): Promise<void> {
     const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer())
     const pdfBase64 = pdfBuffer.toString("base64")
 
-    // 4. Store raw PDF in Supabase Storage
+    // 4. Store raw PDF in Supabase Storage (creates bucket if absent)
+    await ensureStorageBucket(config.supabase.storageBucket)
     const storagePath = `${config.supabase.storagePrefix}/${reportDate}_PosRpt.pdf`
     const { error: storageErr } = await supabase.storage
       .from(config.supabase.storageBucket)
@@ -265,10 +273,32 @@ export async function runAbcScraper(): Promise<void> {
         await finishRun(run.id, "skipped", { rows_skipped: 1 })
         return
       }
-      throw new Error(`DB insert failed: ${insertErr.message}`)
+      console.error("[abc] DB insert failed:", insertErr.message)
+      await finishRun(run.id, "failed", {
+        error_message: `DB insert failed: ${insertErr.message}`.slice(0, 2000),
+      })
+      return
     }
 
-    // 7. WhatsApp notification
+    // 6b. Generic per-scrape audit row in adela_scrape_results
+    const finalStoragePath = storageErr ? null : storagePath
+    const { error: scrapeAuditErr } = await supabase.from("adela_scrape_results").insert({
+      scraper: "abc",
+      scraped_at: new Date().toISOString(),
+      rows: extracted as Record<string, unknown>,
+      storage_path: finalStoragePath,
+    })
+    if (scrapeAuditErr) {
+      console.warn("[abc] adela_scrape_results insert failed (non-fatal):", scrapeAuditErr.message)
+    }
+
+    // 7. Notify Atlas + WhatsApp (both wrapped — neither blocks completion)
+    await notifyAtlas({
+      scraper: "abc",
+      rows_inserted: 1,
+      storage_path: finalStoragePath,
+    })
+
     const shipmentsM = extracted.total_shipments_lbs
       ? `${(extracted.total_shipments_lbs / 1_000_000).toFixed(1)}M lbs`
       : "N/A"
@@ -280,18 +310,23 @@ export async function runAbcScraper(): Promise<void> {
 
     await notifyWhatsApp(
       `📊 New ABC position report for ${month}. Shipments: ${shipmentsM}, Inventory: ${inventoryM}.`
-    )
+    ).catch((notifyErr) => {
+      console.warn("[abc] WhatsApp notification failed (non-fatal):", notifyErr)
+    })
 
     await finishRun(run.id, "success", {
       rows_inserted: 1,
-      metadata: { report_date: reportDate, pdf_url: pdfUrl },
+      metadata: { report_date: reportDate, pdf_url: pdfUrl, storage_path: finalStoragePath },
     })
     console.log(`[abc] Done. Report for ${reportDate} ingested.`)
   } catch (err) {
+    // Per phase-1.00e-rem spec: log to audit and return gracefully. Never
+    // re-throw — the scheduler's safety net handles unexpected throws but
+    // the scraper itself owns its failure path through adela_runs.
     const msg = err instanceof Error ? err.message : String(err)
     console.error("[abc] Scraper failed:", msg)
-    await finishRun(run.id, "failed", { error_message: msg.slice(0, 2000) })
-    // Rethrow so the scheduler's outer retry + scraper_errors dead-letter engage.
-    throw err
+    await finishRun(run.id, "failed", { error_message: msg.slice(0, 2000) }).catch((auditErr) => {
+      console.error("[abc] Failed to write failure audit row:", auditErr)
+    })
   }
 }
