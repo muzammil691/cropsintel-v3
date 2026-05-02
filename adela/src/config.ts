@@ -32,7 +32,9 @@ export const config = {
   },
 
   gemini: {
-    model: "gemini-1.5-pro",
+    // gemini-1.5-pro returned 404 from v1beta in May 2026; current default is
+    // gemini-2.0-flash. Override via GEMINI_MODEL env var.
+    model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
     maxRetries: 2,
   },
 } as const
