@@ -38,18 +38,73 @@ function redactSecrets(content: string, filename: string): string {
     .join('\n')
 }
 
-async function readAffectedFile(relPath: string): Promise<string> {
-  const full = resolve(REPO_ROOT, relPath)
+// Fall back to a fuzzy basename lookup when the audit data hands us a path
+// that doesn't exist literally. AI judges sometimes hallucinate intermediate
+// directories (e.g. drop `tabs/` from `src/components/atlas/tabs/AtlasPlanTab.tsx`).
+// Using `git ls-files` keeps us inside the tracked tree only, so we never
+// accidentally embed node_modules or build output.
+async function findFileByBasename(relPath: string): Promise<string | null> {
+  const basename = relPath.split('/').pop() ?? relPath
+  if (!basename || basename.length < 3) return null
   try {
-    const buf = await readFile(full, 'utf-8')
-    const truncated =
-      buf.length > FILE_TRUNCATE_BYTES
-        ? buf.slice(0, FILE_TRUNCATE_BYTES) + `\n\n[... truncated, file is ${buf.length} bytes total ...]`
-        : buf
-    return redactSecrets(truncated, relPath)
-  } catch (err) {
-    return `[error reading file: ${err instanceof Error ? err.message : String(err)}]`
+    const { stdout } = await execFileP('git', ['ls-files'], { cwd: REPO_ROOT })
+    const candidates = stdout
+      .split('\n')
+      .filter(p => p.endsWith('/' + basename) || p === basename)
+    if (candidates.length === 0) return null
+    // Prefer the candidate whose path overlaps the most with the requested
+    // relPath (so e.g. components/atlas/tabs/AtlasPlanTab.tsx beats
+    // legacy/components/AtlasPlanTab.tsx if both existed).
+    candidates.sort((a, b) => overlapScore(b, relPath) - overlapScore(a, relPath))
+    return candidates[0]
+  } catch {
+    return null
   }
+}
+
+function overlapScore(candidate: string, requested: string): number {
+  const cs = candidate.split('/')
+  const rs = requested.split('/')
+  let i = cs.length - 1
+  let j = rs.length - 1
+  let score = 0
+  while (i >= 0 && j >= 0 && cs[i] === rs[j]) {
+    score++
+    i--
+    j--
+  }
+  return score
+}
+
+async function readAffectedFile(relPath: string): Promise<string> {
+  const directPath = resolve(REPO_ROOT, relPath)
+  let buf: string
+  let resolvedPath = relPath
+  try {
+    buf = await readFile(directPath, 'utf-8')
+  } catch {
+    // Direct read failed — try basename fallback so judges with slightly
+    // wrong paths still produce a useful prompt.
+    const fuzzy = await findFileByBasename(relPath)
+    if (!fuzzy) {
+      return `[error reading file: not found at ${relPath} or by basename in tracked tree]`
+    }
+    try {
+      buf = await readFile(resolve(REPO_ROOT, fuzzy), 'utf-8')
+      resolvedPath = fuzzy
+    } catch (err2) {
+      return `[error reading file: ${err2 instanceof Error ? err2.message : String(err2)}]`
+    }
+  }
+  const truncated =
+    buf.length > FILE_TRUNCATE_BYTES
+      ? buf.slice(0, FILE_TRUNCATE_BYTES) + `\n\n[... truncated, file is ${buf.length} bytes total ...]`
+      : buf
+  const noteHeader =
+    resolvedPath !== relPath
+      ? `[note: requested path "${relPath}" not found; resolved to "${resolvedPath}" by basename match]\n\n`
+      : ''
+  return noteHeader + redactSecrets(truncated, resolvedPath)
 }
 
 async function gitHead(): Promise<string> {

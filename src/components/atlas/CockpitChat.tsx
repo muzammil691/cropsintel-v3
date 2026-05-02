@@ -311,7 +311,7 @@ export function CockpitChat({
             size="icon"
             onClick={handleSend}
             disabled={isStreaming || !input.trim()}
-            className="shrink-0 mb-0.5 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200"
+            className="shrink-0 mb-0.5 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           >
             <Send className="size-4" />
             <span className="sr-only">Send</span>
