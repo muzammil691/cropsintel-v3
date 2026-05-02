@@ -1,22 +1,91 @@
-import { Workflow } from 'lucide-react'
-import { TabFrame, ComingSoon } from './AtlasPlanTab'
+import { useEffect, useState } from 'react'
+import { TabFrame } from './AtlasPlanTab'
+import { AgentPipeline } from '../workflow/AgentPipeline'
+import { WorkflowGraph as WorkflowGraphView } from '@/components/atlas-workflow/WorkflowGraph'
+import { NodeDetailDrawer } from '@/components/atlas-workflow/NodeDetailDrawer'
+import {
+  fetchWorkflowGraph,
+  type AtlasStatus,
+  type WorkflowGraph,
+  type WorkflowGraphNode,
+} from '@/lib/atlas-client'
 
-/**
- * Skeleton wrapper for 1.10ak's `WorkflowGraph`. Day-1 the tab renders a
- * placeholder so the cockpit is never broken. When 1.10ak ships, replace the
- * body with `<WorkflowGraph />` from `@/components/atlas/workflow/WorkflowGraph`.
- */
-export default function AtlasWorkflowTab() {
+interface AtlasWorkflowTabProps {
+  status: AtlasStatus | null
+  onOpenAgents: () => void
+}
+
+export default function AtlasWorkflowTab({ status, onOpenAgents }: AtlasWorkflowTabProps) {
+  const [graph, setGraph] = useState<WorkflowGraph | null>(null)
+  const [graphError, setGraphError] = useState<string | null>(null)
+  const [graphLoading, setGraphLoading] = useState(true)
+  const [openNode, setOpenNode] = useState<WorkflowGraphNode | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setGraphLoading(true)
+    fetchWorkflowGraph()
+      .then(g => {
+        if (!cancelled) {
+          setGraph(g)
+          setGraphError(null)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setGraphError(err instanceof Error ? err.message : String(err))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGraphLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <TabFrame
       title="Workflows"
-      hint="Visual graph of the 7-agent flow. Click a node to inspect its last run."
+      hint="7-agent pipeline up top, 15 commodity workflows × 8 departments below."
     >
-      <ComingSoon
-        icon={Workflow}
-        feature="Workflow graph"
-        owner="1.10ak knowledge authoring"
-      />
+      <div className="space-y-4">
+        <AgentPipeline status={status} onOpenAgents={onOpenAgents} />
+
+        <section>
+          <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">
+            Commodity trade workflow graph
+          </h3>
+          {graphLoading && !graph && (
+            <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4 text-xs text-slate-500">
+              Loading workflow graph…
+            </div>
+          )}
+          {graphError && !graph && (
+            <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              <p className="font-medium">Workflow graph unavailable.</p>
+              <p className="mt-0.5">
+                Master plan §1.8 specifies 15 workflows × 8 departments — graph data pending.
+              </p>
+              <p className="mt-1 text-[10px] text-amber-700/70 dark:text-amber-300/70 truncate">
+                {graphError}
+              </p>
+            </div>
+          )}
+          {graph && (
+            <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3">
+              <WorkflowGraphView graph={graph} onNodeOpen={setOpenNode} />
+            </div>
+          )}
+        </section>
+      </div>
+
+      {openNode && (
+        <NodeDetailDrawer
+          node={openNode}
+          onClose={() => setOpenNode(null)}
+          onBuild={() => setOpenNode(null)}
+          onDiscuss={() => setOpenNode(null)}
+        />
+      )}
     </TabFrame>
   )
 }

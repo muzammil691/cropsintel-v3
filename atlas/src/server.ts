@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 import Anthropic from '@anthropic-ai/sdk'
 import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
-import { TOOLS, ToolName } from './lib/tools'
+import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import {
@@ -2527,6 +2527,127 @@ export async function startServer(): Promise<void> {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }
       return
+    }
+
+    // ─── Phase 1.10ap: audit feed + builder queue manager ─────────────────
+    if (url.split('?')[0] === '/atlas/verifier/runs' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { runs: [] }); return }
+      const queryStr = url.includes('?') ? url.split('?')[1] : ''
+      const limitRaw = new URLSearchParams(queryStr).get('limit')
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? '50', 10) || 50, 1), 200)
+      const { data, error } = await sb
+        .from('verifier_runs')
+        .select('id, task_id, commit_sha, mode, passed, gaps, duration_ms, ran_at')
+        .order('ran_at', { ascending: false })
+        .limit(limit)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { runs: data ?? [] })
+      return
+    }
+
+    if (url.split('?')[0] === '/atlas/designer/runs' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { runs: [] }); return }
+      const queryStr = url.includes('?') ? url.split('?')[1] : ''
+      const limitRaw = new URLSearchParams(queryStr).get('limit')
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? '50', 10) || 50, 1), 200)
+      const { data, error } = await sb
+        .from('designer_runs')
+        .select('id, task_id, verdict, ai_judgment, created_at')
+        .order('created_at', { ascending: false })
+        .limit(limit)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { runs: data ?? [] })
+      return
+    }
+
+    if (url === '/atlas/builder/queue' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      try {
+        const order = await builderQueueOrder()
+        const queued = order.order.map(s => ({
+          id: s.id,
+          filename: `${s.id}.md`,
+          priority: s.priority,
+          depends_on: s.depends_on,
+          blocked: s.blocked,
+          blocked_by: s.blocked_by,
+        }))
+        // List in-flight specs by reading .agent/tasks/in-progress/.
+        const inProgressDir = `${process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'}/.agent/tasks/in-progress`
+        const fs = await import('fs/promises')
+        let inFlight: Array<{ id: string; filename: string; started_at: string | null }> = []
+        try {
+          const files = await fs.readdir(inProgressDir)
+          inFlight = await Promise.all(
+            files.filter(f => f.endsWith('.md') && f !== '_template.md').map(async filename => {
+              const id = filename.replace(/\.md$/, '')
+              let started_at: string | null = null
+              try {
+                const stat = await fs.stat(`${inProgressDir}/${filename}`)
+                started_at = stat.mtime.toISOString()
+              } catch { /* ignore */ }
+              return { id, filename, started_at }
+            }),
+          )
+        } catch {
+          inFlight = []
+        }
+        json(res, 200, { queued, in_flight: inFlight })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    {
+      const priorityMatch = url.match(/^\/atlas\/builder\/queue\/([^/]+)\/priority$/)
+      if (priorityMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const taskId = decodeURIComponent(priorityMatch[1])
+        const body = await readBody(req)
+        let payload: { priority?: number }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        if (typeof payload.priority !== 'number') {
+          json(res, 400, { error: 'priority must be a number 1..10' })
+          return
+        }
+        try {
+          const result = await builderSetPriority(taskId, payload.priority)
+          json(res, 200, { ok: true, updated: result.updated })
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    {
+      const cancelMatch = url.match(/^\/atlas\/builder\/queue\/([^/]+)\/cancel$/)
+      if (cancelMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const taskId = decodeURIComponent(cancelMatch[1])
+        try {
+          await builderCancelTask(taskId)
+          json(res, 200, { ok: true })
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
     }
 
     // ─── Phase 1.10al: smart diagnosis for Active Artifacts ────────────────

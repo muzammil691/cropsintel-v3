@@ -1070,6 +1070,100 @@ export async function fetchRelatedSpecs(query: string): Promise<RelatedSpecHit[]
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// Audit feed (Phase 1.10ap) — verifier_runs + designer_runs activity stream
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface VerifierRunRow {
+  id: string
+  task_id: string
+  commit_sha: string | null
+  mode: 'audit-only' | 'gate' | string
+  passed: boolean
+  gaps: Array<Record<string, unknown>>
+  duration_ms: number | null
+  ran_at: string
+}
+
+export interface DesignerRunRow {
+  id: string
+  task_id: string
+  verdict: 'pass' | 'fail' | 'unknown' | string
+  ai_judgment: Record<string, unknown> | null
+  created_at: string
+}
+
+export async function fetchRecentVerifierRuns(limit = 50): Promise<VerifierRunRow[]> {
+  const data = await fetchJson<{ runs?: VerifierRunRow[] }>(
+    `${ATLAS_URL}/atlas/verifier/runs?limit=${limit}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.runs) ? data!.runs! : []
+}
+
+export async function fetchRecentDesignerRuns(limit = 50): Promise<DesignerRunRow[]> {
+  const data = await fetchJson<{ runs?: DesignerRunRow[] }>(
+    `${ATLAS_URL}/atlas/designer/runs?limit=${limit}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.runs) ? data!.runs! : []
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Builder queue manager (Phase 1.10ap)
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface BuilderQueueSpec {
+  id: string
+  filename: string
+  priority: number
+  depends_on: string[]
+  blocked: boolean
+  blocked_by: string[]
+}
+
+export interface BuilderInFlightSpec {
+  id: string
+  filename: string
+  started_at: string | null
+}
+
+export interface BuilderQueueResponse {
+  queued: BuilderQueueSpec[]
+  in_flight: BuilderInFlightSpec[]
+}
+
+export async function fetchBuilderQueue(): Promise<BuilderQueueResponse> {
+  const data = await fetchJson<BuilderQueueResponse>(`${ATLAS_URL}/atlas/builder/queue`, {
+    headers: authHeaders(),
+  })
+  return {
+    queued: Array.isArray(data?.queued) ? data.queued : [],
+    in_flight: Array.isArray(data?.in_flight) ? data.in_flight : [],
+  }
+}
+
+export async function setBuilderPriority(
+  taskId: string,
+  priority: number,
+): Promise<{ ok: true; updated: boolean }> {
+  return fetchJson<{ ok: true; updated: boolean }>(
+    `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/priority`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ priority }),
+    },
+  )
+}
+
+export async function cancelBuilderTask(taskId: string): Promise<{ ok: true }> {
+  return fetchJson<{ ok: true }>(
+    `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/cancel`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // Discussion queue (Phase 1.10ak)
 // ──────────────────────────────────────────────────────────────────────────
 

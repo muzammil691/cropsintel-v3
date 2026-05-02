@@ -160,6 +160,7 @@ export function AtlasCockpit() {
                   status={status}
                   loading={loading}
                   artifacts={artifacts}
+                  onOpenAgents={openAgentsTab}
                 />
               </Suspense>
             </ErrorBoundary>
@@ -178,6 +179,7 @@ export function AtlasCockpit() {
                 status={status}
                 loading={loading}
                 artifacts={artifacts}
+                onOpenAgents={openAgentsTab}
               />
             </Suspense>
           </ErrorBoundary>
@@ -233,29 +235,25 @@ function ActiveTab({
   status,
   loading,
   artifacts,
+  onOpenAgents,
 }: {
   tab: AtlasTabKey
   status: ReturnType<typeof useAtlasStatus>['status']
   loading: boolean
   artifacts: ReturnType<typeof useArtifacts>
+  onOpenAgents: () => void
 }) {
   switch (tab) {
     case 'plan':
       return <AtlasPlanTab />
     case 'queue':
-      return (
-        <AtlasQueueTab
-          pendingSpecs={artifacts.pendingSpecs}
-          loading={loading}
-          onDismiss={artifacts.dismissSpec}
-        />
-      )
+      return <AtlasQueueTab />
     case 'agents':
       return <AtlasAgentsTab status={status} loading={loading} />
     case 'audit':
-      return <AtlasAuditTab status={status} designAudits={artifacts.designAudits} loading={loading} />
+      return <AtlasAuditTab />
     case 'workflows':
-      return <AtlasWorkflowTab />
+      return <AtlasWorkflowTab status={status} onOpenAgents={onOpenAgents} />
     case 'artifacts':
       return <AtlasArtifactsTab artifacts={artifacts} />
     case 'team':
