@@ -26,7 +26,8 @@ from day one.
 V3 is **CropsIntel standalone** (per master plan v1.2). It does NOT integrate with the
 adjacent MAXONS Trading App or Microsoft Business Central. The MAXONS Workflow doc is
 knowledge reference only — V3's intelligence is grounded in real almond-trading process
-knowledge, but V3 doesn't execute trading workflows.
+knowledge, but V3 doesn't execute trading workflows. See `docs/SCOPE.md` for the full
+in/out-of-scope list.
 
 Three named layers:
 - **Adela** — runtime nervous system (cron-driven Node runner, Phase 1.6)
