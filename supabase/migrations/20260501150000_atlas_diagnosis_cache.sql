@@ -23,9 +23,12 @@ CREATE TABLE IF NOT EXISTS public.atlas_diagnosis_cache (
   UNIQUE (artifact_kind, payload_sha)
 );
 
+-- Postgres rejects mutable functions in index predicates (now() is STABLE,
+-- not IMMUTABLE). Skip the partial index — the lookup index without the
+-- WHERE clause is functionally equivalent for cache reads; the cleanup pass
+-- still uses idx_atlas_diagnosis_cache_expiry to prune expired rows.
 CREATE INDEX IF NOT EXISTS idx_atlas_diagnosis_cache_lookup
-  ON public.atlas_diagnosis_cache (artifact_kind, payload_sha)
-  WHERE expires_at > now();
+  ON public.atlas_diagnosis_cache (artifact_kind, payload_sha);
 
 CREATE INDEX IF NOT EXISTS idx_atlas_diagnosis_cache_expiry
   ON public.atlas_diagnosis_cache (expires_at);
