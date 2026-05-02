@@ -1,81 +1,52 @@
-# Task: Phase 1.10aw-rem — WhatsApp Router Full Implementation Remediation
+---
+priority: 2
+---
+# Task: Phase 1.10aw-rem — Atlas WhatsApp Router Full Implementation
 
 ## Goal
-Complete the WhatsApp full router implementation. Only a partial slash-commands-server.ts shipped. Parts B–F are entirely absent. Six files need to be created or completed.
+Complete the WhatsApp router from ~20% to 100%. Only a truncated `slash-commands-server.ts` exists. Parts B–F and all integration wiring are absent.
 
-## Background
-phase-1.10aw-atlas-whatsapp-full-router shipped one truncated file. Verifier o3 confirmed: whatsapp-split.ts absent, sendWhatsAppReplyAutoSplit absent, inbound parseSlash + dispatchSlashCommand absent, conductor.ts outbound integration absent, voice STT parity absent.
+## Files to create / modify
+1. `atlas/src/lib/whatsapp-split.ts` — sentence-boundary auto-splitter. Splits messages at sentence boundaries, max 1600 chars per chunk. Export `splitMessage(text: string): string[]`.
+2. `atlas/src/lib/twilio.ts` — extend with `sendWhatsAppReplyAutoSplit(to: string, body: string): Promise<void>`. Uses `splitMessage` internally. Never throws — logs errors, resolves.
+3. `atlas/src/lib/slash-commands-server.ts` — complete ALL parts A–F:
+   - Part A: `/status` → call status.snapshot, format reply
+   - Part B: `/queue` → call builder.list_queue, format reply
+   - Part C: `/done [filter]` → call builder.list_done, format reply
+   - Part D: `/audit [taskId]` → call verifier.audit, format reply
+   - Part E: `/ingest [source]` → call memory.ingest, format reply
+   - Part F: `/help` → list all commands with descriptions
+4. `atlas/src/server.ts` — extend inbound WhatsApp webhook:
+   - Parse slash commands via `parseSlash(body: string)`
+   - Dispatch to `dispatchSlashCommand(cmd, args)`
+   - Auto-split all outbound replies via `sendWhatsAppReplyAutoSplit`
+5. `atlas/src/conductor.ts` — wire outbound notifications through `sendWhatsAppReplyAutoSplit` instead of raw Twilio send
+6. Voice STT parity — in inbound handler, detect commands from voice transcripts (same slash dispatch, prefix detection on transcript text)
 
-## Files To Create / Modify
+## Success criteria
+- `splitMessage("x".repeat(3200))` returns array of 2 chunks each ≤1600 chars
+- `splitMessage` splits at sentence boundaries not mid-word
+- `/status` slash command returns status snapshot text over WhatsApp
+- `/queue` slash command returns current queue list
+- `/done` slash command returns done list
+- `/audit taskId` slash command triggers verifier and returns verdict
+- `/help` returns all 6 commands listed
+- Inbound webhook routes all slash commands without 500 errors
+- Voice transcript with `/status` prefix dispatches correctly
+- No TODO / coming soon / placeholder strings anywhere
+- TypeScript compiles with zero errors
 
-### 1. atlas/src/lib/whatsapp-split.ts (CREATE)
-- `splitMessage(text: string, maxLen?: number): string[]`
-- Default maxLen = 1600 chars (Twilio WhatsApp limit)
-- Split on sentence boundaries (. ! ?) first, then word boundaries, never mid-word
-- If single sentence > maxLen, hard split at maxLen
-- Export splitMessage as named export
+## Risks + mitigations
+- Risk: Twilio env vars absent → mitigation: guard with `if (!process.env.TWILIO_AUTH_TOKEN) { log warn; return; }` — never throw
+- Risk: Slash command dispatch async errors → mitigation: wrap every dispatch in try/catch, reply with "Error: <message>" not silence
+- Risk: Voice transcript format varies → mitigation: normalize to lowercase, trim, then prefix-match
+- Risk: Existing inbound webhook already partially implemented → mitigation: read existing server.ts before writing; extend, never replace
 
-### 2. atlas/src/lib/twilio.ts (EXTEND)
-- Add `sendWhatsAppReplyAutoSplit(to: string, body: string): Promise<void>`
-- Uses splitMessage from whatsapp-split.ts
-- Sends each chunk sequentially with 200ms delay between chunks
-- Logs each chunk send to atlas_events table
-- Never throws — catches errors, logs to atlas_events with error flag
-
-### 3. atlas/src/server.ts — Inbound Handler (EXTEND)
-- Add `POST /whatsapp/inbound` route (Twilio webhook)
-- Parse incoming body: From, Body, MediaUrl0
-- Call `parseSlash(body: string): SlashCommand | null`
-- Call `dispatchSlashCommand(cmd: SlashCommand, from: string): Promise<string>`
-- Reply via sendWhatsAppReplyAutoSplit
-- Verify Twilio webhook signature (X-Twilio-Signature header)
-- Return 200 TwiML with empty response body (reply sent via API not TwiML)
-
-### 4. atlas/src/lib/slash-commands-server.ts (COMPLETE Parts A–F)
-- Part A: /status → calls status_snapshot, formats summary
-- Part B: /queue → calls builder.list_queue, returns top 5
-- Part C: /done [filter] → calls builder.list_done with filter
-- Part D: /audit [taskId] → triggers verifier.audit
-- Part E: /scrape [source] → triggers adela.trigger_scrape
-- Part F: /help → returns command list
-- parseSlash: regex-based, returns { command, args } or null
-- dispatchSlashCommand: routes to correct handler, returns formatted string
-
-### 5. atlas/src/conductor.ts (EXTEND)
-- Add outbound WhatsApp notification on task completion
-- `notifyWhatsApp(to: string, message: string): Promise<void>`
-- Wire to existing task-done event emitter
-- Uses sendWhatsAppReplyAutoSplit
-- Only fires if WHATSAPP_NOTIFY_NUMBER env var is set
-
-### 6. Voice STT Parity (EXTEND inbound handler)
-- If MediaUrl0 is present in inbound, detect as voice message
-- Download media, pass to existing STT pipeline if available
-- Extract text transcript, run through parseSlash
-- If no STT pipeline, reply "Voice not yet supported" gracefully
-
-## Success Criteria
-- [ ] `whatsapp-split.ts` exists, splitMessage handles 1600 char limit correctly
-- [ ] `sendWhatsAppReplyAutoSplit` sends multi-chunk messages sequentially
-- [ ] `POST /whatsapp/inbound` route exists and verifies Twilio signature
-- [ ] All 6 slash commands (Parts A–F) implemented and routing correctly
-- [ ] `parseSlash` correctly parses /status, /queue, /done, /audit, /scrape, /help
-- [ ] conductor.ts fires WhatsApp notification on task completion
-- [ ] Voice STT path exists with graceful fallback
-- [ ] No TypeScript errors
-- [ ] No stub/placeholder text anywhere in implementation
-
-## Risks + Mitigations
-- Risk: Twilio signature verification fails in dev → Mitigation: skip signature check if NODE_ENV=development, always enforce in production
-- Risk: STT pipeline not present → Mitigation: graceful "Voice not yet supported" reply, never crash
-- Risk: conductor.ts event emitter shape unknown → Mitigation: read existing conductor.ts before extending, match existing event patterns
-- Risk: Rate limiting on multi-chunk sends → Mitigation: 200ms delay between chunks, exponential backoff on 429
-
-## NEVER List
-- NEVER disable Twilio signature verification in production
-- NEVER throw unhandled errors from slash command handlers — always catch and return error string
-- NEVER send WhatsApp messages without auto-split — raw sendWhatsApp calls must not bypass split
-- NEVER modify existing Twilio voice call routes
-- NEVER hardcode phone numbers — always read from env vars
-- NEVER add new npm packages without checking package.json first
-- NEVER modify existing conductor.ts logic — only extend with new notifyWhatsApp function
+## NEVER list
+- NEVER delete existing Twilio send functions — only extend
+- NEVER replace existing inbound webhook handler — extend only
+- NEVER throw errors upward from sendWhatsAppReplyAutoSplit
+- NEVER hardcode phone numbers or Twilio credentials
+- NEVER add npm packages not already in package.json
+- NEVER leave TODO, "coming soon", or placeholder strings
+- NEVER send unsplit messages >1600 chars via raw Twilio client
