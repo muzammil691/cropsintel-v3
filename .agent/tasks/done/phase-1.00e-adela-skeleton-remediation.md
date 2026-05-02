@@ -1,47 +1,38 @@
-# Task: Phase 1.00e-rem — Adela Skeleton Full Completion
+# Task: Phase 1.00e — Adela Skeleton Remediation
 
 ## Goal
-Complete the Adela skeleton that shipped only partially in phase-1.00e. The abc.ts scraper is truncated at step 3. Dockerfile, package.json, scheduler, wrapper libs, migration SQL, and README are all absent. This remediation delivers the complete Adela service scaffold.
+Complete the Adela scraper skeleton. Currently abc.ts is truncated at step 3, and 8 required files are absent. Builder must complete abc.ts and create all missing files.
 
 ## Files to create / extend
-- `adela/src/scrapers/abc.ts` — complete steps 4–7:
-  - Step 4: upload raw JSON to Supabase Storage bucket `adela-raw`
-  - Step 5: Gemini extraction — structured crop/price fields from raw JSON
-  - Step 6: insert extracted rows into `adela_scrape_results` table
-  - Step 7: notify Atlas via `POST /atlas/adela/notify` with `{ scraper, rows_inserted, storage_path }`
-  - Audit log entry on success AND failure
-  - catch block: log error to audit log, NEVER re-throw upward
-- `adela/Dockerfile` — node:20-slim base, non-root user, WORKDIR /app, COPY + npm ci + CMD
-- `adela/package.json` — name: adela, version: 1.0.0, deps: @supabase/supabase-js, @google/generative-ai, node-cron, axios. devDeps: typescript, ts-node, @types/node
-- `adela/src/scheduler.ts` — node-cron job, runs abc scraper on schedule `0 6 * * *` (6am UTC daily). Logs start/end. Catches and logs errors without crashing process.
-- `adela/src/lib/supabase.ts` — createClient wrapper using env SUPABASE_URL + SUPABASE_SERVICE_KEY
-- `adela/src/lib/gemini.ts` — GoogleGenerativeAI wrapper using env GEMINI_API_KEY. Exported fn: `extractStructured(raw: string, schema: object): Promise<object>`
-- `adela/src/lib/notify.ts` — axios POST to ATLAS_URL/atlas/adela/notify. Exported fn: `notifyAtlas(payload: NotifyPayload): Promise<void>`
-- `adela/supabase/migrations/<timestamp>_adela.sql` — create table `adela_scrape_results` (id uuid pk, scraper text, scraped_at timestamptz, rows jsonb, storage_path text, created_at timestamptz default now()). RLS: service role only.
-- `adela/README.md` — env table must include: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, ATLAS_URL, TWILIO_ACCOUNT_SID (optional). Startup message must match index.ts exactly.
-- `adela/src/index.ts` — fix startup notification message to match README exactly
+- `adela/src/scrapers/abc.ts` — complete steps 4–7: (4) upload raw HTML to Supabase storage, (5) Gemini extraction of structured crop data, (6) insert extracted rows to `adela_scrape_results` table, (7) notify Atlas via HTTP POST /atlas/adela/notify, (8) write audit log row to `adela_audit_log`. Remove re-throw in catch block — log error and return {success: false, error} instead.
+- `adela/Dockerfile` — node:20-alpine base, WORKDIR /app, COPY package*.json, RUN npm ci, COPY src, CMD node dist/index.js
+- `adela/package.json` — name: adela, version: 1.0.0, dependencies: @supabase/supabase-js, @google/generative-ai, node-cron, node-fetch. devDependencies: typescript, @types/node.
+- `adela/src/scheduler.ts` — node-cron schedule for abc scraper. Default: 0 6 * * * (6am daily). Reads SCRAPER_SCHEDULE env var for override.
+- `adela/src/lib/supabase.ts` — Supabase client init from SUPABASE_URL + SUPABASE_SERVICE_KEY env vars.
+- `adela/src/lib/gemini.ts` — Gemini client init from GEMINI_API_KEY. Exports extractCropData(html: string): Promise<CropDataRow[]>.
+- `adela/src/lib/notify.ts` — HTTP POST to ATLAS_NOTIFY_URL with scrape summary payload. Retries once on failure.
+- `adela/supabase/migrations/<timestamp>_adela.sql` — creates `adela_scrape_results` and `adela_audit_log` tables with RLS.
+- `adela/README.md` — env table must include: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, ATLAS_NOTIFY_URL, SCRAPER_SCHEDULE. Fix startup notification message to match index.ts exactly.
 
 ## Success criteria
-- `abc.ts` completes all 7 steps without throwing
-- catch block logs to audit log and returns gracefully — never re-throws
-- Dockerfile builds without error (`docker build .`)
-- `scheduler.ts` registers cron job without crashing on import
-- `adela_scrape_results` table exists in migration SQL with RLS
-- README env table contains all 6 env vars including ANTHROPIC_API_KEY
-- Startup message in index.ts matches README exactly
-- No "coming soon" / TODO / placeholder text
-- TypeScript strict — zero `any` types
-- Verifier stub-detector passes
+- abc.ts runs end-to-end without throwing: fetch → upload → extract → insert → notify → audit
+- Dockerfile builds successfully with docker build
+- scheduler.ts registers cron job on startup without error
+- All 5 env vars documented in README env table
+- adela_scrape_results and adela_audit_log tables created by migration SQL
+- RLS policies present on both tables
+- Error in abc.ts returns {success: false, error} — never throws upward
+- No placeholder text, no TODOs, no "coming soon" strings
 
 ## Risks + mitigations
-- Risk: Gemini extraction schema mismatch → mitigation: validate extracted object keys before insert, log mismatch and skip row
-- Risk: Supabase Storage bucket absent → mitigation: create bucket programmatically if not exists before upload
-- Risk: Atlas notify endpoint not yet live → mitigation: wrap in try/catch, log failure, do not block scraper completion
+- Risk: Gemini API key absent → mitigation: log warning, skip extraction step, insert raw HTML reference only
+- Risk: Atlas notify endpoint down → mitigation: retry once, then log failure and continue — never block scraper
+- Risk: Supabase storage bucket absent → mitigation: create bucket if not exists before upload
+- Risk: Migration timestamp collision → mitigation: use Date.now() as prefix for migration filename
 
 ## NEVER list
-- NEVER re-throw errors in runAbcScraper catch block
-- NEVER hardcode API keys or credentials anywhere
-- NEVER modify files outside adela/ directory
-- NEVER use `any` TypeScript type
-- NEVER drop or alter existing tables in other services
-- NEVER make startup message in index.ts differ from README
+- NEVER throw errors upward from runAbcScraper — catch all, log all, return {success, error}
+- NEVER hardcode Supabase URL, API keys, or schedule strings — always read from env vars
+- NEVER modify existing files outside adela/ directory
+- NEVER use synchronous file I/O (fs.readFileSync etc.) — async only
+- NEVER skip the audit log write even if notify fails — audit log is always written last
