@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { UserPlus2, ChevronDown, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -34,6 +34,8 @@ export function AssignToTeamMenu({
   const [busy, setBusy] = useState(false)
   const [lastAssignedId, setLastAssignedId] = useState<string | 'broadcast' | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
 
   useEffect(() => {
     if (!open) return
@@ -68,6 +70,69 @@ export function AssignToTeamMenu({
     return () => window.removeEventListener('mousedown', handleClick)
   }, [open])
 
+  // Auto-focus the first menu item once the menu opens. We defer until after
+  // members have loaded so focus lands on a real entry rather than the
+  // "Loading…" placeholder.
+  useEffect(() => {
+    if (!open) return
+    if (loading) return
+    requestAnimationFrame(() => itemRefs.current[0]?.focus())
+  }, [open, loading, members.length])
+
+  // ARIA menu pattern: ArrowDown/Up cycle, Home/End jump, Escape closes and
+  // returns focus to the trigger. Tab/Shift-Tab traps focus inside the menu
+  // by looping back to the trigger.
+  function handleMenuKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+    if (!open) return
+    const items = itemRefs.current.filter((el): el is HTMLButtonElement => el !== null)
+    if (items.length === 0 && e.key !== 'Escape') return
+    const activeEl = document.activeElement as HTMLElement | null
+    const currentIdx = items.findIndex((el) => el === activeEl)
+
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault()
+        setOpen(false)
+        triggerRef.current?.focus()
+        return
+      case 'ArrowDown': {
+        e.preventDefault()
+        const next = currentIdx === -1 ? 0 : (currentIdx + 1) % items.length
+        items[next]?.focus()
+        return
+      }
+      case 'ArrowUp': {
+        e.preventDefault()
+        const prev = currentIdx <= 0 ? items.length - 1 : currentIdx - 1
+        items[prev]?.focus()
+        return
+      }
+      case 'Home':
+        e.preventDefault()
+        items[0]?.focus()
+        return
+      case 'End':
+        e.preventDefault()
+        items[items.length - 1]?.focus()
+        return
+      case 'Tab': {
+        // Loop focus back to the first item when tabbing past the last,
+        // and to the last when shift-tabbing past the first. Keeps focus
+        // contained while the menu is open.
+        if (e.shiftKey && currentIdx === 0) {
+          e.preventDefault()
+          items[items.length - 1]?.focus()
+        } else if (!e.shiftKey && currentIdx === items.length - 1) {
+          e.preventDefault()
+          items[0]?.focus()
+        }
+        return
+      }
+      default:
+        return
+    }
+  }
+
   async function handlePick(memberId: string | null, label: string) {
     setBusy(true)
     try {
@@ -81,6 +146,7 @@ export function AssignToTeamMenu({
       setLastAssignedId(memberId ?? 'broadcast')
       onAssigned?.(label)
       setOpen(false)
+      triggerRef.current?.focus()
     } catch (err) {
       onError?.(err instanceof Error ? err.message : String(err))
     } finally {
@@ -88,15 +154,26 @@ export function AssignToTeamMenu({
     }
   }
 
+  // Reset item refs each render so stale entries from a previous member list
+  // don't linger in the array.
+  itemRefs.current = []
+
   return (
     <div ref={containerRef} className="relative inline-block">
       <Button
+        ref={triggerRef}
         type="button"
         size="sm"
         variant="outline"
-        className="h-7 px-2 text-xs gap-1"
+        className="h-7 px-2 text-xs gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-950"
         disabled={busy}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (!open && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            setOpen(true)
+          }
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
       >
@@ -105,8 +182,14 @@ export function AssignToTeamMenu({
       </Button>
       {open && (
         <div className="absolute right-0 z-30 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-lg">
-          <div role="menu" className="py-1 max-h-64 overflow-y-auto text-sm">
+          <div
+            role="menu"
+            aria-label="Assign to team member"
+            className="py-1 max-h-[60vh] sm:max-h-64 overflow-y-auto text-sm"
+            onKeyDown={handleMenuKeyDown}
+          >
             <button
+              ref={(el) => { itemRefs.current[0] = el }}
               type="button"
               role="menuitem"
               onClick={() => void handlePick(null, 'all admins')}
@@ -131,11 +214,12 @@ export function AssignToTeamMenu({
                 No assignable members. Invite an admin or operator.
               </p>
             )}
-            {!loading && members.map((m) => {
+            {!loading && members.map((m, idx) => {
               const label = m.display_name || m.phone
               return (
                 <button
                   key={m.id}
+                  ref={(el) => { itemRefs.current[idx + 1] = el }}
                   type="button"
                   role="menuitem"
                   onClick={() => void handlePick(m.id, label)}
