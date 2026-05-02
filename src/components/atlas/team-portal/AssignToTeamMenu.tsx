@@ -177,7 +177,9 @@ export function AssignToTeamMenu({
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <UserPlus2 className="size-3" /> Assign to team
+        <UserPlus2 className="size-3" />
+        <span className="hidden sm:inline">Assign to team</span>
+        <span className="sr-only sm:hidden">Assign to team member</span>
         <ChevronDown className="size-3" />
       </Button>
       {open && (
