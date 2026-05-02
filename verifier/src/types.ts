@@ -18,9 +18,14 @@ export interface Gap {
   remediation: string
 }
 
+// Phase 1.10v: `verdict` is the canonical pass/fail/inconclusive value;
+// `passed` is preserved for backwards compatibility (passed = verdict === 'pass').
+// Inconclusive runs return passed=false so the gate blocks them by default —
+// downstream consumers that need the three-state distinction read `verdict`.
 export interface VerificationResult {
   taskId: string
   passed: boolean
+  verdict: 'pass' | 'fail' | 'inconclusive'
   gaps: Gap[]
   durationMs: number
   judgmentCallNotes: string

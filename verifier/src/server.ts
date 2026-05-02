@@ -226,22 +226,29 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 
   const hasHardFail = result.gaps.some(g => g.severity === 'fail')
-  const verdict = result.passed ? 'pass' : 'fail'
+  // Phase 1.10v: forward result.verdict (pass/fail/inconclusive) verbatim so
+  // the agent-loop can distinguish "judges disagreed and parser couldn't
+  // decide" from "judges said fail". Inconclusive blocks the gate the same
+  // way fail does (it is conservative-by-default); see confidence below.
+  const verdict = result.verdict
 
   // Confidence contract — must stay aligned with agent-loop.sh's
   // VERIFIER_FAIL_CONFIDENCE_THRESHOLD (default 0.3). The loop blocks the
   // push when verdict='fail' AND confidence >= threshold. Audit H4 fixed:
   // warn-only used to emit 0.55 which (incorrectly) blocked at threshold
   // 0.3 — the comment said "won't block" but math said otherwise. Now:
-  //   pass        → 0.95  (well above threshold; informational)
-  //   hard fail   → 0.85  (>= threshold → blocks; deterministic check)
-  //   warn-only   → 0.20  (<  threshold → does NOT block; AI soft signal)
+  //   pass         → 0.95  (well above threshold; informational)
+  //   hard fail    → 0.85  (>= threshold → blocks; deterministic check)
+  //   inconclusive → 0.50  (>= threshold → blocks; needs human review)
+  //   warn-only    → 0.20  (<  threshold → does NOT block; AI soft signal)
   // research.ts also short-circuits Multi-Brain debate when confidence
   // is < DEBATE_MIN_VERIFIER_CONFIDENCE (0.6) so warn-only fails skip
   // the $0.30 debate spend and are treated as surface bugs by the loop.
   let confidence: number
-  if (result.passed) {
+  if (verdict === 'pass') {
     confidence = 0.95
+  } else if (verdict === 'inconclusive') {
+    confidence = 0.50
   } else if (hasHardFail) {
     confidence = 0.85
   } else {
