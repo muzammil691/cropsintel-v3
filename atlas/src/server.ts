@@ -370,6 +370,43 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload)
 }
 
+// Audit-tab feed dedup: rows are pre-sorted DESC by time, so the first row
+// per task_id is the latest. Drop tasks whose latest run passed — those are
+// resolved and shouldn't generate new fix-prompts. NULL passed (verifier
+// 'unknown' rows from db_write_failed / sync_failed) are kept so operators
+// can see they need attention.
+function collapseLatestPerTask<T extends { task_id?: string | null }>(
+  rows: T[],
+  taskKey: 'task_id',
+  passedKey: 'passed',
+): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const r of rows) {
+    const tid = (r[taskKey] as string | null | undefined) ?? ''
+    if (!tid || seen.has(tid)) continue
+    seen.add(tid)
+    const passed = (r as Record<string, unknown>)[passedKey]
+    if (passed === true) continue
+    out.push(r)
+  }
+  return out
+}
+
+// Designer variant — verdict is 'pass' | 'fail' | 'unknown'.
+function collapseLatestDesignerPerTask<T extends { task_id?: string | null; verdict?: string | null }>(rows: T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const r of rows) {
+    const tid = r.task_id ?? ''
+    if (!tid || seen.has(tid)) continue
+    seen.add(tid)
+    if (r.verdict === 'pass') continue
+    out.push(r)
+  }
+  return out
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -3045,20 +3082,31 @@ export async function startServer(): Promise<void> {
     }
 
     // ─── Phase 1.10ap: audit feed + builder queue manager ─────────────────
+    // Show only the LATEST run per task. If the latest verdict for a task is
+    // pass, the task is resolved — don't surface ancient fails for it.
+    // Without this filter the audit tab showed every historic fail row, so
+    // task IDs from phase-1.10a..h kept generating fix-prompts long after
+    // their code had been superseded by later phases.
     if (url.split('?')[0] === '/atlas/verifier/runs' && method === 'GET') {
       if (!(await requireAuth(req, res))) return
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { runs: [] }); return }
       const queryStr = url.includes('?') ? url.split('?')[1] : ''
-      const limitRaw = new URLSearchParams(queryStr).get('limit')
+      const params = new URLSearchParams(queryStr)
+      const limitRaw = params.get('limit')
       const limit = Math.min(Math.max(parseInt(limitRaw ?? '50', 10) || 50, 1), 200)
+      const includeAll = params.get('include_all') === '1'
+      // Pull a wider window so we can collapse to latest-per-task and still
+      // return `limit` distinct tasks worth of unresolved rows.
       const { data, error } = await sb
         .from('verifier_runs')
         .select('id, task_id, commit_sha, mode, passed, gaps, duration_ms, ran_at')
         .order('ran_at', { ascending: false })
-        .limit(limit)
+        .limit(includeAll ? limit : Math.max(limit * 4, 200))
       if (error) { json(res, 500, { error: error.message }); return }
-      json(res, 200, { runs: data ?? [] })
+      const rows = data ?? []
+      const filtered = includeAll ? rows : collapseLatestPerTask(rows, 'task_id', 'passed').slice(0, limit)
+      json(res, 200, { runs: filtered })
       return
     }
 
@@ -3067,15 +3115,19 @@ export async function startServer(): Promise<void> {
       const sb = getSupabaseClient()
       if (!sb) { json(res, 200, { runs: [] }); return }
       const queryStr = url.includes('?') ? url.split('?')[1] : ''
-      const limitRaw = new URLSearchParams(queryStr).get('limit')
+      const params = new URLSearchParams(queryStr)
+      const limitRaw = params.get('limit')
       const limit = Math.min(Math.max(parseInt(limitRaw ?? '50', 10) || 50, 1), 200)
+      const includeAll = params.get('include_all') === '1'
       const { data, error } = await sb
         .from('designer_runs')
         .select('id, task_id, verdict, ai_judgment, created_at')
         .order('created_at', { ascending: false })
-        .limit(limit)
+        .limit(includeAll ? limit : Math.max(limit * 4, 200))
       if (error) { json(res, 500, { error: error.message }); return }
-      json(res, 200, { runs: data ?? [] })
+      const rows = data ?? []
+      const filtered = includeAll ? rows : collapseLatestDesignerPerTask(rows).slice(0, limit)
+      json(res, 200, { runs: filtered })
       return
     }
 
