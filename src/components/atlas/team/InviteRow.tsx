@@ -88,7 +88,7 @@ export function InviteRow({ invite, isOwnerViewer, onResend, onRevoke, busy }: I
             size="sm"
             variant="ghost"
             disabled={busy}
-            className="h-7 px-2 text-xs gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+            className="h-7 px-2 text-xs gap-1 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition-colors duration-200"
             onClick={() => void onRevoke(invite.id)}
             title="Revoke this invite"
           >

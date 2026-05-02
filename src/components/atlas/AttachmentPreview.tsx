@@ -99,7 +99,7 @@ export function AttachmentPreview({ attachments, onRemove, className }: Attachme
               type="button"
               aria-label={`Remove ${att.file.name}`}
               onClick={() => onRemove(att.localId)}
-              className="ml-auto rounded-full p-1 hover:bg-slate-200 dark:hover:bg-slate-700"
+              className="ml-auto rounded-full p-1 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
             >
               <X className="size-3" />
             </button>

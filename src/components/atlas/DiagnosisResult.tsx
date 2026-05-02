@@ -118,7 +118,7 @@ function AutoRemediate({
       <div className="flex items-center gap-1.5">
         <Button
           size="xs"
-          className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          className="bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           onClick={() => void handleQueue()}
           disabled={busy || done}
         >
@@ -179,7 +179,7 @@ function ClaudeCode({
       )}
       <button
         onClick={() => setExpanded(v => !v)}
-        className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-1.5"
+        className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-1.5 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
       >
         {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         {expanded ? 'Hide prompt' : 'Show prompt'}
@@ -190,7 +190,7 @@ function ClaudeCode({
         </pre>
       )}
       <div className="flex items-center gap-1.5 flex-wrap">
-        <Button size="xs" onClick={() => void handleCopy()} className="bg-violet-600 hover:bg-violet-700 text-white">
+        <Button size="xs" onClick={() => void handleCopy()} className="bg-violet-600 hover:bg-violet-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-violet-600/50">
           <ClipboardCopy className="size-3" />
           {copied ? 'Copied!' : 'Copy prompt'}
         </Button>
@@ -268,7 +268,7 @@ function InAppAction({
         {!confirming && !done && (
           <Button
             size="xs"
-            className="bg-sky-600 hover:bg-sky-700 text-white"
+            className="bg-sky-600 hover:bg-sky-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-sky-600/50"
             onClick={() => setConfirming(true)}
           >
             <Lightbulb className="size-3" />
@@ -280,7 +280,7 @@ function InAppAction({
             <span className="text-[11px] text-slate-700 dark:text-slate-300">Confirm?</span>
             <Button
               size="xs"
-              className="bg-sky-600 hover:bg-sky-700 text-white"
+              className="bg-sky-600 hover:bg-sky-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-sky-600/50"
               onClick={() => void handleConfirm()}
               disabled={busy}
             >
@@ -321,7 +321,7 @@ function Discuss({
       <BucketHeader icon={Bot} label="Atlas wants to discuss" reason={result.reason} tone="slate" />
       <button
         onClick={() => setExpanded(v => !v)}
-        className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-1.5"
+        className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 mb-1.5 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
       >
         {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         {expanded ? 'Hide chat seed' : 'Preview chat seed'}

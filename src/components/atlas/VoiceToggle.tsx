@@ -18,7 +18,7 @@ export function VoiceToggle({ enabled, onToggle, disabled, className }: VoiceTog
       disabled={disabled}
       onClick={() => onToggle(!enabled)}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors duration-200',
         enabled
           ? 'border-green-300 bg-green-100 text-green-700 dark:border-green-800 dark:bg-green-900/40 dark:text-green-300'
           : 'border-border bg-muted text-muted-foreground hover:bg-muted/70',

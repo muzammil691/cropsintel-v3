@@ -181,7 +181,7 @@ export default function AtlasAuditTab() {
       title="Audit"
       hint="Live audit feed across the build pipeline."
       rightSlot={
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
           {failed24hCount > 0 && (
             <span className="text-[11px] text-red-600 dark:text-red-400 tabular-nums">
               {failed24hCount} failed (24h)
@@ -194,7 +194,7 @@ export default function AtlasAuditTab() {
                 type="button"
                 onClick={() => setFilter(f.key)}
                 className={cn(
-                  'px-2 py-0.5 text-[11px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+                  'px-2 sm:px-3 py-1 sm:py-0.5 text-[11px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 min-h-[32px] sm:min-h-0',
                   filter === f.key
                     ? 'bg-emerald-600 text-white'
                     : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-900 active:bg-slate-100 dark:active:bg-slate-900',

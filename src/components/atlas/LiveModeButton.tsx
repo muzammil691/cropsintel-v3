@@ -18,7 +18,7 @@ export function LiveModeButton({ active, onClick, disabled, className }: LiveMod
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-semibold transition-colors',
+        'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-semibold transition-colors duration-200',
         'shadow-sm',
         active
           ? 'border-red-500 bg-red-500 text-white hover:bg-red-600 dark:border-red-400 dark:bg-red-500'
