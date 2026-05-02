@@ -10,6 +10,7 @@ import { readFile, stat } from 'fs/promises'
 import { resolve } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { getSupabaseClient } from './supabase'
 
 const execFileP = promisify(execFile)
 
@@ -91,7 +92,7 @@ interface CacheEntry {
   cachedAt: number
 }
 
-const CACHE_TTL_MS = 60_000
+const CACHE_TTL_MS = 5 * 60_000
 let CACHE: CacheEntry | null = null
 
 export function clearWorkflowCache(): void {
@@ -273,6 +274,70 @@ export function parseWorkflowDoc(md: string, updatedAt: string): WorkflowGraph {
   }
 
   return { nodes, edges, updated_at: updatedAt, source: 'maxons-doc' }
+}
+
+// ─── Agent status reader ──────────────────────────────────────────────────
+//
+// Reads the latest heartbeat row for an agent from atlas_agent_heartbeats and
+// derives a coarse health label that a UI can paint as a status dot:
+//   healthy  → recent heartbeat in {idle, running, starting, shipping, verifying}
+//   degraded → state == 'stale', or last update older than STALE_AFTER_MS
+//   down     → state == 'unreachable', or no heartbeat row at all,
+//              or Supabase is unreachable
+//
+// Always resolves — never throws — so callers can treat it as a pure reader.
+
+export type AgentHealth = 'healthy' | 'degraded' | 'down'
+
+export interface AgentStatus {
+  agent: string
+  health: AgentHealth
+  state: string
+  task: string | null
+  elapsed_s: number
+  updated_at: string | null
+}
+
+const STALE_AFTER_MS = 5 * 60_000
+
+export async function getAgentStatus(agentId: string): Promise<AgentStatus> {
+  const agent = String(agentId).toLowerCase()
+  const fallback: AgentStatus = {
+    agent,
+    health: 'down',
+    state: 'unknown',
+    task: null,
+    elapsed_s: 0,
+    updated_at: null,
+  }
+  try {
+    const sb = getSupabaseClient()
+    if (!sb) return fallback
+    const { data, error } = await sb
+      .from('atlas_agent_heartbeats')
+      .select('agent, state, task, elapsed_s, updated_at')
+      .eq('agent', agent)
+      .maybeSingle()
+    if (error || !data) return fallback
+    const ageMs = data.updated_at
+      ? Date.now() - new Date(data.updated_at).getTime()
+      : Number.POSITIVE_INFINITY
+    let health: AgentHealth
+    if (data.state === 'unreachable') health = 'down'
+    else if (data.state === 'stale' || ageMs > STALE_AFTER_MS) health = 'degraded'
+    else health = 'healthy'
+    return {
+      agent,
+      health,
+      state: String(data.state ?? 'unknown'),
+      task: data.task ?? null,
+      elapsed_s: typeof data.elapsed_s === 'number' ? data.elapsed_s : 0,
+      updated_at: data.updated_at ?? null,
+    }
+  } catch (err) {
+    console.warn('[workflow-parser] getAgentStatus failed for', agent, err)
+    return fallback
+  }
 }
 
 export function baselineGraph(updatedAt: string): WorkflowGraph {
