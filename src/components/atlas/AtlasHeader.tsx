@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Sparkles, Settings, LogOut, Hammer } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Sparkles, Settings, LogOut, Hammer, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -12,9 +12,11 @@ import {
 } from '@/components/ui/dialog'
 import { TrustModeBadge } from './TrustModeBadge'
 import {
+  fetchAtlasMe,
   logoutAtlas,
   setMode,
   type AtlasCosts,
+  type AtlasMe,
   type AtlasStatus,
   type TrustMode,
   type AgentHeartbeat,
@@ -57,6 +59,25 @@ export function AtlasHeader({
   const [costDialogOpen, setCostDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [me, setMe] = useState<AtlasMe | null>(null)
+
+  // Fetch principal once so we can show owner-only header affordances
+  // (e.g. "Switch to portal"). Failures are silent — the rest of the
+  // header doesn't depend on this data.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const data = await fetchAtlasMe()
+        if (!cancelled) setMe(data)
+      } catch {
+        // ignore — owner controls just stay hidden
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Persist trust-mode choice across refreshes (defensive — server is the
   // source of truth; the localStorage entry is just an optimistic mirror so
@@ -122,6 +143,17 @@ export function AtlasHeader({
 
       {/* Right: cost pill, agent dots, settings */}
       <div className="ml-auto flex items-center gap-2 shrink-0">
+        {me?.role === 'owner' && (
+          <Link
+            to="/team"
+            className="hidden sm:inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-slate-700 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-150"
+            title="Preview the team-portal view"
+            aria-label="Switch to team portal"
+          >
+            <Users className="size-3" aria-hidden />
+            Switch to portal
+          </Link>
+        )}
         <button
           type="button"
           onClick={() => setCostDialogOpen(true)}

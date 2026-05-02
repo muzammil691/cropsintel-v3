@@ -1,18 +1,24 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Boxes } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Boxes, Inbox } from 'lucide-react'
 import { TabFrame } from './AtlasPlanTab'
 import { PendingSpecCard } from '../ArtifactsPane/PendingSpecCard'
 import { DesignerAuditCard } from '../ArtifactsPane/DesignerAuditCard'
 import { OpenForkCard } from '../ArtifactsPane/OpenForkCard'
 import { WorkflowTraceCard } from '../WorkflowTraceCard'
+import { AssignToTeamMenu } from '../team-portal/AssignToTeamMenu'
 import { useWorkflowTraces } from '@/hooks/useWorkflowTraces'
 import type { UseArtifactsResult } from '@/hooks/useArtifacts'
 import {
   diagnoseBatch,
+  fetchAtlasMe,
+  fetchTeamPortalReports,
+  triageTeamReport,
+  type AtlasMe,
   type BatchDiagnoseItem,
   type BatchDiagnoseResult,
   type DesignAudit,
   type DesignAuditGap,
+  type TeamReport,
 } from '@/lib/atlas-client'
 import { BatchDiagnoseToolbar } from '../diagnose/BatchDiagnoseToolbar'
 import { CombinedDiagnosisCard } from '../diagnose/CombinedDiagnosisCard'
@@ -88,12 +94,55 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
   } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [polishHidden, setPolishHidden] = useState<boolean>(() => readPolishHide())
+  const [me, setMe] = useState<AtlasMe | null>(null)
+  const [reports, setReports] = useState<TeamReport[]>([])
+  const [reportsLoading, setReportsLoading] = useState(false)
+
+  // Owner / admin can view + assign + triage reports.
+  const isOwnerOrAdmin = me?.role === 'owner' || me?.role === 'admin'
+  const isOwner = me?.role === 'owner'
 
   // Refresh hidden flag once a minute so it auto-uncollapses after the TTL.
   useEffect(() => {
     const id = window.setInterval(() => setPolishHidden(readPolishHide()), 60_000)
     return () => window.clearInterval(id)
   }, [])
+
+  // Load principal once so we can gate owner-only affordances.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const data = await fetchAtlasMe()
+        if (!cancelled) setMe(data)
+      } catch {
+        // silent — affordances simply stay hidden
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refreshReports = useCallback(async () => {
+    if (!isOwnerOrAdmin) return
+    setReportsLoading(true)
+    try {
+      const data = await fetchTeamPortalReports()
+      setReports(data)
+    } catch {
+      // non-fatal — leave previous list
+    } finally {
+      setReportsLoading(false)
+    }
+  }, [isOwnerOrAdmin])
+
+  useEffect(() => {
+    if (!isOwnerOrAdmin) return
+    void refreshReports()
+    const t = window.setInterval(() => void refreshReports(), 20_000)
+    return () => window.clearInterval(t)
+  }, [isOwnerOrAdmin, refreshReports])
 
   const total = pendingSpecs.length + designAudits.length + openForks.length + traces.length
 
@@ -277,6 +326,19 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
     dismissAudit(audit.id)
   }
 
+  async function handleTriageReport(id: string, status: 'triaged' | 'resolved' | 'dismissed') {
+    try {
+      await triageTeamReport(id, { status })
+      const verb = status === 'triaged' ? 'triaged' : status === 'resolved' ? 'resolved' : 'dismissed'
+      showToast(`Report ${verb}.`)
+      await refreshReports()
+    } catch (err) {
+      showToast(`Triage failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const newReportCount = reports.filter((r) => r.status === 'new').length
+
   // Cost estimate: ~$0.025 per heuristic / Claude classification call (rough).
   const estCostUsd = selected.size * 0.025
 
@@ -350,6 +412,16 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
         </div>
       )}
 
+      {isOwnerOrAdmin && (
+        <ReportsInbox
+          reports={reports}
+          loading={reportsLoading}
+          newCount={newReportCount}
+          canTriage={isOwner}
+          onTriage={handleTriageReport}
+        />
+      )}
+
       <div className="space-y-4">
         {pendingSpecs.length > 0 && (
           <ArtifactGroup title="Pending specs" count={pendingSpecs.length}>
@@ -367,6 +439,18 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
                     />
                     <div className="flex-1 min-w-0">
                       <PendingSpecCard spec={spec} onDismiss={dismissSpec} />
+                      {isOwner && (
+                        <div className="mt-1.5 flex justify-end">
+                          <AssignToTeamMenu
+                            artifactKind="manual_report"
+                            artifactRef={spec.id}
+                            taskId={spec.filename}
+                            title={`Pending spec: ${spec.filename}`}
+                            onAssigned={(label) => showToast(`Assigned to ${label}.`)}
+                            onError={(msg) => showToast(`Assign failed: ${msg}`)}
+                          />
+                        </div>
+                      )}
                     </div>
                   </li>
                 )
@@ -398,6 +482,18 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
                         onRemediate={handleRemediate}
                         onDismiss={dismissAudit}
                       />
+                      {isOwner && (
+                        <div className="mt-1.5 flex justify-end">
+                          <AssignToTeamMenu
+                            artifactKind="designer_audit"
+                            artifactRef={audit.id}
+                            taskId={audit.task_id}
+                            title={`Designer audit: ${audit.task_id} (${audit.verdict})`}
+                            onAssigned={(label) => showToast(`Assigned to ${label}.`)}
+                            onError={(msg) => showToast(`Assign failed: ${msg}`)}
+                          />
+                        </div>
+                      )}
                     </div>
                   </li>
                 )
@@ -465,6 +561,18 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
                     />
                     <div className="flex-1 min-w-0">
                       <OpenForkCard fork={fork} onResolve={resolveFork} />
+                      {isOwner && (
+                        <div className="mt-1.5 flex justify-end">
+                          <AssignToTeamMenu
+                            artifactKind="open_fork"
+                            artifactRef={fork.id}
+                            taskId={fork.related_phase ?? fork.id.slice(0, 8)}
+                            title={`Open fork: ${fork.fork_question.slice(0, 60)}`}
+                            onAssigned={(label) => showToast(`Assigned to ${label}.`)}
+                            onError={(msg) => showToast(`Assign failed: ${msg}`)}
+                          />
+                        </div>
+                      )}
                     </div>
                   </li>
                 )
@@ -514,6 +622,123 @@ function ArtifactGroup({
         {title} <span className="tabular-nums">({count})</span>
       </h3>
       {children}
+    </section>
+  )
+}
+
+const SEVERITY_TONE: Record<TeamReport['severity'], string> = {
+  high: 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200',
+  medium: 'bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200',
+  low: 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300',
+}
+
+function ReportsInbox({
+  reports,
+  loading,
+  newCount,
+  canTriage,
+  onTriage,
+}: {
+  reports: TeamReport[]
+  loading: boolean
+  newCount: number
+  canTriage: boolean
+  onTriage: (id: string, status: 'triaged' | 'resolved' | 'dismissed') => void | Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const visible = reports.slice(0, 8)
+  return (
+    <section className="mb-4 rounded-md border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-950/60">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full px-3 py-2 flex items-center gap-2 text-left"
+        aria-expanded={expanded}
+      >
+        <Inbox className="size-4 text-slate-500" />
+        <span className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+          Reports inbox
+        </span>
+        <span className="tabular-nums text-xs text-slate-500">
+          ({reports.length} total
+          {newCount > 0 && (
+            <>
+              {' · '}
+              <span className="text-amber-700 dark:text-amber-300 font-semibold">{newCount} new</span>
+            </>
+          )}
+          )
+        </span>
+        <span className="ml-auto text-[11px] text-slate-400">{expanded ? 'Hide' : 'Show'}</span>
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3">
+          {loading && reports.length === 0 ? (
+            <ul className="space-y-1.5">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <li
+                  key={i}
+                  className="h-12 rounded-md bg-slate-100 dark:bg-slate-800 animate-pulse"
+                />
+              ))}
+            </ul>
+          ) : reports.length === 0 ? (
+            <p className="text-xs text-slate-500">No reports yet.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {visible.map((r) => (
+                <li
+                  key={r.id}
+                  className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-2.5 py-1.5"
+                >
+                  <div className="flex items-start gap-2">
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${SEVERITY_TONE[r.severity]}`}
+                    >
+                      {r.severity}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
+                        {r.subject}
+                      </p>
+                      <p className="text-[11px] text-slate-500 line-clamp-2">{r.description}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {r.reporter_display_name ?? r.reporter_phone ?? 'Unknown reporter'}
+                        <> · {new Date(r.created_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</>
+                        <> · {r.status}</>
+                        {r.attachments?.length > 0 && <> · {r.attachments.length} attachment{r.attachments.length === 1 ? '' : 's'}</>}
+                      </p>
+                    </div>
+                    {canTriage && r.status === 'new' && (
+                      <div className="shrink-0 flex flex-col gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void onTriage(r.id, 'triaged')}
+                          className="text-[10px] rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-900"
+                        >
+                          Triage
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void onTriage(r.id, 'dismissed')}
+                          className="text-[10px] rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-900"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ))}
+              {reports.length > visible.length && (
+                <li className="text-[11px] text-slate-400 italic">
+                  +{reports.length - visible.length} older report{reports.length - visible.length === 1 ? '' : 's'} not shown.
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   )
 }

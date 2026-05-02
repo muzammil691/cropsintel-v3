@@ -1526,3 +1526,171 @@ export async function forcePickBuilder(): Promise<{ ok: true; intent: 'force-pic
   )
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Team portal mirror (Phase 1.10au)
+// ──────────────────────────────────────────────────────────────────────────
+
+export type TeamPortalArtifactKind =
+  | 'verifier_run'
+  | 'designer_audit'
+  | 'open_fork'
+  | 'manual_report'
+
+export type TeamAssignmentStatus = 'open' | 'fixed' | 'escalated' | 'dismissed'
+
+export interface TeamAssignment {
+  id: string
+  artifact_kind: TeamPortalArtifactKind
+  artifact_ref: string
+  assigned_to_member_id: string | null
+  assigned_by: string | null
+  status: TeamAssignmentStatus
+  resolution_notes: string | null
+  created_at: string
+  resolved_at: string | null
+  // Server-enriched fields for rendering — optional so backend can ship them
+  // progressively. Each is a denormalised label/snippet to keep the portal
+  // self-contained without an extra round-trip per row.
+  title?: string | null
+  task_id?: string | null
+  assigned_to_display_name?: string | null
+}
+
+export type TeamReportSeverity = 'low' | 'medium' | 'high'
+export type TeamReportStatus = 'new' | 'triaged' | 'resolved' | 'dismissed'
+
+export interface TeamReport {
+  id: string
+  reporter_member_id: string
+  subject: string
+  description: string
+  severity: TeamReportSeverity
+  attachments: ChatAttachment[]
+  status: TeamReportStatus
+  created_at: string
+  triaged_at: string | null
+  triaged_by: string | null
+  triage_notes: string | null
+  reporter_display_name?: string | null
+  reporter_phone?: string | null
+}
+
+export interface TeamPortalAnnouncements {
+  build_health: {
+    overall: 'ok' | 'degraded' | 'issue' | 'unknown'
+    summary: string
+    cost_today_usd: number
+    queue_depth: number
+    in_flight: number
+    failed_24h: number
+    captured_at: string
+  }
+  recent_ships: Array<{
+    sha: string | null
+    summary: string
+    created_at: string
+  }>
+  pinned_messages: Array<{
+    id: string
+    body: string
+    posted_at: string
+  }>
+}
+
+export async function fetchTeamPortalAssignments(): Promise<TeamAssignment[]> {
+  const data = await fetchJson<{ assignments?: TeamAssignment[] }>(
+    `${ATLAS_URL}/atlas/team-portal/assignments`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.assignments) ? data!.assignments! : []
+}
+
+export async function resolveTeamAssignment(
+  id: string,
+  body: { status: 'fixed' | 'escalated' | 'dismissed'; notes?: string },
+): Promise<{ ok: true; assignment: TeamAssignment }> {
+  return fetchJson<{ ok: true; assignment: TeamAssignment }>(
+    `${ATLAS_URL}/atlas/team-portal/assignments/${encodeURIComponent(id)}/resolve`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function fetchTeamPortalAnnouncements(): Promise<TeamPortalAnnouncements> {
+  return fetchJson<TeamPortalAnnouncements>(
+    `${ATLAS_URL}/atlas/team-portal/announcements`,
+    { headers: authHeaders() },
+  )
+}
+
+export interface SubmitTeamReportInput {
+  subject: string
+  description: string
+  severity: TeamReportSeverity
+  attachments?: ChatAttachment[]
+}
+
+export async function submitTeamReport(
+  input: SubmitTeamReportInput,
+): Promise<{ ok: true; report: TeamReport; whatsapp_sent: boolean }> {
+  return fetchJson<{ ok: true; report: TeamReport; whatsapp_sent: boolean }>(
+    `${ATLAS_URL}/atlas/team-portal/reports`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject: input.subject,
+        description: input.description,
+        severity: input.severity,
+        attachments: input.attachments ?? [],
+      }),
+    },
+  )
+}
+
+export async function fetchTeamPortalReports(): Promise<TeamReport[]> {
+  const data = await fetchJson<{ reports?: TeamReport[] }>(
+    `${ATLAS_URL}/atlas/team-portal/reports`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.reports) ? data!.reports! : []
+}
+
+export async function triageTeamReport(
+  id: string,
+  body: { status: 'triaged' | 'resolved' | 'dismissed'; notes?: string },
+): Promise<{ ok: true; report: TeamReport }> {
+  return fetchJson<{ ok: true; report: TeamReport }>(
+    `${ATLAS_URL}/atlas/team-portal/reports/${encodeURIComponent(id)}/triage`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export interface AssignToTeamInput {
+  artifact_kind: TeamPortalArtifactKind
+  artifact_ref: string
+  assigned_to_member_id: string | null
+  title?: string
+  task_id?: string
+}
+
+export async function assignArtifactToTeam(
+  input: AssignToTeamInput,
+): Promise<{ ok: true; assignment: TeamAssignment }> {
+  return fetchJson<{ ok: true; assignment: TeamAssignment }>(
+    `${ATLAS_URL}/atlas/team-portal/assignments`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  )
+}
+
