@@ -155,3 +155,13 @@ export function delay(ms: number): Promise<void> {
 }
 
 export const PART_SEND_DELAY_MS = 250
+
+// Phase 1.10aw-rem — task-spec alias. The internal canonical name is
+// `splitForWhatsApp` (descriptive of the Twilio constraint), but the spec
+// pins the public API to `splitMessage(text, maxLen?)`. Default maxLen
+// matches the Twilio WhatsApp body cap (1600); we cap conservatively at
+// TWILIO_LIMIT (1500) to leave room for the `(part N/M)` suffix.
+export function splitMessage(text: string, maxLen: number = 1600): string[] {
+  const safeLimit = Math.min(maxLen, TWILIO_LIMIT)
+  return splitForWhatsApp(text, safeLimit)
+}

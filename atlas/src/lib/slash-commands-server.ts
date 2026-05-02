@@ -22,6 +22,8 @@ import {
   statusSnapshot,
   builderListQueue,
   builderListDone,
+  verifierAudit,
+  adelaTriggerScrape,
 } from './tools'
 import { getSupabaseClient } from './supabase'
 
@@ -88,6 +90,22 @@ const COMMANDS: SlashCommandSpec[] = [
     description: '7-agent health line',
     estimatedCostUsd: 0.0005,
     handler: handleAgents,
+  },
+  {
+    name: 'audit',
+    description: 'Trigger verifier audit on a task ID',
+    argHint: '<taskId>',
+    minRole: 'operator',
+    estimatedCostUsd: 0.05,
+    handler: handleAudit,
+  },
+  {
+    name: 'scrape',
+    description: 'Trigger Adela scraper for a source',
+    argHint: '<source>',
+    minRole: 'operator',
+    estimatedCostUsd: 0.02,
+    handler: handleScrape,
   },
   {
     name: 'help',
@@ -286,6 +304,70 @@ async function handleAgents(_args: string[], _principal: AuthPrincipal): Promise
     }
   }
   return parts.join(' · ')
+}
+
+// Phase 1.10aw-rem — /audit <taskId>: triggers a fresh verifier run. Without a
+// taskId we'd have to invent one (no good default), so we surface usage rather
+// than guess. Operator-gated because verifier runs incur model cost and write
+// to verifier_runs.
+async function handleAudit(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const taskId = args[0]
+  if (!taskId) {
+    return 'Usage: /audit <taskId>  (e.g. /audit phase-1.10aw-rem)'
+  }
+  // Light validation — task ids are kebab-case identifiers; reject anything
+  // that smells like an injection. The verifier service does its own checks
+  // but failing fast here gives a clearer error.
+  if (!/^[a-zA-Z0-9._-]{2,80}$/.test(taskId)) {
+    return `Rejected: "${taskId}" is not a valid task id (allowed: a-z, A-Z, 0-9, ._-, length 2-80).`
+  }
+  try {
+    const result = await verifierAudit(taskId) as {
+      passed?: boolean
+      gaps?: unknown[]
+      verdict?: string
+      mode?: string
+      duration_ms?: number
+    } | null
+    if (!result) return `Verifier returned no payload for ${taskId}.`
+    const passed = result.passed === true
+    const gapCount = Array.isArray(result.gaps) ? result.gaps.length : 0
+    const verdict = result.verdict ?? (passed ? 'pass' : 'fail')
+    const dur = typeof result.duration_ms === 'number' ? `${result.duration_ms}ms` : 'n/a'
+    return `Audit ${taskId}: ${passed ? '✅' : '❌'} ${verdict} | gaps: ${gapCount} | duration: ${dur}`
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Audit failed: ${msg}`
+  }
+}
+
+// Phase 1.10aw-rem — /scrape <source>: kicks Adela for a named scraper.
+// Operator-gated; sources accepted by Adela include usda-nass, abc-objective,
+// news-rss, etc. Adela owns its own rate-limits so we don't enforce here.
+async function handleScrape(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const source = args[0]
+  if (!source) {
+    return 'Usage: /scrape <source>  (e.g. /scrape usda-nass, /scrape abc-objective, /scrape news-rss)'
+  }
+  if (!/^[a-z][a-z0-9-]{1,40}$/.test(source)) {
+    return `Rejected: "${source}" is not a valid source name (lowercase, kebab-case, length 2-41).`
+  }
+  try {
+    const result = await adelaTriggerScrape(source) as {
+      ok?: boolean
+      status?: string
+      rows?: number
+      error?: string
+    } | null
+    if (!result) return `Adela returned no payload for ${source}.`
+    if (result.error) return `Scrape ${source} failed: ${result.error}`
+    const status = result.status ?? (result.ok === false ? 'failed' : 'queued')
+    const rows = typeof result.rows === 'number' ? ` | rows: ${result.rows}` : ''
+    return `Scrape ${source}: ${status}${rows}`
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Scrape failed: ${msg}`
+  }
 }
 
 async function handleHelp(_args: string[], principal: AuthPrincipal): Promise<string> {

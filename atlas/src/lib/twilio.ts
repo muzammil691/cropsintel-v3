@@ -4,6 +4,47 @@
 
 import { createHmac } from 'crypto'
 import { splitForWhatsApp, delay, PART_SEND_DELAY_MS, TWILIO_LIMIT } from './whatsapp-split'
+import { getSupabaseClient } from './supabase'
+
+// Phase 1.10aw-rem — instrumentation. Each chunk send fires an atlas_events
+// row so admin tooling can see WhatsApp send latency / failure rates without
+// spelunking Twilio logs. Insert is fire-and-forget — never let a logging
+// failure bubble up to the caller (we'd rather drop telemetry than break a
+// reply).
+async function logChunkEvent(params: {
+  toNumber: string
+  partIndex: number
+  totalParts: number
+  bytes: number
+  sid?: string
+  error?: string
+}): Promise<void> {
+  try {
+    const sb = getSupabaseClient()
+    if (!sb) return
+    const severity = params.error ? 'error' : 'info'
+    await sb.from('atlas_events').insert({
+      event_type: params.error ? 'whatsapp_send_failed' : 'whatsapp_send_chunk',
+      event_category: 'atlas',
+      source: 'atlas-twilio',
+      severity,
+      description: params.error
+        ? `WhatsApp send failed (part ${params.partIndex + 1}/${params.totalParts})`
+        : `WhatsApp chunk delivered (part ${params.partIndex + 1}/${params.totalParts})`,
+      metadata: {
+        to_phone_redacted: params.toNumber.replace(/\d(?=\d{4})/g, '*'),
+        part_index: params.partIndex,
+        total_parts: params.totalParts,
+        bytes: params.bytes,
+        sid: params.sid ?? null,
+        error: params.error ?? null,
+      },
+    })
+  } catch (err) {
+    // Telemetry never crashes the send path.
+    console.warn('[twilio] atlas_events log failed:', err instanceof Error ? err.message : err)
+  }
+}
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN
@@ -68,11 +109,38 @@ export async function sendWhatsAppReplyAutoSplit(
   const errors: string[] = []
   for (let i = 0; i < parts.length; i++) {
     if (i > 0) await delay(PART_SEND_DELAY_MS)
-    const result = await sendWhatsAppReply(toNumber, parts[i])
-    if ('error' in result) {
-      errors.push(result.error)
-    } else {
-      sids.push(result.sid)
+    try {
+      const result = await sendWhatsAppReply(toNumber, parts[i])
+      if ('error' in result) {
+        errors.push(result.error)
+        void logChunkEvent({
+          toNumber,
+          partIndex: i,
+          totalParts: parts.length,
+          bytes: Buffer.byteLength(parts[i], 'utf-8'),
+          error: result.error,
+        })
+      } else {
+        sids.push(result.sid)
+        void logChunkEvent({
+          toNumber,
+          partIndex: i,
+          totalParts: parts.length,
+          bytes: Buffer.byteLength(parts[i], 'utf-8'),
+          sid: result.sid,
+        })
+      }
+    } catch (err) {
+      // NEVER list: never throw from auto-split. Capture, log, continue.
+      const msg = err instanceof Error ? err.message : String(err)
+      errors.push(msg)
+      void logChunkEvent({
+        toNumber,
+        partIndex: i,
+        totalParts: parts.length,
+        bytes: Buffer.byteLength(parts[i], 'utf-8'),
+        error: msg,
+      })
     }
   }
   return { sids, errors }

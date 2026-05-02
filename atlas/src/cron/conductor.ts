@@ -25,6 +25,11 @@ const execFileP = promisify(execFile)
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.ATLAS_HEARTBEAT_INTERVAL_MS ?? '300000', 10)
 const MUZAMMIL_WHATSAPP = process.env.MUZAMMIL_WHATSAPP ?? '+971562556592'
+// Phase 1.10aw-rem — opt-in outbound notification number for task-done events.
+// Distinct from MUZAMMIL_WHATSAPP (always-on critical alerts) so an operator
+// can subscribe a different number to ship pings without inheriting incident
+// pages. Empty string disables the outbound entirely.
+const WHATSAPP_NOTIFY_NUMBER = process.env.WHATSAPP_NOTIFY_NUMBER ?? ''
 const STUCK_BUILDER_MINUTES = parseInt(process.env.ATLAS_STUCK_BUILDER_MINUTES ?? '30', 10)
 const IDLE_QUEUE_HOURS = parseInt(process.env.ATLAS_IDLE_QUEUE_HOURS ?? '2', 10)
 const REPO_ROOT = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
@@ -96,6 +101,10 @@ async function runHeartbeat(): Promise<void> {
     await reorderQueueIfPriorityInversion(trustMode)
     await memoryIngestAfterShips(trustMode)
     await verifierAuditAfterShips(trustMode)
+    // Phase 1.10aw-rem: opt-in WhatsApp ping when a task ships. Sibling pass
+    // (does not modify the audit/ingest behavior); no-op unless
+    // WHATSAPP_NOTIFY_NUMBER is set.
+    await notifyTaskDoneAfterShips(trustMode)
     // 1.10ar: rolling chat-summary sweep — covers WhatsApp/voice threads
     // that don't run through the cockpit chat handler.
     await chatSummarySweep(trustMode)
@@ -1107,6 +1116,86 @@ async function checkWorkflowTraceAndPing(trustMode: TrustMode): Promise<void> {
       console.warn('[atlas-conductor] whatsapp ping for workflow-trace violation failed:', err)
     }
   }
+}
+
+// ─── Phase 1.10aw-rem — task-done WhatsApp notification ────────────────────
+//
+// Opt-in outbound ping fired once per ship-commit when WHATSAPP_NOTIFY_NUMBER
+// is set. We dedupe per commit-sha so re-running the heartbeat inside the
+// 6-min look-back window doesn't double-ping. Always uses the auto-split
+// helper so multi-line ship summaries stay under Twilio's 1600-char cap.
+//
+// Caller contract:
+//  - returns void; never throws (errors logged + swallowed)
+//  - no-op if WHATSAPP_NOTIFY_NUMBER is empty
+//  - safe to call concurrently — Set.add() is atomic under Node's single
+//    event-loop, and dispatch is at-most-once per (to, sha) tuple.
+const notifiedShipShas = new Set<string>()
+
+export async function notifyWhatsApp(to: string, message: string): Promise<void> {
+  if (!to) return
+  try {
+    const result = await sendWhatsAppReplyAutoSplit(to, message)
+    if (result.errors.length > 0) {
+      console.warn('[atlas-conductor] notifyWhatsApp partial failure:', result.errors.join('; '))
+    }
+  } catch (err) {
+    // NEVER list compliance: don't let an outbound notification error
+    // propagate up the conductor heartbeat.
+    console.warn('[atlas-conductor] notifyWhatsApp threw (suppressed):', err instanceof Error ? err.message : err)
+  }
+}
+
+// Sibling of memoryIngestAfterShips / verifierAuditAfterShips. Walks the same
+// 6-min commit window for ship subjects (matched via the shared
+// extractTaskIdFromShipSubject helper) and pings WHATSAPP_NOTIFY_NUMBER once
+// per new commit-sha. Never modifies the existing post-ship passes.
+async function notifyTaskDoneAfterShips(trustMode: TrustMode): Promise<void> {
+  if (!WHATSAPP_NOTIFY_NUMBER) return
+  // Same trust-mode envelope as the rest of the post-ship passes — passive /
+  // stopped trust modes don't emit outbound WhatsApp work.
+  if (trustMode === 'stopped' || trustMode === 'passive') return
+
+  let stdout: string
+  try {
+    const result = await withGitLock('conductor:ship-notify-log', () => execFileP(
+      'git',
+      ['log', '--since=6 minutes ago', '--pretty=format:%H%x09%s'],
+      { cwd: REPO_ROOT },
+    ))
+    stdout = result.stdout
+  } catch (err) {
+    console.warn('[atlas-conductor] git log for ship-notify failed:', err)
+    return
+  }
+  const lines = stdout.split('\n').filter(Boolean)
+  if (lines.length === 0) return
+
+  const shipEntries: Array<{ sha: string; taskId: string }> = []
+  for (const line of lines) {
+    const [sha, subj] = line.split('\t')
+    if (!sha || !subj) continue
+    const taskId = extractTaskIdFromShipSubject(subj)
+    if (taskId) shipEntries.push({ sha, taskId })
+  }
+  if (shipEntries.length === 0) return
+
+  const fresh = shipEntries.filter(e => !notifiedShipShas.has(e.sha))
+  if (fresh.length === 0) return
+  for (const entry of fresh) notifiedShipShas.add(entry.sha)
+  // Cap dedup set at 200 entries — shipEntries arrive in 6-min windows, so
+  // even at 50 ships/hr we'd never approach this organically.
+  if (notifiedShipShas.size > 200) {
+    const first = notifiedShipShas.values().next().value
+    if (first !== undefined) notifiedShipShas.delete(first)
+  }
+
+  const summaryLines = fresh.map(e => `• ${e.taskId} (${e.sha.slice(0, 8)})`)
+  const body = fresh.length === 1
+    ? `✅ Task shipped: ${fresh[0].taskId}\nCommit: ${fresh[0].sha.slice(0, 8)}`
+    : `✅ ${fresh.length} tasks shipped:\n${summaryLines.join('\n')}`
+  await notifyWhatsApp(WHATSAPP_NOTIFY_NUMBER, body)
+  console.log(`[atlas-conductor] notifyWhatsApp sent for ${fresh.length} ship commit(s) → ${WHATSAPP_NOTIFY_NUMBER}`)
 }
 
 // ─── 7. Memory ingest after every ship ──────────────────────────────────────
