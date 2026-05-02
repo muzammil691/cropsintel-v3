@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { TabFrame } from './AtlasPlanTab'
 import { AuditRow, type AuditRowData, type AuditRowSource, type AuditVerdict } from '../audit/AuditRow'
 import { cn } from '@/lib/utils'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   fetchRecentVerifierRuns,
   fetchRecentDesignerRuns,
@@ -193,10 +194,10 @@ export default function AtlasAuditTab() {
                 type="button"
                 onClick={() => setFilter(f.key)}
                 className={cn(
-                  'px-2 py-0.5 text-[11px] transition-colors',
+                  'px-2 py-0.5 text-[11px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
                   filter === f.key
                     ? 'bg-emerald-600 text-white'
-                    : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-900',
+                    : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-900 active:bg-slate-100 dark:active:bg-slate-900',
                 )}
               >
                 {f.label}
@@ -226,7 +227,9 @@ export default function AtlasAuditTab() {
             <li key={row.id} className="space-y-1.5">
               <AuditRow row={row} onAction={handleAction} />
               {diagnosing === row.id && (
-                <div className="ml-6 text-[11px] text-slate-500 italic">Diagnosing…</div>
+                <div role="status" aria-live="polite" className="ml-6 text-[11px] text-slate-500 italic">
+                  Diagnosing…
+                </div>
               )}
               {diagnosis?.rowId === row.id && (
                 <DiagnosisCard bucket={diagnosis.bucket} onClose={() => setDiagnosis(null)} />
@@ -257,100 +260,138 @@ function normalizeDesignerVerdict(verdict: string): AuditVerdict {
 }
 
 function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: () => void }) {
-  const baseClass = 'ml-6 rounded-md border px-3 py-2 text-xs space-y-1.5'
+  const baseClass = 'ml-6 rounded-xl border px-3 py-2 text-xs space-y-1.5'
+  const buttonFocus = 'transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50'
+
   if (bucket.bucket === 'auto-remediate') {
     return (
-      <div className={cn(baseClass, 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200')}>
-        <div className="flex items-center justify-between">
+      <Card className={cn(baseClass, 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200')}>
+        <CardHeader className="flex items-center justify-between gap-3 p-3">
           <span className="font-semibold uppercase tracking-wider text-[10px]">Auto-remediate</span>
-          <button onClick={onClose} className="text-emerald-700 dark:text-emerald-400 text-[11px] hover:underline">Dismiss</button>
-        </div>
-        <p>{bucket.reason}</p>
-        <p className="font-mono text-[11px]">spec: {bucket.spec_filename}</p>
-        <button
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(bucket.spec_body)
-              window.dispatchEvent(new CustomEvent('atlas:chat-prefill', {
-                detail: `/queue ${bucket.spec_filename}\n\n(Atlas suggests auto-remediating this — spec body copied to clipboard. Approve to queue?)`,
-              }))
-            } catch { /* ignore */ }
-          }}
-          className="mt-1 rounded-md border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors duration-200"
-        >
-          Copy spec + ask Atlas to queue
-        </button>
-      </div>
-    )
-  }
-  if (bucket.bucket === 'claude-code') {
-    return (
-      <div className={cn(baseClass, 'border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 text-sky-900 dark:text-sky-200')}>
-        <div className="flex items-center justify-between">
-          <span className="font-semibold uppercase tracking-wider text-[10px]">Needs Claude Code</span>
-          <button onClick={onClose} className="text-sky-700 dark:text-sky-400 text-[11px] hover:underline">Dismiss</button>
-        </div>
-        <p>{bucket.reason}</p>
-        {bucket.affected_files?.length > 0 && (
-          <p className="font-mono text-[11px]">
-            files: {bucket.affected_files.slice(0, 3).join(', ')}
-            {bucket.affected_files.length > 3 ? ` +${bucket.affected_files.length - 3}` : ''}
-          </p>
-        )}
-        <div className="flex gap-1.5 mt-1">
+          <button onClick={onClose} className={cn('text-emerald-700 dark:text-emerald-400 text-[11px] hover:underline', buttonFocus)}>
+            Dismiss
+          </button>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p>{bucket.reason}</p>
+          <p className="font-mono text-[11px]">spec: {bucket.spec_filename}</p>
           <button
             onClick={async () => {
               try {
-                await navigator.clipboard.writeText(bucket.prompt)
-              } catch { /* ignore */ }
+                await navigator.clipboard.writeText(bucket.spec_body)
+                window.dispatchEvent(
+                  new CustomEvent('atlas:chat-prefill', {
+                    detail: `/queue ${bucket.spec_filename}\n\n(Atlas suggests auto-remediating this — spec body copied to clipboard. Approve to queue?)`,
+                  }),
+                )
+              } catch {
+                /* ignore */
+              }
             }}
-            className="rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-sky-100 dark:hover:bg-sky-900/40 transition-colors duration-200"
+            className={cn(
+              'mt-1 rounded-md border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-emerald-100 dark:hover:bg-emerald-900/40',
+              buttonFocus,
+            )}
           >
-            Copy prompt
+            Copy spec + ask Atlas to queue
           </button>
-          <a
-            href="vscode://file/"
-            className="rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-sky-100 dark:hover:bg-sky-900/40 transition-colors duration-200 no-underline"
-          >
-            Open VS Code
-          </a>
-        </div>
-        <details className="mt-1">
-          <summary className="cursor-pointer text-[11px]">Show full prompt</summary>
-          <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900 px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap">
-            {bucket.prompt}
-          </pre>
-        </details>
-      </div>
+        </CardContent>
+      </Card>
     )
   }
+
+  if (bucket.bucket === 'claude-code') {
+    return (
+      <Card className={cn(baseClass, 'border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 text-sky-900 dark:text-sky-200')}>
+        <CardHeader className="flex items-center justify-between gap-3 p-3">
+          <span className="font-semibold uppercase tracking-wider text-[10px]">Needs Claude Code</span>
+          <button onClick={onClose} className={cn('text-sky-700 dark:text-sky-400 text-[11px] hover:underline', buttonFocus)}>
+            Dismiss
+          </button>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p>{bucket.reason}</p>
+          {bucket.affected_files?.length > 0 && (
+            <p className="font-mono text-[11px]">
+              files: {bucket.affected_files.slice(0, 3).join(', ')}
+              {bucket.affected_files.length > 3 ? ` +${bucket.affected_files.length - 3}` : ''}
+            </p>
+          )}
+          <div className="flex gap-1.5 mt-1">
+            <button
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(bucket.prompt)
+                } catch {
+                  /* ignore */
+                }
+              }}
+              className={cn(
+                'rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-sky-100 dark:hover:bg-sky-900/40',
+                buttonFocus,
+              )}
+            >
+              Copy prompt
+            </button>
+            <a
+              href="vscode://file/"
+              className={cn(
+                'rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-sky-100 dark:hover:bg-sky-900/40 no-underline',
+                buttonFocus,
+              )}
+            >
+              Open VS Code
+            </a>
+          </div>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-[11px]">Show full prompt</summary>
+            <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900 px-2 py-1.5 font-mono text-[11px] whitespace-pre-wrap">
+              {bucket.prompt}
+            </pre>
+          </details>
+        </CardContent>
+      </Card>
+    )
+  }
+
   if (bucket.bucket === 'in-app-action') {
     return (
-      <div className={cn(baseClass, 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200')}>
-        <div className="flex items-center justify-between">
+      <Card className={cn(baseClass, 'border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200')}>
+        <CardHeader className="flex items-center justify-between gap-3 p-3">
           <span className="font-semibold uppercase tracking-wider text-[10px]">In-app action</span>
-          <button onClick={onClose} className="text-amber-700 dark:text-amber-400 text-[11px] hover:underline">Dismiss</button>
-        </div>
-        <p>{bucket.reason}</p>
-        <p className="font-mono text-[11px]">{bucket.label}</p>
-      </div>
+          <button onClick={onClose} className={cn('text-amber-700 dark:text-amber-400 text-[11px] hover:underline', buttonFocus)}>
+            Dismiss
+          </button>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p>{bucket.reason}</p>
+          <p className="font-mono text-[11px]">{bucket.label}</p>
+        </CardContent>
+      </Card>
     )
   }
-  // discuss
+
   return (
-    <div className={cn(baseClass, 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300')}>
-      <div className="flex items-center justify-between">
+    <Card className={cn(baseClass, 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300')}>
+      <CardHeader className="flex items-center justify-between gap-3 p-3">
         <span className="font-semibold uppercase tracking-wider text-[10px]">Discuss</span>
-        <button onClick={onClose} className="text-slate-500 text-[11px] hover:underline">Dismiss</button>
-      </div>
-      <p>{bucket.reason}</p>
-      <button
-        onClick={() => window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: bucket.chat_seed }))}
-        className="mt-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200"
-      >
-        Send to chat
-      </button>
-    </div>
+        <button onClick={onClose} className={cn('text-slate-500 text-[11px] hover:underline', buttonFocus)}>
+          Dismiss
+        </button>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <p>{bucket.reason}</p>
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: bucket.chat_seed }))}
+          className={cn(
+            'mt-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800',
+            buttonFocus,
+          )}
+        >
+          Send to chat
+        </button>
+      </CardContent>
+    </Card>
   )
 }
 
