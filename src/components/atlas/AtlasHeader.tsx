@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Settings, LogOut } from 'lucide-react'
+import { Sparkles, Settings, LogOut, Hammer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -17,7 +17,9 @@ import {
   type AtlasCosts,
   type AtlasStatus,
   type TrustMode,
+  type AgentHeartbeat,
 } from '@/lib/atlas-client'
+import { deriveAgentStatus, formatElapsed } from '@/hooks/useAgentHeartbeats'
 import { cn } from '@/lib/utils'
 
 const TRUST_MODES: TrustMode[] = ['passive', 'chat', 'confirm', 'auto', 'stopped']
@@ -33,6 +35,7 @@ interface AtlasHeaderProps {
   trustMode: TrustMode
   onTrustModeChange: (mode: TrustMode) => void
   onOpenAgentsTab: () => void
+  heartbeats?: Record<string, AgentHeartbeat>
 }
 
 /**
@@ -46,6 +49,7 @@ export function AtlasHeader({
   trustMode,
   onTrustModeChange,
   onOpenAgentsTab,
+  heartbeats,
 }: AtlasHeaderProps) {
   const navigate = useNavigate()
   const [trustDialogOpen, setTrustDialogOpen] = useState(false)
@@ -113,6 +117,7 @@ export function AtlasHeader({
         >
           <TrustModeBadge mode={trustMode} />
         </button>
+        <InFlightChip heartbeat={heartbeats?.builder} onClick={onOpenAgentsTab} />
       </div>
 
       {/* Right: cost pill, agent dots, settings */}
@@ -321,6 +326,41 @@ function dotLabel(d: AgentDot): string {
     default:
       return 'no signal'
   }
+}
+
+function InFlightChip({
+  heartbeat,
+  onClick,
+}: { heartbeat: AgentHeartbeat | undefined; onClick: () => void }) {
+  const status = deriveAgentStatus(heartbeat)
+  if (!heartbeat || status !== 'running') return null
+  const task = heartbeat.task ?? 'spec'
+  const taskShort = task.length > 24 ? task.slice(0, 24) + '…' : task
+  const elapsed = formatElapsed(heartbeat.elapsed_s)
+  const msg = heartbeat.msg ?? heartbeat.state
+  const msgShort = msg.length > 40 ? msg.slice(0, 40) + '…' : msg
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="hidden md:inline-flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 text-[11px] text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors"
+      title={`Builder running ${task} — ${msg}`}
+      aria-label={`Builder running ${task}`}
+    >
+      <span className="relative flex size-2">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+        <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+      </span>
+      <Hammer className="size-3" aria-hidden />
+      <span className="font-medium">Builder</span>
+      <span className="text-emerald-700/80 dark:text-emerald-300/80">·</span>
+      <span className="font-mono">{taskShort}</span>
+      <span className="text-emerald-700/80 dark:text-emerald-300/80">·</span>
+      <span className="font-mono tabular-nums">{elapsed}</span>
+      <span className="text-emerald-700/80 dark:text-emerald-300/80 hidden lg:inline">·</span>
+      <span className="hidden lg:inline italic truncate max-w-[180px]">{msgShort}</span>
+    </button>
+  )
 }
 
 function trustModeBlurb(m: TrustMode): string {

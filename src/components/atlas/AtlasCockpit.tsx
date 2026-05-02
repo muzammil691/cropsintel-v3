@@ -12,6 +12,7 @@ import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import { useArtifacts } from '@/hooks/useArtifacts'
 import { useTts } from '@/hooks/useTts'
 import { useLiveMode } from '@/hooks/useLiveMode'
+import { useAgentHeartbeats } from '@/hooks/useAgentHeartbeats'
 import type { TrustMode } from '@/lib/atlas-client'
 import { cn } from '@/lib/utils'
 
@@ -58,6 +59,7 @@ export function AtlasCockpit() {
   const artifacts = useArtifacts()
   const tts = useTts()
   const liveMode = useLiveMode({ threadId: 'web-default', voiceId: tts.voiceId })
+  const { heartbeats } = useAgentHeartbeats()
 
   // Trust mode lives on the server but we mirror it locally for instant UI
   // updates. The server is authoritative — useAtlasStatus pulls every 5s.
@@ -127,6 +129,7 @@ export function AtlasCockpit() {
         trustMode={trustMode}
         onTrustModeChange={setTrustOverride}
         onOpenAgentsTab={openAgentsTab}
+        heartbeats={heartbeats}
       />
 
       {/* Desktop / tablet: split-pane (chat fixed-width left, tabs right).
@@ -161,6 +164,7 @@ export function AtlasCockpit() {
                   loading={loading}
                   artifacts={artifacts}
                   onOpenAgents={openAgentsTab}
+                  heartbeats={heartbeats}
                 />
               </Suspense>
             </ErrorBoundary>
@@ -180,6 +184,7 @@ export function AtlasCockpit() {
                 loading={loading}
                 artifacts={artifacts}
                 onOpenAgents={openAgentsTab}
+                heartbeats={heartbeats}
               />
             </Suspense>
           </ErrorBoundary>
@@ -236,24 +241,26 @@ function ActiveTab({
   loading,
   artifacts,
   onOpenAgents,
+  heartbeats,
 }: {
   tab: AtlasTabKey
   status: ReturnType<typeof useAtlasStatus>['status']
   loading: boolean
   artifacts: ReturnType<typeof useArtifacts>
   onOpenAgents: () => void
+  heartbeats: ReturnType<typeof useAgentHeartbeats>['heartbeats']
 }) {
   switch (tab) {
     case 'plan':
       return <AtlasPlanTab />
     case 'queue':
-      return <AtlasQueueTab />
+      return <AtlasQueueTab heartbeats={heartbeats} />
     case 'agents':
-      return <AtlasAgentsTab status={status} loading={loading} />
+      return <AtlasAgentsTab status={status} loading={loading} heartbeats={heartbeats} />
     case 'audit':
       return <AtlasAuditTab />
     case 'workflows':
-      return <AtlasWorkflowTab status={status} onOpenAgents={onOpenAgents} />
+      return <AtlasWorkflowTab status={status} onOpenAgents={onOpenAgents} heartbeats={heartbeats} />
     case 'artifacts':
       return <AtlasArtifactsTab artifacts={artifacts} />
     case 'team':

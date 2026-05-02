@@ -95,6 +95,8 @@ async function runHeartbeat(): Promise<void> {
     await checkWorkflowTraceAndPing(trustMode)
     // 1.10aq: auto-fix lifecycle pass — promote queued→shipped→resolved/failed.
     await autoFixLifecyclePass(trustMode)
+    // 1.10ax: write heartbeats for the non-Builder agents so all 7 nodes light up.
+    await writeNonBuilderHeartbeats()
   } catch (err) {
     console.error('[atlas-conductor] heartbeat failed:', err)
   }
@@ -872,6 +874,103 @@ function truncate(s: string, n: number): string {
 async function snapshotOnly(): Promise<void> {
   const { runSnapshot } = await import('./snapshot.js')
   await runSnapshot()
+}
+
+// ─── 1.10ax: heartbeats for the non-Builder agents ──────────────────────────
+//
+// Builder pushes its own state from agent-loop.sh. The other six agents don't,
+// so the conductor writes on their behalf based on /health + recent activity.
+// Atlas writes its own row directly (it's running this code).
+
+interface AgentProbe {
+  agent: string
+  healthUrl: string | null
+  recentActivity: () => Promise<boolean>
+}
+
+async function writeNonBuilderHeartbeats(): Promise<void> {
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  const probes: AgentProbe[] = [
+    {
+      agent: 'atlas',
+      healthUrl: null,
+      recentActivity: async () => true,
+    },
+    {
+      agent: 'verifier',
+      healthUrl: process.env.VERIFIER_URL ? `${process.env.VERIFIER_URL.replace(/\/$/, '')}/health` : null,
+      recentActivity: () => recentActivityIn(sb, 'verifier_runs', 'ran_at'),
+    },
+    {
+      agent: 'designer',
+      healthUrl: process.env.DESIGNER_URL ? `${process.env.DESIGNER_URL.replace(/\/$/, '')}/health` : null,
+      recentActivity: () => recentActivityIn(sb, 'designer_runs', 'created_at'),
+    },
+    {
+      agent: 'memory',
+      healthUrl: null,
+      recentActivity: () => recentActivityIn(sb, 'memory_chunks', 'created_at'),
+    },
+    {
+      agent: 'council',
+      healthUrl: null,
+      recentActivity: () => recentActivityIn(sb, 'atlas_decisions', 'decided_at'),
+    },
+    {
+      agent: 'adela',
+      healthUrl: process.env.ADELA_URL ? `${process.env.ADELA_URL.replace(/\/$/, '')}/health` : null,
+      recentActivity: async () => false,
+    },
+  ]
+
+  for (const probe of probes) {
+    let state: 'idle' | 'running' | 'unreachable' = 'idle'
+    if (probe.healthUrl) {
+      try {
+        const res = await fetch(probe.healthUrl, { signal: AbortSignal.timeout(5000) })
+        if (!res.ok) state = 'unreachable'
+      } catch {
+        state = 'unreachable'
+      }
+    }
+    if (state === 'idle') {
+      try {
+        const recent = await probe.recentActivity()
+        if (recent) state = 'running'
+      } catch {
+        // leave as idle
+      }
+    }
+
+    try {
+      await sb.from('atlas_agent_heartbeats').upsert({
+        agent: probe.agent,
+        state,
+        task: null,
+        elapsed_s: 0,
+        msg: state === 'unreachable' ? 'health probe failed' : (state === 'running' ? 'recent activity' : 'no recent activity'),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'agent' })
+    } catch (err) {
+      console.warn(`[atlas-conductor] heartbeat upsert failed for ${probe.agent}:`, err)
+    }
+  }
+}
+
+async function recentActivityIn(
+  sb: ReturnType<typeof getSupabaseClient>,
+  table: string,
+  tsCol: string,
+): Promise<boolean> {
+  if (!sb) return false
+  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+  const { count } = await sb
+    .from(table)
+    .select('*', { count: 'exact', head: true })
+    .gte(tsCol, fiveMinAgo)
+  return (count ?? 0) > 0
 }
 
 // ─── 6. Queue intelligence — priority inversion detection ───────────────────

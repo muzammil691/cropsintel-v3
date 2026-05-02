@@ -43,6 +43,50 @@ DESIGNER_GATE_ENABLED="${DESIGNER_GATE_ENABLED:-true}"
 DESIGNER_FAIL_CONFIDENCE_THRESHOLD="${DESIGNER_FAIL_CONFIDENCE_THRESHOLD:-0.7}"
 DESIGNER_TIMEOUT_SECONDS="${DESIGNER_TIMEOUT_SECONDS:-60}"
 
+# Atlas heartbeat configuration (Phase 1.10ax — push Builder state to cockpit)
+ATLAS_URL="${ATLAS_URL:-https://courteous-simplicity-production.up.railway.app}"
+ATLAS_API_TOKEN="${ATLAS_API_TOKEN:-}"
+ATLAS_HEARTBEAT_ENABLED="${ATLAS_HEARTBEAT_ENABLED:-true}"
+# Track consecutive heartbeat failures so we log loudly after 3 (NEVER list).
+ATLAS_HEARTBEAT_FAIL_COUNT=0
+
+# -----------------------------------------------------------------------------
+# 0a. post_atlas_heartbeat — push Builder's current state to Atlas cockpit.
+#     Bounded with -m 5 + `|| true` so a failed POST never blocks the loop.
+#     Args: $1=state, $2=task, $3=elapsed_s, $4=msg
+# -----------------------------------------------------------------------------
+post_atlas_heartbeat() {
+  [ "$ATLAS_HEARTBEAT_ENABLED" != "true" ] && return 0
+  [ -z "$ATLAS_API_TOKEN" ] && return 0
+
+  local state="$1"
+  local task="${2:-}"
+  local elapsed_s="${3:-0}"
+  local msg="${4:-}"
+
+  # JSON-escape minimally: backslash, double-quote, and control chars to spaces.
+  local task_esc=$(printf '%s' "$task" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g')
+  local msg_esc=$(printf '%s' "$msg" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g' | cut -c1-200)
+
+  local http_code
+  http_code=$(curl -sS -X POST "$ATLAS_URL/atlas/agents/builder/heartbeat" \
+    -H "Authorization: Bearer $ATLAS_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    -m 5 \
+    -o /dev/null -w '%{http_code}' \
+    -d "{\"state\":\"$state\",\"task\":\"$task_esc\",\"elapsed_s\":$elapsed_s,\"msg\":\"$msg_esc\"}" 2>/dev/null) || http_code="000"
+
+  if [ "$http_code" = "200" ] || [ "$http_code" = "204" ]; then
+    ATLAS_HEARTBEAT_FAIL_COUNT=0
+  else
+    ATLAS_HEARTBEAT_FAIL_COUNT=$((ATLAS_HEARTBEAT_FAIL_COUNT + 1))
+    if [ "$ATLAS_HEARTBEAT_FAIL_COUNT" -ge 3 ]; then
+      echo "$LOOP_TAG WARN: atlas heartbeat failed $ATLAS_HEARTBEAT_FAIL_COUNT times in a row (last http=$http_code, state=$state, task=$task)" >&2
+    fi
+  fi
+  return 0
+}
+
 # -----------------------------------------------------------------------------
 # 0. Bootstrap: SSH key, clone repo
 # -----------------------------------------------------------------------------
@@ -517,13 +561,26 @@ run_task() {
   #   --permission-mode bypassPermissions = backup permission mode
   #   --tools default = explicit "use all built-in tools"
 
+  # Notify Atlas cockpit that Builder just picked this spec (state=starting).
+  post_atlas_heartbeat "starting" "$TASK_NAME" 0 "spec picked"
+
   # Background heartbeat — emits "still running" every 60s to STDOUT so Railway logs
   # show the loop is alive even though Claude's output goes to a separate log file.
   # Without this, Builder LOOKS idle from Railway's perspective for 15-30+ min.
+  # Also POSTs to Atlas (state=running) so the cockpit chip + pipeline update
+  # without waiting for the conductor's 5-min poll.
+  local LOG_FILE=".agent/tasks/in-progress/$TASK_NAME.log"
   (
     while true; do
       sleep 60
-      echo "$LOOP_TAG heartbeat: claude running on $TASK_NAME for $(($(date +%s) - START_TIME))s (model=$MODEL)"
+      local ELAPSED=$(($(date +%s) - START_TIME))
+      echo "$LOOP_TAG heartbeat: claude running on $TASK_NAME for ${ELAPSED}s (model=$MODEL)"
+      local TAIL_LINE=""
+      if [ -f "$LOG_FILE" ]; then
+        TAIL_LINE=$(tail -n1 "$LOG_FILE" 2>/dev/null | tr -d '\r' | cut -c1-160)
+      fi
+      [ -z "$TAIL_LINE" ] && TAIL_LINE="claude running (${ELAPSED}s)"
+      post_atlas_heartbeat "running" "$TASK_NAME" "$ELAPSED" "$TAIL_LINE"
     done
   ) &
   local HEARTBEAT_PID=$!
@@ -620,6 +677,7 @@ run_task() {
       # creates new files. The trade-off: broken code briefly hits main between
       # push and verifier-fail, but npm run build is gated on Builder's side
       # before reaching here, so at minimum the code compiles.
+      post_atlas_heartbeat "shipping" "$TASK_NAME" "$DURATION" "pushing to main"
       git push origin main || {
         echo "$LOOP_TAG push failed (pre-gate)"
         /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
@@ -627,6 +685,7 @@ run_task() {
       }
 
       # Now gate on verifier + designer using the actually-pushed commit.
+      post_atlas_heartbeat "verifying" "$TASK_NAME" "$DURATION" "verifier audit"
       if run_verifier_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER" && \
          run_designer_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER"; then
         mkdir -p .agent/tasks/done
@@ -717,10 +776,12 @@ while true; do
     run_task "$TASK_FILE" || echo "$LOOP_TAG run_task returned non-zero"
     # Just finished work — sleep briefly so the next queued spec starts ASAP
     echo "$LOOP_TAG cycle done; active sleep ${ACTIVE_SLEEP_SECONDS}s before next pick"
+    post_atlas_heartbeat "idle" "" 0 "between tasks"
     sleep "$ACTIVE_SLEEP_SECONDS"
   else
     # Queue empty — relax to a long sleep so we don't hammer git fetch
     echo "$LOOP_TAG no queued tasks; idle sleep ${IDLE_SLEEP_SECONDS}s"
+    post_atlas_heartbeat "idle" "" 0 "no queued tasks"
     sleep "$IDLE_SLEEP_SECONDS"
   fi
 done

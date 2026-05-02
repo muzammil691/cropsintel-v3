@@ -8,14 +8,16 @@ import {
   type AtlasStatus,
   type WorkflowGraph,
   type WorkflowGraphNode,
+  type AgentHeartbeat,
 } from '@/lib/atlas-client'
 
 interface AtlasWorkflowTabProps {
   status: AtlasStatus | null
   onOpenAgents: () => void
+  heartbeats?: Record<string, AgentHeartbeat>
 }
 
-export default function AtlasWorkflowTab({ status, onOpenAgents }: AtlasWorkflowTabProps) {
+export default function AtlasWorkflowTab({ status, onOpenAgents, heartbeats }: AtlasWorkflowTabProps) {
   const [graph, setGraph] = useState<WorkflowGraph | null>(null)
   const [graphError, setGraphError] = useState<string | null>(null)
   const [graphLoading, setGraphLoading] = useState(true)
@@ -48,7 +50,7 @@ export default function AtlasWorkflowTab({ status, onOpenAgents }: AtlasWorkflow
       hint="7-agent pipeline up top, 15 commodity workflows × 8 departments below."
     >
       <div className="space-y-4">
-        <AgentPipeline status={status} onOpenAgents={onOpenAgents} />
+        <AgentPipeline status={status} onOpenAgents={onOpenAgents} heartbeats={heartbeats} />
 
         <section>
           <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">

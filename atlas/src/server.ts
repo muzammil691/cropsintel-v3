@@ -117,6 +117,92 @@ const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?
 const PORT = parseInt(process.env.PORT ?? '8080', 10)
 const ATLAS_API_TOKEN = process.env.ATLAS_API_TOKEN
 
+// Railway redeploy / log-proxy config (Phase 1.10ax)
+const RAILWAY_API_TOKEN = process.env.RAILWAY_API_TOKEN
+const RAILWAY_ENVIRONMENT_ID = process.env.RAILWAY_ENVIRONMENT_ID
+const AGENT_SERVICE_IDS: Record<string, string | undefined> = {
+  builder: process.env.RAILWAY_BUILDER_SERVICE_ID,
+  atlas: process.env.RAILWAY_ATLAS_SERVICE_ID,
+  verifier: process.env.RAILWAY_VERIFIER_SERVICE_ID,
+  designer: process.env.RAILWAY_DESIGNER_SERVICE_ID,
+  council: process.env.RAILWAY_COUNCIL_SERVICE_ID,
+  memory: process.env.RAILWAY_MEMORY_SERVICE_ID,
+  adela: process.env.RAILWAY_ADELA_SERVICE_ID,
+}
+
+// Heartbeat receiver rate-limit: max one POST per agent per 30s.
+const heartbeatLastWrite = new Map<string, number>()
+const HEARTBEAT_MIN_INTERVAL_MS = 30_000
+
+// Railway logs cache (10s) — keyed by serviceId.
+interface LogCacheEntry { fetchedAt: number; lines: Array<{ ts: string; line: string }> }
+const railwayLogsCache = new Map<string, LogCacheEntry>()
+const RAILWAY_LOGS_TTL_MS = 10_000
+
+async function fetchRailwayLogs(serviceId: string, limit: number): Promise<Array<{ ts: string; line: string }>> {
+  const cached = railwayLogsCache.get(serviceId)
+  if (cached && Date.now() - cached.fetchedAt < RAILWAY_LOGS_TTL_MS) {
+    return cached.lines.slice(-limit)
+  }
+  if (!RAILWAY_API_TOKEN || !RAILWAY_ENVIRONMENT_ID) {
+    throw new Error('RAILWAY_API_TOKEN or RAILWAY_ENVIRONMENT_ID not set')
+  }
+  // Find the latest deployment for the service, then pull its logs.
+  const deploymentsQuery = `query Deployments($serviceId: String!, $environmentId: String!) {
+    deployments(input: { serviceId: $serviceId, environmentId: $environmentId }, first: 1) {
+      edges { node { id status } }
+    }
+  }`
+  const depRes = await fetch('https://backboard.railway.app/graphql/v2', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RAILWAY_API_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: deploymentsQuery, variables: { serviceId, environmentId: RAILWAY_ENVIRONMENT_ID } }),
+  })
+  if (!depRes.ok) throw new Error(`Railway deployments ${depRes.status}: ${await depRes.text()}`)
+  const depJson = (await depRes.json()) as {
+    data?: { deployments?: { edges?: Array<{ node: { id: string } }> } }
+    errors?: Array<{ message: string }>
+  }
+  if (depJson.errors?.length) throw new Error(depJson.errors.map(e => e.message).join('; '))
+  const deploymentId = depJson.data?.deployments?.edges?.[0]?.node?.id
+  if (!deploymentId) {
+    railwayLogsCache.set(serviceId, { fetchedAt: Date.now(), lines: [] })
+    return []
+  }
+
+  const logsQuery = `query DeploymentLogs($deploymentId: String!, $limit: Int!) {
+    deploymentLogs(deploymentId: $deploymentId, limit: $limit) { timestamp message }
+  }`
+  const logsRes = await fetch('https://backboard.railway.app/graphql/v2', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RAILWAY_API_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: logsQuery, variables: { deploymentId, limit: Math.min(500, Math.max(10, limit)) } }),
+  })
+  if (!logsRes.ok) throw new Error(`Railway logs ${logsRes.status}: ${await logsRes.text()}`)
+  const logsJson = (await logsRes.json()) as {
+    data?: { deploymentLogs?: Array<{ timestamp: string; message: string }> }
+    errors?: Array<{ message: string }>
+  }
+  if (logsJson.errors?.length) throw new Error(logsJson.errors.map(e => e.message).join('; '))
+  const lines = (logsJson.data?.deploymentLogs ?? []).map(l => ({ ts: l.timestamp, line: l.message }))
+  railwayLogsCache.set(serviceId, { fetchedAt: Date.now(), lines })
+  return lines.slice(-limit)
+}
+
+async function railwayRedeployAgent(serviceId: string): Promise<void> {
+  if (!RAILWAY_API_TOKEN) throw new Error('RAILWAY_API_TOKEN not set')
+  if (!RAILWAY_ENVIRONMENT_ID) throw new Error('RAILWAY_ENVIRONMENT_ID not set')
+  const query = `mutation ServiceRestart($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }`
+  const res = await fetch('https://backboard.railway.app/graphql/v2', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RAILWAY_API_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables: { serviceId, environmentId: RAILWAY_ENVIRONMENT_ID } }),
+  })
+  if (!res.ok) throw new Error(`Railway API ${res.status}: ${await res.text()}`)
+  const j = (await res.json()) as { errors?: Array<{ message: string }> }
+  if (j.errors?.length) throw new Error(j.errors.map(e => e.message).join('; '))
+}
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 const TOOL_DEFINITIONS = Object.entries(TOOLS).map(([name, t]) => ({
@@ -2742,6 +2828,144 @@ export async function startServer(): Promise<void> {
         }
         return
       }
+    }
+
+    // ─── Phase 1.10ax: agent heartbeats + live visibility ──────────────────
+
+    // POST /atlas/agents/:agent/heartbeat — service-bearer only.
+    {
+      const m = url.match(/^\/atlas\/agents\/([a-z0-9-]+)\/heartbeat$/)
+      if (m && method === 'POST') {
+        const principal = await authenticate(req)
+        if (!principal || principal.sessionId !== 'service') {
+          json(res, 401, { error: 'service_bearer_required' })
+          return
+        }
+        const agent = m[1].toLowerCase()
+        const body = await readBody(req)
+        let payload: { state?: string; task?: string | null; elapsed_s?: number; msg?: string | null }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        const validStates = ['idle', 'starting', 'running', 'shipping', 'verifying', 'unreachable', 'stale']
+        if (!payload.state || !validStates.includes(payload.state)) {
+          json(res, 400, { error: 'state must be one of: ' + validStates.join('|') })
+          return
+        }
+        // Rate-limit at receiver (NEVER list: max one per 30s per agent).
+        const last = heartbeatLastWrite.get(agent) ?? 0
+        const now = Date.now()
+        if (now - last < HEARTBEAT_MIN_INTERVAL_MS) {
+          json(res, 200, { ok: true, throttled: true })
+          return
+        }
+        heartbeatLastWrite.set(agent, now)
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+        const { error } = await sb
+          .from('atlas_agent_heartbeats')
+          .upsert({
+            agent,
+            state: payload.state,
+            task: payload.task ? String(payload.task).slice(0, 200) : null,
+            elapsed_s: typeof payload.elapsed_s === 'number' ? Math.max(0, Math.floor(payload.elapsed_s)) : 0,
+            msg: payload.msg ? String(payload.msg).slice(0, 500) : null,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'agent' })
+        if (error) { json(res, 500, { error: error.message }); return }
+        json(res, 200, { ok: true })
+        return
+      }
+    }
+
+    // GET /atlas/agents/heartbeats — viewer+ (any authenticated principal).
+    if (url === '/atlas/agents/heartbeats' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { heartbeats: [] }); return }
+      const { data, error } = await sb
+        .from('atlas_agent_heartbeats')
+        .select('agent, state, task, elapsed_s, msg, updated_at')
+        .order('updated_at', { ascending: false })
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { heartbeats: data ?? [] })
+      return
+    }
+
+    // GET /atlas/agents/:agent/logs?limit=N — admin+.
+    {
+      const m = url.match(/^\/atlas\/agents\/([a-z0-9-]+)\/logs(?:\?.*)?$/)
+      if (m && method === 'GET') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const agent = m[1].toLowerCase()
+        const serviceId = AGENT_SERVICE_IDS[agent]
+        if (!serviceId) {
+          json(res, 400, { error: `no service id configured for agent '${agent}'` })
+          return
+        }
+        const qIdx = url.indexOf('?')
+        const params = qIdx >= 0 ? new URLSearchParams(url.slice(qIdx + 1)) : new URLSearchParams()
+        const limit = Math.min(500, Math.max(10, parseInt(params.get('limit') ?? '50', 10) || 50))
+        try {
+          const lines = await fetchRailwayLogs(serviceId, limit)
+          json(res, 200, { agent, lines })
+        } catch (err) {
+          json(res, 502, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // POST /atlas/agents/:agent/restart — admin+ (operator+ per spec but we keep admin gate consistent with cancel/queue).
+    {
+      const m = url.match(/^\/atlas\/agents\/([a-z0-9-]+)\/restart$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const agent = m[1].toLowerCase()
+        const serviceId = AGENT_SERVICE_IDS[agent]
+        if (!serviceId) {
+          json(res, 400, { error: `no service id configured for agent '${agent}'` })
+          return
+        }
+        try {
+          await railwayRedeployAgent(serviceId)
+          json(res, 200, { ok: true, agent })
+        } catch (err) {
+          json(res, 502, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // POST /atlas/agents/builder/force-pick — owner/admin only (separate intent from restart).
+    if (url === '/atlas/agents/builder/force-pick' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const serviceId = AGENT_SERVICE_IDS.builder
+      if (!serviceId) {
+        json(res, 400, { error: 'RAILWAY_BUILDER_SERVICE_ID not set' })
+        return
+      }
+      try {
+        await railwayRedeployAgent(serviceId)
+        json(res, 200, { ok: true, intent: 'force-pick' })
+      } catch (err) {
+        json(res, 502, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
     }
 
     // ─── Phase 1.10al: smart diagnosis for Active Artifacts ────────────────

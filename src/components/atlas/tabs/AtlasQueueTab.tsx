@@ -1,24 +1,42 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Inbox, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Inbox, RefreshCw, RefreshCcw, AlertTriangle } from 'lucide-react'
 import { TabFrame } from './AtlasPlanTab'
 import { QueueRow } from '../queue/QueueRow'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import {
   fetchBuilderQueue,
   setBuilderPriority,
   cancelBuilderTask,
   fetchAtlasMe,
+  forcePickBuilder,
   type BuilderQueueResponse,
   type AtlasRole,
+  type AgentHeartbeat,
 } from '@/lib/atlas-client'
+import { deriveAgentStatus } from '@/hooks/useAgentHeartbeats'
 
-export default function AtlasQueueTab() {
+interface AtlasQueueTabProps {
+  heartbeats?: Record<string, AgentHeartbeat>
+}
+
+export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
   const [data, setData] = useState<BuilderQueueResponse>({ queued: [], in_flight: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<AtlasRole | null>(null)
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
+  const [forcePickOpen, setForcePickOpen] = useState(false)
+  const [forcePickBusy, setForcePickBusy] = useState(false)
+  const [forcePickError, setForcePickError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -93,6 +111,35 @@ export default function AtlasQueueTab() {
       }`
     : `${total} spec${total === 1 ? '' : 's'} queued · Builder idle`
 
+  // Idle-banner condition: queue has items, no agent in-flight, AND the
+  // Builder heartbeat (or any agent's heartbeat) hasn't shown 'running' for >5 min.
+  const showIdleBanner = useMemo(() => {
+    if (total === 0) return false
+    if (inFlight) return false
+    const all = heartbeats ? Object.values(heartbeats) : []
+    if (all.length === 0) return true
+    const anyRunning = all.some(h => deriveAgentStatus(h) === 'running')
+    if (anyRunning) return false
+    const builder = heartbeats?.builder
+    if (!builder) return true
+    const ageMin = (Date.now() - new Date(builder.updated_at).getTime()) / 60000
+    return ageMin > 5
+  }, [total, inFlight, heartbeats])
+
+  async function handleForcePick() {
+    setForcePickBusy(true)
+    setForcePickError(null)
+    try {
+      await forcePickBuilder()
+      showToast('Builder redeploy triggered — picking next spec…')
+      setForcePickOpen(false)
+    } catch (err) {
+      setForcePickError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setForcePickBusy(false)
+    }
+  }
+
   return (
     <TabFrame
       title="Queue"
@@ -132,6 +179,38 @@ export default function AtlasQueueTab() {
         </div>
       ) : (
         <ul className="space-y-2">
+          {showIdleBanner && (
+            <li
+              role="alert"
+              className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+            >
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="size-4 shrink-0 mt-0.5" aria-hidden />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">
+                    Builder is idle but queue has {total} item{total === 1 ? '' : 's'}.
+                  </p>
+                  <p className="mt-0.5 text-amber-700/80 dark:text-amber-300/80">
+                    The autonomous loop should pick up within 5 min. If it&apos;s stuck, you can manually nudge.
+                  </p>
+                </div>
+                {canManage && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setForcePickError(null)
+                      setForcePickOpen(true)
+                    }}
+                    className="shrink-0"
+                  >
+                    <RefreshCcw className="size-3.5 mr-1" />
+                    Force Builder pick
+                  </Button>
+                )}
+              </div>
+            </li>
+          )}
           {inFlight && (
             <QueueRow
               key={`flight:${inFlight.id}`}
@@ -172,6 +251,33 @@ export default function AtlasQueueTab() {
           {toastMsg}
         </div>
       )}
+
+      <Dialog open={forcePickOpen} onOpenChange={(o) => !forcePickBusy && setForcePickOpen(o)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="inline-flex items-center gap-2">
+              <RefreshCcw className="size-4 text-amber-600" />
+              Force-pick Builder?
+            </DialogTitle>
+            <DialogDescription>
+              Force-pick will redeploy Builder. If Builder is currently in flight, that task is interrupted and re-queued. Continue?
+            </DialogDescription>
+          </DialogHeader>
+          {forcePickError && (
+            <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+              {forcePickError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setForcePickOpen(false)} disabled={forcePickBusy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void handleForcePick()} disabled={forcePickBusy}>
+              {forcePickBusy ? 'Redeploying…' : 'Force-pick'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TabFrame>
   )
 }

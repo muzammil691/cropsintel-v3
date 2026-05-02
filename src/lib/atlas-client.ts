@@ -1443,3 +1443,57 @@ export async function fetchDiagnosisLifecycle(): Promise<DiagnosisLifecycleRow[]
   return Array.isArray(data?.rows) ? data!.rows! : []
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Phase 1.10ax — agent heartbeats, log proxy, restart, force-pick
+// ──────────────────────────────────────────────────────────────────────────
+
+export type AgentName =
+  | 'atlas' | 'builder' | 'verifier' | 'designer' | 'memory' | 'council' | 'adela'
+
+export type AgentState =
+  | 'idle' | 'starting' | 'running' | 'shipping' | 'verifying' | 'unreachable' | 'stale'
+
+export interface AgentHeartbeat {
+  agent: string
+  state: AgentState
+  task: string | null
+  elapsed_s: number
+  msg: string | null
+  updated_at: string
+}
+
+export async function fetchAgentHeartbeats(): Promise<AgentHeartbeat[]> {
+  const data = await fetchJson<{ heartbeats?: AgentHeartbeat[] }>(
+    `${ATLAS_URL}/atlas/agents/heartbeats`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.heartbeats) ? data!.heartbeats! : []
+}
+
+export interface AgentLogLine {
+  ts: string
+  line: string
+}
+
+export async function fetchAgentLogs(agent: string, limit = 50): Promise<AgentLogLine[]> {
+  const data = await fetchJson<{ lines?: AgentLogLine[] }>(
+    `${ATLAS_URL}/atlas/agents/${encodeURIComponent(agent)}/logs?limit=${limit}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.lines) ? data!.lines! : []
+}
+
+export async function restartAgent(agent: string): Promise<{ ok: true; agent: string }> {
+  return fetchJson<{ ok: true; agent: string }>(
+    `${ATLAS_URL}/atlas/agents/${encodeURIComponent(agent)}/restart`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function forcePickBuilder(): Promise<{ ok: true; intent: 'force-pick' }> {
+  return fetchJson<{ ok: true; intent: 'force-pick' }>(
+    `${ATLAS_URL}/atlas/agents/builder/force-pick`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
