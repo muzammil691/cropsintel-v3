@@ -11,6 +11,7 @@ import {
   recordBuildAttempt,
   type PrimaryDomain,
 } from './build-attempts'
+import { preflightCheck, renderPreflightSection } from './preflight-verifier'
 
 const COUNCIL_URL = process.env.COUNCIL_URL ?? 'https://just-reflection-production.up.railway.app'
 const COUNCIL_TOKEN = process.env.COUNCIL_API_TOKEN
@@ -386,6 +387,38 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
   const filename = deriveFilename(markdown, phase)
   const taskId = filename.replace(/\.md$/, '')
 
+  // ─── Step 4b: Pre-build verifier preflight (Phase 3) ────────────────────────
+  // Look up prior fails on this task + identical-spec recent fails. Append a
+  // "## Prior-attempt warnings" section to the spec when there's history, so
+  // Builder reads explicit don't-repeat-this guidance. Best-effort.
+  let preflightWarningsForRecord: unknown[] = []
+  try {
+    const preflight = await preflightCheck(taskId, markdown)
+    if (preflight.warnings.length > 0) {
+      const section = renderPreflightSection(preflight)
+      if (section) markdown = `${markdown.replace(/\s+$/, '')}\n${section}\n`
+      preflightWarningsForRecord = preflight.warnings.map((w) => ({
+        kind: w.kind,
+        message: w.message,
+      }))
+    }
+    steps.push({
+      name: 'preflight.verifier_check',
+      durationMs: 0,
+      costUsd: 0,
+      ok: true,
+      note: `prior_attempts=${preflight.priorAttempts} identical_recent_fails=${preflight.identicalRecentFailures} recommendation=${preflight.recommendation}`,
+    })
+  } catch (err) {
+    steps.push({
+      name: 'preflight.verifier_check',
+      durationMs: 0,
+      costUsd: 0,
+      ok: false,
+      note: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // ─── Step 5: Pre-build memory record (Phase 2 of agent-loop redesign) ──────
   // Insert a 'planned' row into atlas_build_attempts so the build is bookended
   // in memory before Builder picks it up. Best-effort: any failure here does
@@ -399,6 +432,7 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
       specMarkdown: markdown,
       primaryDomain,
       costUsd: totalCost,
+      priorWarnings: preflightWarningsForRecord,
     })
     if (recorded) {
       buildAttemptId = recorded.id
