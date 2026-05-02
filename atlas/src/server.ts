@@ -91,7 +91,6 @@ import {
   getPlanResponse,
   writePlanMarkdown,
   reorderPlanNode,
-  buildWorkflowGraph,
   moveItemsToDiscussion,
   listDiscussionQueue,
   resolveDiscussionItem,
@@ -99,6 +98,7 @@ import {
   amendPlanWithClaude,
   queueSpecFromPlanNode,
 } from './lib/plan-server'
+import { getWorkflowGraph, clearWorkflowCache } from './lib/workflow-parser'
 import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind, type DiagnosisBucket } from './lib/diagnose'
 import { traceArtifact, formatTraceForChat } from './lib/workflow-trace'
 import { buildClaudeCodePrompt } from './lib/claude-code-prompt-builder'
@@ -2688,8 +2688,25 @@ export async function startServer(): Promise<void> {
       const principal = await requireAuth(req, res)
       if (!principal) return
       try {
-        const graph = await buildWorkflowGraph()
+        const graph = await getWorkflowGraph()
         json(res, 200, graph)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    if (url === '/atlas/workflow/refresh' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'owner')) {
+        json(res, 403, { error: 'role_insufficient', required: 'owner' })
+        return
+      }
+      clearWorkflowCache()
+      try {
+        const graph = await getWorkflowGraph()
+        json(res, 200, { ok: true, source: graph.source, updated_at: graph.updated_at, nodes: graph.nodes.length })
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }

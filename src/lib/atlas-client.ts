@@ -1083,10 +1083,21 @@ export interface WorkflowGraphEdge {
 export interface WorkflowGraph {
   nodes: WorkflowGraphNode[]
   edges: WorkflowGraphEdge[]
+  updated_at?: string
+  source?: 'maxons-doc' | 'baseline-fallback'
 }
 
 export async function fetchWorkflowGraph(): Promise<WorkflowGraph> {
   return fetchJson<WorkflowGraph>(`${ATLAS_URL}/atlas/workflow/graph`, { headers: authHeaders() })
+}
+
+// Phase 1.10at — owner-only: clears the in-memory parser cache so the next
+// /atlas/workflow/graph fetch re-reads MAXONS_Workflow_v1.md from disk.
+export async function refreshWorkflowGraph(): Promise<{ ok: boolean; source?: string; updated_at?: string; nodes?: number }> {
+  return fetchJson(`${ATLAS_URL}/atlas/workflow/refresh`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
 }
 
 export interface RelatedSpecHit {

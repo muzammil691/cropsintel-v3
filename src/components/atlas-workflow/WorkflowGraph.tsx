@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
-import { Input } from '@/components/ui/input'
+import { useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import type { WorkflowGraph as Graph, WorkflowGraphNode } from '@/lib/atlas-client'
 
 interface WorkflowGraphProps {
   graph: Graph
   onNodeOpen: (node: WorkflowGraphNode) => void
+  // Phase 1.10at — controlled query string. When provided, matches highlight
+  // in emerald; non-matches dim to 30% opacity (instead of being hidden).
+  query?: string
 }
 
 // Light-weight CSS-grid based flowchart. We don't pull reactflow because the
@@ -16,9 +17,7 @@ interface WorkflowGraphProps {
 //
 // Mobile (<sm): stacks into a list per the spec's mitigation.
 
-export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
-  const [query, setQuery] = useState('')
-
+export function WorkflowGraph({ graph, onNodeOpen, query = '' }: WorkflowGraphProps) {
   const departments = useMemo(() => graph.nodes.filter(n => n.type === 'department'), [graph])
   const operatingModels = useMemo(() => graph.nodes.filter(n => n.type === 'operating_model'), [graph])
   const workflows = useMemo(() => {
@@ -31,26 +30,21 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
   }, [graph])
 
   const queryLower = query.trim().toLowerCase()
+  const filterActive = queryLower.length > 0
   function matches(node: WorkflowGraphNode): boolean {
-    if (!queryLower) return true
+    if (!filterActive) return true
     return (
       node.title.toLowerCase().includes(queryLower) ||
       node.description.toLowerCase().includes(queryLower)
     )
   }
 
+  // Tailwind class for non-match visual: 30% opacity per spec.
+  const dimCls = 'opacity-30'
+  const highlightCls = 'ring-2 ring-emerald-400 ring-offset-1 ring-offset-white dark:ring-offset-slate-950'
+
   return (
     <div className="space-y-4">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-slate-400 pointer-events-none" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter workflows, departments, models…"
-          className="pl-8 h-8 text-sm"
-        />
-      </div>
-
       {/* Operating models */}
       {operatingModels.length > 0 && (
         <section>
@@ -58,7 +52,8 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
             Operating models
           </h3>
           <div className="flex flex-wrap gap-2">
-            {operatingModels.filter(matches).map(model => {
+            {operatingModels.map(model => {
+              const isMatch = matches(model)
               const code = String(model.meta?.code ?? '')
               const tone = code === 'Model A'
                 ? 'bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-200 dark:bg-blue-950 dark:text-blue-200 dark:border-blue-900'
@@ -71,8 +66,10 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
                   type="button"
                   onClick={() => onNodeOpen(model)}
                   className={cn(
-                    'rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'rounded-full border px-3 py-1 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     tone,
+                    !isMatch && filterActive && dimCls,
+                    isMatch && filterActive && highlightCls,
                   )}
                 >
                   {model.title}
@@ -90,25 +87,32 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
             Departments ({departments.length})
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-            {departments.filter(matches).map(dept => (
-              <button
-                key={dept.id}
-                type="button"
-                onClick={() => onNodeOpen(dept)}
-                className="flex items-center gap-2 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-left text-xs hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <span
+            {departments.map(dept => {
+              const isMatch = matches(dept)
+              return (
+                <button
+                  key={dept.id}
+                  type="button"
+                  onClick={() => onNodeOpen(dept)}
                   className={cn(
-                    'size-2 rounded-full',
-                    dept.meta?.active ? 'bg-emerald-500' : 'bg-slate-300',
+                    'flex items-center gap-2 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-left text-xs hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    !isMatch && filterActive && dimCls,
+                    isMatch && filterActive && highlightCls,
                   )}
-                  aria-hidden
-                />
-                <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                  {dept.title}
-                </span>
-              </button>
-            ))}
+                >
+                  <span
+                    className={cn(
+                      'size-2 rounded-full',
+                      dept.meta?.active ? 'bg-emerald-500' : 'bg-slate-300',
+                    )}
+                    aria-hidden
+                  />
+                  <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                    {dept.title}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         </section>
       )}
@@ -120,7 +124,8 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
             Workflows ({workflows.length})
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-3">
-            {workflows.filter(matches).map((wf, i, arr) => {
+            {workflows.map((wf, i, arr) => {
+              const isMatch = matches(wf)
               const ownedBy = graph.edges
                 .filter(e => e.target === wf.id && e.source.startsWith('dept-'))
                 .map(e => departments.find(d => d.id === e.source)?.title)
@@ -130,7 +135,11 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
                   key={wf.id}
                   type="button"
                   onClick={() => onNodeOpen(wf)}
-                  className="text-left rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3 hover:border-emerald-400 hover:shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className={cn(
+                    'text-left rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3 hover:border-emerald-400 hover:shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    !isMatch && filterActive && dimCls,
+                    isMatch && filterActive && highlightCls,
+                  )}
                 >
                   <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
                     <span>Workflow #{String(wf.meta?.number ?? '?')}</span>
@@ -164,6 +173,12 @@ export function WorkflowGraph({ graph, onNodeOpen }: WorkflowGraphProps) {
       {/* Mini summary footer */}
       <div className="text-[11px] text-slate-400 text-right">
         {graph.nodes.length} nodes · {graph.edges.length} edges
+        {graph.updated_at && (
+          <> · updated {new Date(graph.updated_at).toLocaleDateString()}</>
+        )}
+        {graph.source === 'baseline-fallback' && (
+          <span className="ml-2 text-amber-500">(baseline fallback)</span>
+        )}
       </div>
     </div>
   )
