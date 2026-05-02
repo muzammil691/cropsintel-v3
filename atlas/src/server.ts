@@ -99,9 +99,11 @@ import {
   amendPlanWithClaude,
   queueSpecFromPlanNode,
 } from './lib/plan-server'
-import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind } from './lib/diagnose'
+import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind, type DiagnosisBucket } from './lib/diagnose'
 import { traceArtifact, formatTraceForChat } from './lib/workflow-trace'
 import { buildClaudeCodePrompt } from './lib/claude-code-prompt-builder'
+import { analyzeCascade, type CascadeRelation, type CascadeGapInput } from './lib/cascade'
+import { builderQueueSpec } from './lib/tools'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -2707,6 +2709,265 @@ export async function startServer(): Promise<void> {
         }
 
         json(res, 200, result)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase 1.10aq: batch diagnose ──────────────────────────────────────
+    // Body: { items: [{kind, ref, payload}] } (max 8 items per call).
+    // Internally dispatches each through diagnose() with concurrency=5, then
+    // produces a combined result the UI can render in a single card and
+    // execute as one action group.
+    if (url === '/atlas/artifacts/diagnose-batch' && method === 'POST') {
+      if (!(await requireAuth(req, res))) return
+      const rawBody = await readBody(req)
+      let payload: {
+        items?: Array<{ kind?: string; ref?: string; payload?: Record<string, unknown> }>
+      }
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!Array.isArray(payload.items) || payload.items.length === 0) {
+        json(res, 400, { error: 'items must be a non-empty array' })
+        return
+      }
+      if (payload.items.length > 8) {
+        json(res, 400, { error: 'batch capped at 8 items per call' })
+        return
+      }
+      const validKinds: DiagnoseArtifactKind[] = [
+        'designer_audit', 'verifier_run', 'workflow_violation', 'open_fork', 'pending_spec',
+      ]
+      const items: ArtifactInput[] = []
+      for (const it of payload.items) {
+        if (!it.kind || !validKinds.includes(it.kind as DiagnoseArtifactKind)) {
+          json(res, 400, { error: `invalid kind: ${it.kind ?? '(missing)'}` })
+          return
+        }
+        if (!it.ref || typeof it.ref !== 'string') {
+          json(res, 400, { error: 'each item.ref is required' })
+          return
+        }
+        items.push({
+          kind: it.kind as DiagnoseArtifactKind,
+          ref: it.ref,
+          payload: it.payload ?? {},
+        })
+      }
+
+      try {
+        // Concurrency cap = 5. Simple worker-pool approach.
+        const buckets: Array<{ kind: DiagnoseArtifactKind; ref: string; bucket: DiagnosisBucket }> = []
+        let cursor = 0
+        const worker = async (): Promise<void> => {
+          while (cursor < items.length) {
+            const idx = cursor++
+            const input = items[idx]
+            try {
+              const bucket = await diagnose(input)
+              buckets.push({ kind: input.kind, ref: input.ref, bucket })
+            } catch (err) {
+              // On a single-row failure, fall back to a discuss bucket so the
+              // batch result still carries a placeholder row.
+              const seed = `Diagnosis failed for ${input.kind}/${input.ref}: ${err instanceof Error ? err.message : String(err)}`
+              buckets.push({
+                kind: input.kind,
+                ref: input.ref,
+                bucket: { bucket: 'discuss', chat_seed: seed, reason: 'classifier failed' },
+              })
+            }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(5, items.length) }, () => worker()))
+
+        // Build the combined result: per-bucket aggregations + one paste-able CC prompt.
+        const autoRemediate = buckets
+          .filter(b => b.bucket.bucket === 'auto-remediate')
+          .map(b => {
+            const bb = b.bucket as Extract<DiagnosisBucket, { bucket: 'auto-remediate' }>
+            return {
+              kind: b.kind,
+              ref: b.ref,
+              spec_filename: bb.spec_filename,
+              spec_body: bb.spec_body,
+              reason: bb.reason,
+            }
+          })
+
+        const ccItems = buckets
+          .filter(b => b.bucket.bucket === 'claude-code')
+          .map(b => {
+            const bb = b.bucket as Extract<DiagnosisBucket, { bucket: 'claude-code' }>
+            const taskId = (items.find(i => i.ref === b.ref)?.payload['task_id'] as string | undefined) ?? b.ref.slice(0, 8)
+            return {
+              kind: b.kind,
+              ref: b.ref,
+              task_id: taskId,
+              prompt: bb.prompt,
+              affected_files: bb.affected_files,
+              reason: bb.reason,
+            }
+          })
+
+        const inAppItems = buckets
+          .filter(b => b.bucket.bucket === 'in-app-action')
+          .map(b => {
+            const bb = b.bucket as Extract<DiagnosisBucket, { bucket: 'in-app-action' }>
+            return {
+              kind: b.kind,
+              ref: b.ref,
+              action_id: bb.action_id,
+              label: bb.label,
+              payload: bb.payload,
+              reason: bb.reason,
+            }
+          })
+
+        const discussItems = buckets
+          .filter(b => b.bucket.bucket === 'discuss')
+          .map(b => {
+            const bb = b.bucket as Extract<DiagnosisBucket, { bucket: 'discuss' }>
+            return { kind: b.kind, ref: b.ref, chat_seed: bb.chat_seed, reason: bb.reason }
+          })
+
+        // Combined CC prompt: one addressable paste covering all CC-bucket gaps.
+        let combinedCcPrompt: string | null = null
+        const combinedAffectedFiles: string[] = []
+        if (ccItems.length > 0) {
+          const fileSet = new Set<string>()
+          for (const c of ccItems) for (const f of c.affected_files) fileSet.add(f)
+          combinedAffectedFiles.push(...fileSet)
+          const taskIds = ccItems.map(c => c.task_id).join(', ')
+          const issues = ccItems
+            .map((c, i) => {
+              return `## Issue ${i + 1}: ${c.task_id}\n\n**Reason:** ${c.reason}\n\n**Affected files:** ${c.affected_files.join(', ') || '(none listed)'}\n\n**Original prompt detail:**\n\n${c.prompt}\n`
+            })
+            .join('\n\n---\n\n')
+          combinedCcPrompt = `You're fixing ${ccItems.length} issue${ccItems.length === 1 ? '' : 's'} in cropsintel-v3 in one pass.\n\nAFFECTED FILES (deduped union):\n${combinedAffectedFiles.map(f => `- ${f}`).join('\n')}\n\n${issues}\n\n---\n\n## What to do\n\nApply each issue's fix in order. Run \`npm run build\` after each. Commit once at the end with:\n\n\`fix(atlas-pd): batch fix ${ccItems.length} artifacts — ${taskIds}\`\n`
+        }
+
+        // Combined discuss seed: single paste collapses N rows to one chat msg.
+        let combinedDiscussSeed: string | null = null
+        if (discussItems.length > 0) {
+          combinedDiscussSeed = `${discussItems.length} artifact${discussItems.length === 1 ? '' : 's'} need discussion:\n\n${discussItems.map((d, i) => `${i + 1}. ${d.chat_seed.slice(0, 200)}`).join('\n\n')}`
+        }
+
+        json(res, 200, {
+          results: buckets.map(b => ({ kind: b.kind, ref: b.ref, bucket: b.bucket.bucket })),
+          combined: {
+            auto_remediate: autoRemediate,
+            claude_code: combinedCcPrompt
+              ? { prompt: combinedCcPrompt, affected_files: combinedAffectedFiles, items: ccItems }
+              : null,
+            in_app: inAppItems,
+            discuss: combinedDiscussSeed
+              ? { seed: combinedDiscussSeed, items: discussItems }
+              : null,
+          },
+        })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase 1.10aq: cascade analysis for an audit gap ───────────────────
+    if (url === '/atlas/artifacts/cascade' && method === 'POST') {
+      if (!(await requireAuth(req, res))) return
+      const rawBody = await readBody(req)
+      let payload: { commit_sha?: string; gap?: CascadeGapInput }
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.commit_sha || typeof payload.commit_sha !== 'string') {
+        json(res, 400, { error: 'commit_sha is required' })
+        return
+      }
+      if (!payload.gap || typeof payload.gap !== 'object') {
+        json(res, 400, { error: 'gap is required' })
+        return
+      }
+      try {
+        const relation: CascadeRelation = await analyzeCascade(payload.commit_sha, payload.gap)
+        json(res, 200, relation)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase 1.10aq: queue an auto-fix from a cached diagnosis ───────────
+    // Body: { diagnosis_id?: string, kind, ref, payload, spec_filename, spec_body }
+    // Marks the diagnosis_cache row state=auto-fix-queued, queues the spec.
+    if (url === '/atlas/artifacts/auto-fix-queue' && method === 'POST') {
+      if (!(await requireAuth(req, res))) return
+      const rawBody = await readBody(req)
+      let payload: {
+        kind?: string
+        ref?: string
+        payload?: Record<string, unknown>
+        spec_filename?: string
+        spec_body?: string
+      }
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.spec_filename || !payload.spec_body) {
+        json(res, 400, { error: 'spec_filename and spec_body required' })
+        return
+      }
+      if (!payload.kind || !payload.ref) {
+        json(res, 400, { error: 'kind and ref required' })
+        return
+      }
+      try {
+        const result = await builderQueueSpec(payload.spec_filename, payload.spec_body)
+        // Persist lifecycle on diagnosis cache. Match by (kind, payload_sha).
+        const sb = getSupabaseClient()
+        if (sb) {
+          const taskIdFromPayload = (payload.payload?.['task_id'] as string | undefined) ?? null
+          const commitShaFromPayload = (payload.payload?.['commit_sha'] as string | undefined) ?? null
+          try {
+            await sb
+              .from('atlas_diagnosis_cache')
+              .update({
+                lifecycle_state: 'auto-fix-queued',
+                lifecycle_updated_at: new Date().toISOString(),
+                auto_fix_spec_filename: payload.spec_filename,
+                auto_fix_queued_at: new Date().toISOString(),
+                task_id: taskIdFromPayload,
+                commit_sha: commitShaFromPayload,
+              })
+              .eq('artifact_kind', payload.kind)
+              .eq('bucket', 'auto-remediate')
+              .order('created_at', { ascending: false })
+              .limit(1)
+          } catch (err) {
+            console.warn('[auto-fix-queue] cache update failed:', err)
+          }
+        }
+        json(res, 200, {
+          ok: true,
+          spec_filename: payload.spec_filename,
+          path: result.path,
+          sha: result.sha,
+          pushed: result.pushed,
+        })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase 1.10aq: fetch diagnosis lifecycle rows ──────────────────────
+    if (url?.startsWith('/atlas/artifacts/diagnoses') && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      try {
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 200, { rows: [] }); return }
+        const { data } = await sb
+          .from('atlas_diagnosis_cache')
+          .select('id, artifact_kind, bucket, lifecycle_state, lifecycle_updated_at, auto_fix_spec_filename, auto_fix_commit_sha, auto_fix_queued_at, auto_fix_shipped_at, auto_fix_resolved_at, auto_fix_failure_reason, task_id, commit_sha, result, reason, created_at')
+          .neq('lifecycle_state', 'pending-user')
+          .order('lifecycle_updated_at', { ascending: false })
+          .limit(50)
+        json(res, 200, { rows: data ?? [] })
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }

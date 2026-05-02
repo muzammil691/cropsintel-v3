@@ -89,6 +89,8 @@ async function runHeartbeat(): Promise<void> {
     await memoryIngestAfterShips(trustMode)
     // 1.10ad: workflow-trace invariants (verifier/designer/memory presence post-ship).
     await checkWorkflowTraceAndPing(trustMode)
+    // 1.10aq: auto-fix lifecycle pass — promote queued→shipped→resolved/failed.
+    await autoFixLifecyclePass(trustMode)
   } catch (err) {
     console.error('[atlas-conductor] heartbeat failed:', err)
   }
@@ -1047,4 +1049,251 @@ async function memoryIngestAfterShips(trustMode: TrustMode): Promise<void> {
   } catch (err) {
     console.warn('[atlas-conductor] memory.ingest after-ship dispatch failed:', err)
   }
+}
+
+// ─── 9. Auto-fix lifecycle pass (Phase 1.10aq) ─────────────────────────────
+//
+// Walks atlas_diagnosis_cache rows whose lifecycle_state is non-terminal:
+//
+//   auto-fix-queued → auto-fix-shipped:
+//     The Builder ship-commit appears on origin/main referencing the queued
+//     spec filename. We mark the row shipped + record commit sha.
+//
+//   auto-fix-shipped → auto-fix-resolved | auto-fix-failed:
+//     After ≥30 min from ship, look at the latest verifier/designer audit on
+//     the new commit. If the original gap (gap.check + gap.file) is no longer
+//     present → resolved. If still present → failed; ping WhatsApp with the
+//     escalation prompt.
+//
+// Wraps git ops in withGitLock so we don't collide with snapshot/builderList.
+
+interface DiagnosisRow {
+  id: string
+  artifact_kind: string
+  bucket: string
+  result: Record<string, unknown> | null
+  reason: string | null
+  task_id: string | null
+  commit_sha: string | null
+  auto_fix_spec_filename: string | null
+  auto_fix_commit_sha: string | null
+  auto_fix_queued_at: string | null
+  auto_fix_shipped_at: string | null
+  lifecycle_state: string
+  lifecycle_updated_at: string
+}
+
+async function autoFixLifecyclePass(trustMode: TrustMode): Promise<void> {
+  if (trustMode === 'stopped' || trustMode === 'passive') return
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  let queuedRows: DiagnosisRow[] = []
+  let shippedRows: DiagnosisRow[] = []
+  try {
+    const queuedQ = await sb
+      .from('atlas_diagnosis_cache')
+      .select('id, artifact_kind, bucket, result, reason, task_id, commit_sha, auto_fix_spec_filename, auto_fix_commit_sha, auto_fix_queued_at, auto_fix_shipped_at, lifecycle_state, lifecycle_updated_at')
+      .eq('lifecycle_state', 'auto-fix-queued')
+    queuedRows = (queuedQ.data ?? []) as unknown as DiagnosisRow[]
+    const shippedQ = await sb
+      .from('atlas_diagnosis_cache')
+      .select('id, artifact_kind, bucket, result, reason, task_id, commit_sha, auto_fix_spec_filename, auto_fix_commit_sha, auto_fix_queued_at, auto_fix_shipped_at, lifecycle_state, lifecycle_updated_at')
+      .eq('lifecycle_state', 'auto-fix-shipped')
+    shippedRows = (shippedQ.data ?? []) as unknown as DiagnosisRow[]
+  } catch (err) {
+    console.warn('[atlas-conductor] autoFixLifecyclePass query failed:', err)
+    return
+  }
+
+  if (queuedRows.length === 0 && shippedRows.length === 0) return
+
+  // Resolve queued → shipped: scan recent commits for the spec filename.
+  for (const row of queuedRows) {
+    if (!row.auto_fix_spec_filename) continue
+    const taskKey = row.auto_fix_spec_filename.replace(/\.md$/, '')
+    let stdout = ''
+    try {
+      const result = await withGitLock('autofix:detect-ship', () => execFileP(
+        'git',
+        ['log', '--since=2 days ago', '--pretty=format:%H%x09%s'],
+        { cwd: REPO_ROOT },
+      ))
+      stdout = result.stdout
+    } catch (err) {
+      console.warn('[atlas-conductor] autofix git log failed:', err)
+      continue
+    }
+    const lines = stdout.split('\n').filter(Boolean)
+    const shipLine = lines.find((l) => {
+      const subj = l.split('\t')[1] ?? ''
+      // Match Builder ship message that references the task id.
+      return subj.includes(taskKey) || subj.includes(taskKey.replace(/^phase-/, ''))
+    })
+    if (shipLine) {
+      const sha = shipLine.split('\t')[0]
+      try {
+        await sb
+          .from('atlas_diagnosis_cache')
+          .update({
+            lifecycle_state: 'auto-fix-shipped',
+            lifecycle_updated_at: new Date().toISOString(),
+            auto_fix_commit_sha: sha,
+            auto_fix_shipped_at: new Date().toISOString(),
+          })
+          .eq('id', row.id)
+        console.log(`[atlas-conductor] autofix queued→shipped for ${row.auto_fix_spec_filename} at ${sha.slice(0, 8)}`)
+      } catch (err) {
+        console.warn('[atlas-conductor] autofix mark-shipped failed:', err)
+      }
+    }
+  }
+
+  // Resolve shipped → resolved | failed: only after ≥30 min so verifier/designer have run.
+  const cutoffMs = Date.now() - 30 * 60 * 1000
+  for (const row of shippedRows) {
+    if (!row.auto_fix_shipped_at) continue
+    const shippedAt = new Date(row.auto_fix_shipped_at).getTime()
+    if (Number.isNaN(shippedAt) || shippedAt > cutoffMs) continue
+
+    const newSha = row.auto_fix_commit_sha
+    if (!newSha) continue
+
+    // Pull the original gap from the cached diagnosis result.
+    const result = row.result as Record<string, unknown> | null
+    const reason = row.reason ?? '(no reason)'
+    const originalCheck = extractFirstGapCheck(result)
+    const originalFile = extractFirstGapFile(result)
+
+    let stillFails = false
+    let cleared = false
+    let evidence = ''
+    try {
+      // Look at the most recent verifier_run + designer_run for this task on the new sha.
+      const taskId = row.task_id ?? ''
+      const verifierQ = await sb
+        .from('verifier_runs')
+        .select('id, passed, gaps, ran_at, commit_sha, task_id')
+        .eq('commit_sha', newSha)
+        .order('ran_at', { ascending: false })
+        .limit(1)
+      const designerQ = await sb
+        .from('designer_runs')
+        .select('id, verdict, ai_judgment, created_at, task_id')
+        .eq('task_id', taskId)
+        .gte('created_at', new Date(shippedAt).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+
+      const v = verifierQ.data?.[0] as { passed?: boolean; gaps?: unknown[] } | undefined
+      const d = designerQ.data?.[0] as { verdict?: string; ai_judgment?: Record<string, unknown> } | undefined
+
+      if (!v && !d) {
+        // Audits haven't shown up yet — leave shipped state, try next heartbeat.
+        continue
+      }
+
+      if (v) {
+        const newGaps = Array.isArray(v.gaps) ? v.gaps : []
+        const matched = newGaps.find((g) => gapMatchesOriginal(g, originalCheck, originalFile))
+        if (matched) {
+          stillFails = true
+          evidence = `verifier_run still reports the original gap on ${newSha.slice(0, 8)}.`
+        } else if (v.passed) {
+          cleared = true
+          evidence = `verifier_run passed on ${newSha.slice(0, 8)}.`
+        }
+      }
+      if (d) {
+        const judgment = d.ai_judgment ?? {}
+        const newGaps = Array.isArray((judgment as Record<string, unknown>).gaps)
+          ? ((judgment as Record<string, unknown>).gaps as unknown[])
+          : []
+        const matched = newGaps.find((g) => gapMatchesOriginal(g, originalCheck, originalFile))
+        if (matched) {
+          stillFails = true
+          evidence = `designer_run still reports the original gap on the post-fix audit.`
+        } else if (d.verdict === 'pass') {
+          cleared = true
+          evidence = `designer_run passed on ${newSha.slice(0, 8)}.`
+        }
+      }
+    } catch (err) {
+      console.warn('[atlas-conductor] autofix audit lookup failed:', err)
+      continue
+    }
+
+    if (cleared && !stillFails) {
+      try {
+        await sb
+          .from('atlas_diagnosis_cache')
+          .update({
+            lifecycle_state: 'auto-fix-resolved',
+            lifecycle_updated_at: new Date().toISOString(),
+            auto_fix_resolved_at: new Date().toISOString(),
+          })
+          .eq('id', row.id)
+        console.log(`[atlas-conductor] autofix resolved for diagnosis ${row.id}`)
+      } catch (err) {
+        console.warn('[atlas-conductor] autofix mark-resolved failed:', err)
+      }
+    } else if (stillFails) {
+      const failReason = `Auto-fix shipped at ${newSha.slice(0, 8)} but the original gap is still present. ${evidence}\n\nOriginal diagnosis reason: ${reason}`
+      try {
+        await sb
+          .from('atlas_diagnosis_cache')
+          .update({
+            lifecycle_state: 'auto-fix-failed',
+            lifecycle_updated_at: new Date().toISOString(),
+            auto_fix_failure_reason: failReason,
+          })
+          .eq('id', row.id)
+      } catch (err) {
+        console.warn('[atlas-conductor] autofix mark-failed failed:', err)
+      }
+      // Per the spec, ping WhatsApp with the escalation prompt.
+      if (trustMode !== 'chat') {
+        try {
+          await sendWhatsAppReply(
+            MUZAMMIL_WHATSAPP,
+            `❌ Auto-fix failed for diagnosis on ${row.task_id ?? 'unknown task'}. ${truncate(failReason, 400)} Open Atlas → Audit to escalate to Claude Code.`,
+          )
+        } catch (err) {
+          console.warn('[atlas-conductor] autofix-failed whatsapp ping failed:', err)
+        }
+      }
+    }
+  }
+}
+
+function extractFirstGapCheck(result: Record<string, unknown> | null): string | null {
+  if (!result) return null
+  const reason = result.reason
+  if (typeof reason === 'string' && reason.length > 0) return reason
+  return null
+}
+
+function extractFirstGapFile(_result: Record<string, unknown> | null): string | null {
+  // The cached diagnosis result doesn't always carry the original gap. Best-effort.
+  return null
+}
+
+function gapMatchesOriginal(
+  gap: unknown,
+  originalCheck: string | null,
+  originalFile: string | null,
+): boolean {
+  if (!gap || typeof gap !== 'object') return false
+  const g = gap as Record<string, unknown>
+  if (originalCheck) {
+    const check = typeof g.check === 'string' ? g.check : ''
+    if (check === originalCheck) return true
+  }
+  if (originalFile) {
+    const file = typeof g.file === 'string' ? g.file : ''
+    if (file === originalFile) return true
+  }
+  // Without a precise comparator, default to "no match" so we don't trigger
+  // false-positive failures.
+  return false
 }

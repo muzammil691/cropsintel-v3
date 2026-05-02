@@ -1267,3 +1267,146 @@ export async function diagnoseArtifact(input: {
   })
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Batch diagnose + cascade + auto-fix lifecycle (Phase 1.10aq)
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface BatchDiagnoseItem {
+  kind: DiagnoseArtifactKind
+  ref: string
+  payload: Record<string, unknown>
+}
+
+export interface BatchAutoRemediateRow {
+  kind: DiagnoseArtifactKind
+  ref: string
+  spec_filename: string
+  spec_body: string
+  reason: string
+}
+
+export interface BatchClaudeCodeRow {
+  kind: DiagnoseArtifactKind
+  ref: string
+  task_id: string
+  prompt: string
+  affected_files: string[]
+  reason: string
+}
+
+export interface BatchInAppRow {
+  kind: DiagnoseArtifactKind
+  ref: string
+  action_id: string
+  label: string
+  payload: Record<string, unknown>
+  reason: string
+}
+
+export interface BatchDiscussRow {
+  kind: DiagnoseArtifactKind
+  ref: string
+  chat_seed: string
+  reason: string
+}
+
+export interface BatchDiagnoseResult {
+  results: Array<{ kind: DiagnoseArtifactKind; ref: string; bucket: DiagnosisBucket['bucket'] }>
+  combined: {
+    auto_remediate: BatchAutoRemediateRow[]
+    claude_code:
+      | { prompt: string; affected_files: string[]; items: BatchClaudeCodeRow[] }
+      | null
+    in_app: BatchInAppRow[]
+    discuss: { seed: string; items: BatchDiscussRow[] } | null
+  }
+}
+
+export async function diagnoseBatch(items: BatchDiagnoseItem[]): Promise<BatchDiagnoseResult> {
+  return fetchJson<BatchDiagnoseResult>(`${ATLAS_URL}/atlas/artifacts/diagnose-batch`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  })
+}
+
+export type CascadeRelation =
+  | { kind: 'introduced-here'; reason: 'first commit to touch this file' }
+  | {
+      kind: 'introduced-by-prior-fix'
+      prior_sha: string
+      prior_subject: string
+      same_check: boolean
+    }
+  | { kind: 'pre-existing'; oldest_sha: string; days_old: number }
+  | { kind: 'unknown' }
+
+export async function fetchCascadeRelation(
+  commitSha: string,
+  gap: { check?: string; file?: string },
+): Promise<CascadeRelation> {
+  return fetchJson<CascadeRelation>(`${ATLAS_URL}/atlas/artifacts/cascade`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commit_sha: commitSha, gap }),
+  })
+}
+
+export interface AutoFixQueueResult {
+  ok: true
+  spec_filename: string
+  path: string
+  sha: string
+  pushed: boolean
+}
+
+export async function autoFixQueue(input: {
+  kind: DiagnoseArtifactKind
+  ref: string
+  payload: Record<string, unknown>
+  spec_filename: string
+  spec_body: string
+}): Promise<AutoFixQueueResult> {
+  return fetchJson<AutoFixQueueResult>(`${ATLAS_URL}/atlas/artifacts/auto-fix-queue`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export type DiagnosisLifecycleState =
+  | 'pending-user'
+  | 'auto-fix-queued'
+  | 'auto-fix-shipped'
+  | 'auto-fix-resolved'
+  | 'auto-fix-failed'
+  | 'escalated-cc'
+  | 'dismissed'
+
+export interface DiagnosisLifecycleRow {
+  id: string
+  artifact_kind: DiagnoseArtifactKind
+  bucket: DiagnosisBucket['bucket']
+  lifecycle_state: DiagnosisLifecycleState
+  lifecycle_updated_at: string
+  auto_fix_spec_filename: string | null
+  auto_fix_commit_sha: string | null
+  auto_fix_queued_at: string | null
+  auto_fix_shipped_at: string | null
+  auto_fix_resolved_at: string | null
+  auto_fix_failure_reason: string | null
+  task_id: string | null
+  commit_sha: string | null
+  result: DiagnosisBucket | null
+  reason: string | null
+  created_at: string
+}
+
+export async function fetchDiagnosisLifecycle(): Promise<DiagnosisLifecycleRow[]> {
+  const data = await fetchJson<{ rows?: DiagnosisLifecycleRow[] }>(
+    `${ATLAS_URL}/atlas/artifacts/diagnoses`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.rows) ? data!.rows! : []
+}
+

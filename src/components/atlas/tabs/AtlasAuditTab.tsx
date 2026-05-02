@@ -7,10 +7,19 @@ import {
   fetchRecentVerifierRuns,
   fetchRecentDesignerRuns,
   diagnoseArtifact,
+  diagnoseBatch,
+  fetchCascadeRelation,
+  autoFixQueue,
   type VerifierRunRow,
   type DesignerRunRow,
   type DiagnosisBucket,
+  type BatchDiagnoseItem,
+  type BatchDiagnoseResult,
+  type CascadeRelation,
 } from '@/lib/atlas-client'
+import { BatchDiagnoseToolbar } from '../diagnose/BatchDiagnoseToolbar'
+import { CombinedDiagnosisCard } from '../diagnose/CombinedDiagnosisCard'
+import { CascadeChip } from '../diagnose/CascadeChip'
 
 type FilterKey = 'all' | 'verifier' | 'designer'
 
@@ -92,8 +101,19 @@ export default function AtlasAuditTab() {
     ).length
   }, [verifierRuns])
 
-  const [diagnosis, setDiagnosis] = useState<{ rowId: string; bucket: DiagnosisBucket } | null>(null)
+  const [diagnosis, setDiagnosis] = useState<{
+    rowId: string
+    bucket: DiagnosisBucket
+    cascade?: Record<number, CascadeRelation>
+  } | null>(null)
   const [diagnosing, setDiagnosing] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [batchResult, setBatchResult] = useState<{
+    result: BatchDiagnoseResult
+    items: BatchDiagnoseItem[]
+  } | null>(null)
+  const [autoFixState, setAutoFixState] = useState<Record<string, 'queueing' | 'queued' | 'failed'>>({})
 
   const handleAction: React.ComponentProps<typeof AuditRow>['onAction'] = async (kind, row) => {
     if (kind === 'open-commit' && row.commit_sha) {
@@ -132,6 +152,26 @@ export default function AtlasAuditTab() {
           },
         })
 
+        // Cascade: per-gap relation chip ("introduced by your fix abc123").
+        const cascade: Record<number, CascadeRelation> = {}
+        if (row.commit_sha && Array.isArray(row.gaps) && row.gaps.length > 0) {
+          await Promise.all(
+            row.gaps.slice(0, 5).map(async (g, idx) => {
+              const gap = g as { check?: string; file?: string }
+              if (!gap.file) return
+              try {
+                const relation = await fetchCascadeRelation(row.commit_sha!, {
+                  check: gap.check,
+                  file: gap.file,
+                })
+                cascade[idx] = relation
+              } catch {
+                /* ignore — chip just won't render */
+              }
+            }),
+          )
+        }
+
         if (kind === 'copy-cc-prompt') {
           if (bucket.bucket === 'claude-code') {
             try {
@@ -139,16 +179,16 @@ export default function AtlasAuditTab() {
               showToast('Claude Code prompt copied — paste into VS Code Claude Code.')
             } catch {
               showToast('Clipboard write failed — open Diagnose to view the prompt.')
-              setDiagnosis({ rowId: row.id, bucket })
+              setDiagnosis({ rowId: row.id, bucket, cascade })
             }
           } else {
             // Diagnosis didn't classify as claude-code — surface the bucket so user sees why.
             showToast(`Diagnose returned bucket "${bucket.bucket}" — open Diagnose for details.`)
-            setDiagnosis({ rowId: row.id, bucket })
+            setDiagnosis({ rowId: row.id, bucket, cascade })
           }
         } else {
           // Diagnose: render result inline below the row.
-          setDiagnosis({ rowId: row.id, bucket })
+          setDiagnosis({ rowId: row.id, bucket, cascade })
         }
       } catch (e) {
         showToast(`Diagnose failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -174,6 +214,144 @@ export default function AtlasAuditTab() {
   const showToast = (msg: string) => {
     setToastMsg(msg)
     window.setTimeout(() => setToastMsg(null), 3000)
+  }
+
+  // Multi-select helpers (Phase 1.10aq).
+  const failedRowIds = useMemo(
+    () => rows.filter((r) => r.verdict === 'fail').map((r) => r.id),
+    [rows],
+  )
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function selectAllRows() {
+    setSelected(new Set(rows.map((r) => r.id)))
+  }
+  function selectFailedRows() {
+    setSelected(new Set(failedRowIds))
+  }
+  function clearRowSelection() {
+    setSelected(new Set())
+  }
+
+  function buildBatchItems(): BatchDiagnoseItem[] {
+    const items: BatchDiagnoseItem[] = []
+    for (const id of selected) {
+      const row = rows.find((r) => r.id === id)
+      if (!row) continue
+      items.push({
+        kind: row.source === 'verifier' ? 'verifier_run' : 'designer_audit',
+        ref: row.id,
+        payload: {
+          task_id: row.task_id,
+          commit_sha: row.commit_sha,
+          verdict: row.verdict,
+          gaps: row.gaps ?? [],
+          raw: row.raw ?? {},
+        },
+      })
+    }
+    return items
+  }
+
+  async function handleDiagnoseAll() {
+    const items = buildBatchItems()
+    if (items.length === 0) {
+      showToast('No rows selected.')
+      return
+    }
+    if (items.length > 8) {
+      showToast('Batch capped at 8 — narrow your selection.')
+      return
+    }
+    setBatchBusy(true)
+    try {
+      const result = await diagnoseBatch(items)
+      setBatchResult({ result, items })
+      showToast(`Diagnosed ${result.results.length} row${result.results.length === 1 ? '' : 's'}.`)
+    } catch (err) {
+      showToast(`Batch diagnose failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  async function handleCopyCcPromptBatch() {
+    const items = buildBatchItems()
+    if (items.length === 0) {
+      showToast('No rows selected.')
+      return
+    }
+    setBatchBusy(true)
+    try {
+      const result = await diagnoseBatch(items)
+      const cc = result.combined.claude_code
+      if (!cc) {
+        showToast('No Claude Code prompts in the selection.')
+        setBatchResult({ result, items })
+      } else {
+        try {
+          await navigator.clipboard.writeText(cc.prompt)
+          showToast(`Copied combined CC prompt (${cc.items.length} issue${cc.items.length === 1 ? '' : 's'}).`)
+        } catch {
+          showToast('Clipboard write failed — open the result card to copy.')
+        }
+        setBatchResult({ result, items })
+      }
+    } catch (err) {
+      showToast(`Diagnose failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  function handleDiscussAllBatch() {
+    const items = buildBatchItems()
+    if (items.length === 0) {
+      showToast('No rows selected.')
+      return
+    }
+    const seed = `Discuss ${items.length} audit row${items.length === 1 ? '' : 's'} together:\n\n${items
+      .map((it, i) => `${i + 1}. [${it.kind}] ${it.payload['task_id'] ?? it.ref.slice(0, 8)} — ${it.payload['verdict'] ?? '?'}`)
+      .join('\n')}\n\nWhat's your take — auto-fix all, escalate, or split?`
+    window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: seed }))
+    showToast('Sent combined discussion to chat.')
+  }
+
+  function handleDismissAllBatch() {
+    showToast(`Dismissed ${selected.size} row${selected.size === 1 ? '' : 's'} from this view.`)
+    clearRowSelection()
+  }
+
+  async function handleAutoFixNow(rowId: string) {
+    const row = rows.find((r) => r.id === rowId)
+    if (!row || !diagnosis || diagnosis.bucket.bucket !== 'auto-remediate') return
+    setAutoFixState((s) => ({ ...s, [rowId]: 'queueing' }))
+    try {
+      await autoFixQueue({
+        kind: row.source === 'verifier' ? 'verifier_run' : 'designer_audit',
+        ref: row.id,
+        payload: {
+          task_id: row.task_id,
+          commit_sha: row.commit_sha,
+          verdict: row.verdict,
+          gaps: row.gaps ?? [],
+        },
+        spec_filename: diagnosis.bucket.spec_filename,
+        spec_body: diagnosis.bucket.spec_body,
+      })
+      setAutoFixState((s) => ({ ...s, [rowId]: 'queued' }))
+      showToast(`Queued ${diagnosis.bucket.spec_filename}. Atlas will report back when Builder ships + audits.`)
+    } catch (err) {
+      setAutoFixState((s) => ({ ...s, [rowId]: 'failed' }))
+      showToast(`Auto-fix queue failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   return (
@@ -222,21 +400,63 @@ export default function AtlasAuditTab() {
           No {filter === 'all' ? 'audit' : filter} activity to show.
         </p>
       ) : (
-        <ol className="space-y-1.5">
-          {rows.map(row => (
-            <li key={row.id} className="space-y-1.5">
-              <AuditRow row={row} onAction={handleAction} />
-              {diagnosing === row.id && (
-                <div role="status" aria-live="polite" className="ml-6 text-[11px] text-slate-500 italic">
-                  Diagnosing…
+        <div className="space-y-2">
+          <BatchDiagnoseToolbar
+            total={rows.length}
+            selected={selected.size}
+            failedCount={failedRowIds.length}
+            onSelectAll={selectAllRows}
+            onSelectFailed={selectFailedRows}
+            onClearSelection={clearRowSelection}
+            onDiagnoseAll={handleDiagnoseAll}
+            onDiscussAll={handleDiscussAllBatch}
+            onCopyCcPrompt={handleCopyCcPromptBatch}
+            onDismissAll={handleDismissAllBatch}
+            busy={batchBusy}
+            estCostUsd={selected.size * 0.025}
+          />
+          {batchResult && (
+            <CombinedDiagnosisCard
+              result={batchResult.result}
+              originalItems={batchResult.items}
+              onClose={() => setBatchResult(null)}
+              onToast={showToast}
+            />
+          )}
+          <ol className="space-y-1.5">
+            {rows.map(row => (
+              <li key={row.id} className="space-y-1.5">
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(row.id)}
+                    onChange={() => toggleRow(row.id)}
+                    className="mt-3 shrink-0"
+                    aria-label={`Select audit row ${row.task_id}`}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <AuditRow row={row} onAction={handleAction} />
+                  </div>
                 </div>
-              )}
-              {diagnosis?.rowId === row.id && (
-                <DiagnosisCard bucket={diagnosis.bucket} onClose={() => setDiagnosis(null)} />
-              )}
-            </li>
-          ))}
-        </ol>
+                {diagnosing === row.id && (
+                  <div role="status" aria-live="polite" className="ml-6 text-[11px] text-slate-500 italic">
+                    Diagnosing…
+                  </div>
+                )}
+                {diagnosis?.rowId === row.id && (
+                  <DiagnosisCard
+                    row={row}
+                    bucket={diagnosis.bucket}
+                    cascade={diagnosis.cascade}
+                    autoFixState={autoFixState[row.id]}
+                    onAutoFixNow={() => handleAutoFixNow(row.id)}
+                    onClose={() => setDiagnosis(null)}
+                  />
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
       )}
 
       {toastMsg && (
@@ -259,11 +479,42 @@ function normalizeDesignerVerdict(verdict: string): AuditVerdict {
   return 'unknown'
 }
 
-function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: () => void }) {
+function DiagnosisCard({
+  row,
+  bucket,
+  cascade,
+  autoFixState,
+  onAutoFixNow,
+  onClose,
+}: {
+  row: AuditRowData
+  bucket: DiagnosisBucket
+  cascade?: Record<number, CascadeRelation>
+  autoFixState?: 'queueing' | 'queued' | 'failed'
+  onAutoFixNow?: () => void
+  onClose: () => void
+}) {
   const baseClass = 'ml-6 rounded-xl border px-3 py-2 text-xs space-y-1.5'
   const buttonFocus = 'transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50'
 
+  const cascadeChips = cascade && Object.keys(cascade).length > 0 ? (
+    <div className="flex flex-wrap gap-1 pt-1">
+      {Object.entries(cascade).map(([idx, rel]) => {
+        const gap = (row.gaps?.[Number(idx)] ?? null) as { check?: string; file?: string } | null
+        return (
+          <div key={idx} className="flex items-center gap-1.5 text-[11px]">
+            <span className="text-slate-500">
+              {gap?.check ?? `gap ${idx}`}{gap?.file ? ` · ${gap.file.split('/').pop()}` : ''}:
+            </span>
+            <CascadeChip relation={rel} />
+          </div>
+        )
+      })}
+    </div>
+  ) : null
+
   if (bucket.bucket === 'auto-remediate') {
+    const buttonsDisabled = autoFixState === 'queueing' || autoFixState === 'queued'
     return (
       <Card className={cn(baseClass, 'border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200')}>
         <CardHeader className="flex items-center justify-between gap-3 p-3">
@@ -272,29 +523,65 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
             Dismiss
           </button>
         </CardHeader>
-        <CardContent className="pt-0">
+        <CardContent className="pt-0 space-y-1.5">
           <p>{bucket.reason}</p>
           <p className="font-mono text-[11px]">spec: {bucket.spec_filename}</p>
-          <button
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(bucket.spec_body)
+          {cascadeChips}
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={onAutoFixNow}
+              disabled={buttonsDisabled || !onAutoFixNow}
+              className={cn(
+                'rounded-md border border-emerald-400 dark:border-emerald-700 bg-emerald-600 text-white px-2 py-1 text-[11px] hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium',
+                buttonFocus,
+              )}
+            >
+              {autoFixState === 'queueing' ? 'Queueing…'
+                : autoFixState === 'queued' ? '✓ Queued — Atlas watching'
+                : 'Auto-fix now'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 window.dispatchEvent(
                   new CustomEvent('atlas:chat-prefill', {
-                    detail: `/queue ${bucket.spec_filename}\n\n(Atlas suggests auto-remediating this — spec body copied to clipboard. Approve to queue?)`,
+                    detail: `Generate a Claude Code prompt instead of auto-fix for ${row.task_id} — gaps:\n\n${(row.gaps ?? []).map((g, i) => {
+                      const gg = g as { check?: string; description?: string }
+                      return `${i + 1}. [${gg.check ?? 'gap'}] ${gg.description ?? ''}`
+                    }).join('\n')}`,
                   }),
                 )
-              } catch {
-                /* ignore */
-              }
-            }}
-            className={cn(
-              'mt-1 rounded-md border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-emerald-100 dark:hover:bg-emerald-900/40',
-              buttonFocus,
-            )}
-          >
-            Copy spec + ask Atlas to queue
-          </button>
+              }}
+              className={cn(
+                'rounded-md border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-emerald-100 dark:hover:bg-emerald-900/40',
+                buttonFocus,
+              )}
+            >
+              Generate Claude Code prompt instead
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent('atlas:chat-prefill', {
+                    detail: `Discuss the auto-fix Atlas suggested for ${row.task_id} (${bucket.spec_filename}) before queueing. Reason: ${bucket.reason}`,
+                  }),
+                )
+              }}
+              className={cn(
+                'rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800',
+                buttonFocus,
+              )}
+            >
+              Discuss first
+            </button>
+          </div>
+          {autoFixState === 'queued' && (
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-300 italic">
+              Atlas conductor will report ✅ resolved or ❌ failed once Builder ships and the next audit runs.
+            </p>
+          )}
         </CardContent>
       </Card>
     )
@@ -317,6 +604,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
               {bucket.affected_files.length > 3 ? ` +${bucket.affected_files.length - 3}` : ''}
             </p>
           )}
+          {cascadeChips}
           <div className="flex gap-1.5 mt-1">
             <button
               onClick={async () => {
@@ -366,6 +654,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
         <CardContent className="pt-0">
           <p>{bucket.reason}</p>
           <p className="font-mono text-[11px]">{bucket.label}</p>
+          {cascadeChips}
         </CardContent>
       </Card>
     )
@@ -381,6 +670,7 @@ function DiagnosisCard({ bucket, onClose }: { bucket: DiagnosisBucket; onClose: 
       </CardHeader>
       <CardContent className="pt-0">
         <p>{bucket.reason}</p>
+        {cascadeChips}
         <button
           onClick={() => window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: bucket.chat_seed }))}
           className={cn(
