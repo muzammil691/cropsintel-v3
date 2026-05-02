@@ -1,3 +1,6 @@
+---
+priority: 3
+---
 # Task: Phase 1.00e-rem — Adela Skeleton Completion
 
 ## Goal
