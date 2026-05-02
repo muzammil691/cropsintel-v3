@@ -15,10 +15,11 @@ const AGENTS: AgentNode[] = [
   { key: 'atlas', name: 'Atlas', description: 'Plan + chat' },
   { key: 'builder', name: 'Builder', description: 'Spec → code' },
   { key: 'verifier', name: 'Verifier', description: 'Audit gate' },
-  { key: 'designer', name: 'Designer', description: 'UI review' },
-  { key: 'council', name: 'Council', description: 'Multi-brain' },
+  { key: 'council', name: 'Council', description: 'Debate gate' },
+  { key: 'multi-brain', name: 'Multi-Brain', description: 'Claude + GPT + Gemini' },
   { key: 'memory', name: 'Memory', description: 'RAG store' },
   { key: 'adela', name: 'Adela', description: 'Scrapers' },
+  { key: 'designer', name: 'Designer', description: 'UI review' },
 ]
 
 // Builder's elapsed-budget for the inline progress bar (30 min, per spec).

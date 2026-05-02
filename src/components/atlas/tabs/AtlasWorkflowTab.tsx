@@ -95,7 +95,7 @@ export default function AtlasWorkflowTab({ status, onOpenAgents, heartbeats }: A
   return (
     <TabFrame
       title="Workflows"
-      hint="7-agent pipeline up top, 15 commodity workflows × 8 departments below."
+      hint="8-agent pipeline up top, 15 commodity workflows × 8 departments below."
     >
       <div className="space-y-4">
         {/* Search above the diagrams. Filters node titles in real-time;
