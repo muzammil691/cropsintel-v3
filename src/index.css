@@ -128,3 +128,9 @@
     @apply font-sans;
     }
 }
+
+/* Phase 1.10ar — flash highlight when a chat-timeline chip scrolls to a message. */
+.atlas-msg-highlight > div:first-child {
+  box-shadow: 0 0 0 2px rgb(16 185 129 / 0.7);
+  transition: box-shadow 0.5s ease-out;
+}

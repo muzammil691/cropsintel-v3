@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Send, Sparkles, ChevronRight, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { MicButton } from './MicButton'
@@ -7,6 +7,8 @@ import { useAtlasChat } from '@/hooks/useAtlasChat'
 import type { UseTtsResult } from '@/hooks/useTts'
 import { AudioPlayer } from './AudioPlayer'
 import { ArtifactCardInChat } from './ArtifactCardInChat'
+import { ChatTimeline } from './ChatTimeline'
+import type { ChatSummary } from '@/lib/atlas-client'
 import { SlashCommandMenu } from './SlashCommandMenu'
 import { MentionMenu } from './MentionMenu'
 import {
@@ -32,6 +34,14 @@ interface CockpitChatProps {
   onPrefillConsumed?: () => void
   tts?: UseTtsResult
   onSlashNavigate: (tab: 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team') => void
+  threadId?: string
+}
+
+const REPLAY_CONTEXT_KEY = 'atlas_replay_context'
+
+interface ReplayContextStored {
+  rangeStartAt?: string
+  summaryLong?: string
 }
 
 const SAMPLE_PROMPTS = [
@@ -51,11 +61,13 @@ export function CockpitChat({
   onPrefillConsumed,
   tts,
   onSlashNavigate,
+  threadId = 'web-default',
 }: CockpitChatProps) {
-  const { messages, isStreaming, historyLoading, send } = useAtlasChat()
+  const { messages, isStreaming, historyLoading, send } = useAtlasChat(threadId)
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const messagesScrollRef = useRef<HTMLDivElement>(null)
   const stt = useStt()
 
   // Slash + mention menu state — driven by what's at the start of the input.
@@ -154,6 +166,21 @@ export function CockpitChat({
     requestAnimationFrame(() => textareaRef.current?.focus())
   }
 
+  // Pop and clear any replay context the user staged by clicking a chip.
+  const consumeReplayContext = useCallback((): ReplayContextStored | null => {
+    if (typeof window === 'undefined') return null
+    try {
+      const raw = window.localStorage.getItem(REPLAY_CONTEXT_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as ReplayContextStored
+      window.localStorage.removeItem(REPLAY_CONTEXT_KEY)
+      return parsed
+    } catch {
+      window.localStorage.removeItem(REPLAY_CONTEXT_KEY)
+      return null
+    }
+  }, [])
+
   function handleSend() {
     const text = input.trim()
     if (!text || isStreaming) return
@@ -170,16 +197,50 @@ export function CockpitChat({
     // backend parses it. The cockpit also synthesizes a local hint message
     // for navigation/help — those are handled in pickSlashCommand and never
     // reach handleSend.
-    send(text)
+    const replay = consumeReplayContext()
+    send(text, undefined, replay ? { replayContext: replay } : undefined)
     setInput('')
   }
 
   function confirmAndSend() {
     if (!confirmMention) return
-    send(confirmMention.raw)
+    const replay = consumeReplayContext()
+    send(confirmMention.raw, undefined, replay ? { replayContext: replay } : undefined)
     setInput('')
     setConfirmMention(null)
   }
+
+  // Scroll the messages list to a specific message id and briefly highlight it.
+  const scrollToMessage = useCallback((messageId: string) => {
+    const container = messagesScrollRef.current
+    if (!container) return
+    const target = container.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`) as HTMLElement | null
+    if (!target) return
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    target.classList.add('atlas-msg-highlight')
+    window.setTimeout(() => target.classList.remove('atlas-msg-highlight'), 2000)
+  }, [])
+
+  // Phase 1.10ar — clicking a timeline chip stages a replay context flag in
+  // localStorage AND smooth-scrolls to the segment's first message. The flag
+  // is consumed by the very next /atlas/chat call.
+  const handleTimelineChipClick = useCallback(
+    (summary: ChatSummary) => {
+      try {
+        window.localStorage.setItem(
+          REPLAY_CONTEXT_KEY,
+          JSON.stringify({
+            rangeStartAt: summary.range_start_at,
+            summaryLong: summary.summary_short,
+          } as ReplayContextStored),
+        )
+      } catch {
+        // Storage full or disabled — degrade silently.
+      }
+      scrollToMessage(summary.range_start_msg_id)
+    },
+    [scrollToMessage],
+  )
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // If a popover is open, let its global keydown handler handle Up/Down/Enter.
@@ -212,8 +273,11 @@ export function CockpitChat({
         )}
       </div>
 
+      {/* Phase 1.10ar — chat summary timeline */}
+      <ChatTimeline threadId={threadId} onChipClick={handleTimelineChipClick} />
+
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50/40 dark:bg-slate-900/20">
+      <div ref={messagesScrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50/40 dark:bg-slate-900/20">
         {historyLoading && (
           <div className="text-xs text-slate-400 text-center py-8">Loading conversation…</div>
         )}
@@ -422,7 +486,7 @@ function ChatMessageBubble({
 }) {
   const isUser = msg.role === 'user'
   return (
-    <div className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
+    <div data-msg-id={msg.id} className={`flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
       <div
         className={`rounded-lg px-3 py-2 max-w-[92%] shadow-sm text-sm ${
           isUser

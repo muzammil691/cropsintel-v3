@@ -362,6 +362,33 @@ export async function fetchChatHistory(
   return []
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Phase 1.10ar — chat summaries timeline
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface ChatSummary {
+  id: string
+  range_start_at: string
+  range_end_at: string
+  range_start_msg_id: string
+  range_end_msg_id: string
+  message_count: number
+  summary_short: string
+  topics: string[]
+  created_at: string
+}
+
+export async function fetchChatSummaries(
+  threadId: string,
+  limit = 30,
+): Promise<ChatSummary[]> {
+  const data = await fetchJson<{ summaries?: ChatSummary[] }>(
+    `${ATLAS_URL}/atlas/conversations/${encodeURIComponent(threadId)}/summaries?limit=${limit}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.summaries) ? data!.summaries! : []
+}
+
 export interface TtsVoice {
   voice_id: string
   name: string
@@ -767,7 +794,12 @@ export function streamChat(
   threadId: string,
   message: string,
   onEvent: (event: string, data: unknown) => void,
-  options?: { attachments?: ChatAttachment[] },
+  options?: {
+    attachments?: ChatAttachment[]
+    // Phase 1.10ar — when the user clicks a timeline chip the cockpit
+    // forwards the summary of that segment as context for the NEXT message.
+    replayContext?: { rangeStartAt?: string; summaryLong?: string } | null
+  },
 ): () => void {
   const controller = new AbortController()
 
@@ -779,6 +811,7 @@ export function streamChat(
       channel: 'web',
       message,
       attachments: options?.attachments ?? [],
+      replay_context: options?.replayContext ?? null,
     }),
     signal: controller.signal,
   })

@@ -8,6 +8,7 @@ import { ToolName, builderQueueOrder } from '../lib/tools'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
+import { maybeSummarize } from '../lib/chat-summarizer'
 import { readFile, writeFile, rename, mkdir, readdir, access } from 'fs/promises'
 import { resolve, dirname } from 'path'
 import { execFile } from 'child_process'
@@ -87,6 +88,9 @@ async function runHeartbeat(): Promise<void> {
     // 1.10x: queue intelligence + post-ship memory ingest.
     await reorderQueueIfPriorityInversion(trustMode)
     await memoryIngestAfterShips(trustMode)
+    // 1.10ar: rolling chat-summary sweep — covers WhatsApp/voice threads
+    // that don't run through the cockpit chat handler.
+    await chatSummarySweep(trustMode)
     // 1.10ad: workflow-trace invariants (verifier/designer/memory presence post-ship).
     await checkWorkflowTraceAndPing(trustMode)
     // 1.10aq: auto-fix lifecycle pass — promote queued→shipped→resolved/failed.
@@ -1296,4 +1300,59 @@ function gapMatchesOriginal(
   // Without a precise comparator, default to "no match" so we don't trigger
   // false-positive failures.
   return false
+}
+
+// ─── 10. Phase 1.10ar — chat summary sweep ─────────────────────────────────
+//
+// The chat handler fires maybeSummarize() inline after every assistant turn,
+// but threads that received messages via WhatsApp / voice / mobile-pwa never
+// pass through that path. This sweep finds any thread with activity in the
+// last 30 min and lets maybeSummarize() decide whether to fire (it
+// self-rate-limits to 1 per thread per 5 min and is gated by 10-min wall
+// clock OR ≥30 unsummarised messages).
+//
+// Caps: at most 5 thread summaries per heartbeat to keep cost bounded.
+async function chatSummarySweep(trustMode: TrustMode): Promise<void> {
+  if (trustMode === 'stopped' || trustMode === 'passive') return
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  const sinceIso = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+  let activeThreadIds: string[] = []
+  try {
+    const { data, error } = await sb
+      .from('atlas_conversations')
+      .select('thread_id')
+      .gte('created_at', sinceIso)
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (error) {
+      console.warn('[atlas-conductor] chat sweep query failed:', error.message)
+      return
+    }
+    const seen = new Set<string>()
+    for (const row of (data ?? []) as Array<{ thread_id: string }>) {
+      if (!seen.has(row.thread_id)) {
+        seen.add(row.thread_id)
+        activeThreadIds.push(row.thread_id)
+      }
+    }
+  } catch (err) {
+    console.warn('[atlas-conductor] chat sweep query crash:', err)
+    return
+  }
+
+  let firedCount = 0
+  for (const threadId of activeThreadIds.slice(0, 5)) {
+    if (firedCount >= 5) break
+    try {
+      const result = await maybeSummarize(threadId)
+      if (result.status === 'inserted') {
+        firedCount++
+        console.log(`[atlas-conductor] chat summary inserted for ${threadId} (${result.messageCount} msgs)`)
+      }
+    } catch (err) {
+      console.warn(`[atlas-conductor] chat summary failed for ${threadId}:`, err)
+    }
+  }
 }

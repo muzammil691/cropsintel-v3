@@ -40,7 +40,11 @@ export interface UseAtlasChatResult {
   messages: ChatMessage[]
   isStreaming: boolean
   historyLoading: boolean
-  send: (text: string, attachments?: ChatAttachment[]) => void
+  send: (
+    text: string,
+    attachments?: ChatAttachment[],
+    options?: { replayContext?: { rangeStartAt?: string; summaryLong?: string } | null },
+  ) => void
   cancel: () => void
 }
 
@@ -115,7 +119,11 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
   }, [threadId])
 
   const send = useCallback(
-    (text: string, attachments?: ChatAttachment[]) => {
+    (
+      text: string,
+      attachments?: ChatAttachment[],
+      options?: { replayContext?: { rangeStartAt?: string; summaryLong?: string } | null },
+    ) => {
       const hasContent = !!text.trim() || (attachments && attachments.length > 0)
       if (isStreaming || !hasContent) return
 
@@ -141,7 +149,10 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
       setMessages((prev) => [...prev, atlasPlaceholder])
       setIsStreaming(true)
 
-      const cleanup = streamChat(threadId, text, (event, data) => {
+      const cleanup = streamChat(
+        threadId,
+        text,
+        (event, data) => {
         const d = data as Record<string, unknown>
 
         if (event === 'text' || event === 'message') {
@@ -193,7 +204,9 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
           )
           setIsStreaming(false)
         }
-      }, { attachments })
+        },
+        { attachments, replayContext: options?.replayContext ?? null },
+      )
 
       abortRef.current = cleanup
     },

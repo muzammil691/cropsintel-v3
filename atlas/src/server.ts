@@ -104,6 +104,12 @@ import { traceArtifact, formatTraceForChat } from './lib/workflow-trace'
 import { buildClaudeCodePrompt } from './lib/claude-code-prompt-builder'
 import { analyzeCascade, type CascadeRelation, type CascadeGapInput } from './lib/cascade'
 import { builderQueueSpec } from './lib/tools'
+import {
+  maybeSummarize,
+  recallSummariesForQuery,
+  shouldRecall,
+  formatRecallSystemMessage,
+} from './lib/chat-summarizer'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -309,8 +315,13 @@ export async function runChatTurn(params: {
   onEvent?: (event: string, data: unknown) => void
   assistantMetadata?: Record<string, unknown>
   attachments?: AttachmentRecord[]
+  // Phase 1.10ar — when the user clicks a timeline chip, the next message
+  // arrives with a replay context describing the segment they're referencing.
+  // The handler prepends a synthetic system note so Claude knows the user
+  // pointed at that exact span of prior conversation.
+  replayContext?: { rangeStartAt?: string; summaryLong?: string } | null
 }): Promise<string> {
-  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata, attachments } = params
+  const { threadId, channel, message, overrideToken, callerRole, onEvent, assistantMetadata, attachments, replayContext } = params
   const sb = getSupabaseClient()
   const trustMode = getCurrentMode()
 
@@ -327,6 +338,41 @@ export async function runChatTurn(params: {
       role: m.role === 'atlas' ? ('assistant' as const) : ('user' as const),
       content: m.content as string,
     }))
+  }
+
+  // ─── Phase 1.10ar — replay context from a clicked timeline chip ─────────
+  // When the frontend signalled the user just clicked a chip, prepend a
+  // user-role primer so Claude has the prior segment's summary BEFORE the
+  // user's new message arrives. We use a user-role frame (rather than mutating
+  // the system prompt) because Anthropic's API treats system as a single
+  // string; a per-turn primer is safer with caching.
+  if (replayContext && (replayContext.summaryLong || replayContext.rangeStartAt)) {
+    const tm = replayContext.rangeStartAt
+      ? new Date(replayContext.rangeStartAt).toLocaleString()
+      : 'an earlier moment'
+    const summary = replayContext.summaryLong || '(summary missing)'
+    messages.push({
+      role: 'user',
+      content: `[context primer — user just clicked the timeline chip from ${tm}. Summary of that segment:\n\n${summary}\n\nThe user is referencing back to that point. Acknowledge that context implicitly when answering.]`,
+    })
+  }
+
+  // ─── Phase 1.10ar — backward-recall heuristic ─────────────────────────
+  // If the user references prior context ("earlier", "remember", etc.) we
+  // pull the top 3 chat-summary memory chunks for this thread and inject
+  // them as a synthetic primer at the start of the messages array.
+  if (sb && shouldRecall(message)) {
+    try {
+      const recalls = await recallSummariesForQuery({ threadId, query: message, topK: 3 })
+      if (recalls.length > 0) {
+        const recallText = formatRecallSystemMessage(recalls)
+        // Prepend so it sits BEFORE the loaded last-20 history.
+        messages = [{ role: 'user', content: recallText }, ...messages]
+        onEvent?.('recall_hit', { count: recalls.length })
+      }
+    } catch (err) {
+      console.warn('[chat] recall failed:', err)
+    }
   }
 
   // Ensure the current message is appended if not already persisted.
@@ -518,6 +564,20 @@ export async function runChatTurn(params: {
     })
   }
 
+  // Phase 1.10ar — fire-and-forget rolling summarizer. NEVER block the chat
+  // response on this. The function self-rate-limits (5 min per thread) and
+  // is gated by 10-min wall-clock OR 30-message thresholds.
+  void (async () => {
+    try {
+      const result = await maybeSummarize(threadId)
+      if (result.status === 'inserted') {
+        console.log(`[chat] summary created for ${threadId}: ${result.summaryId} (${result.messageCount} msgs, $${result.costUsd?.toFixed(4)})`)
+      }
+    } catch (err) {
+      console.warn('[chat] summarize failed:', err)
+    }
+  })()
+
   return assistantText
 }
 
@@ -531,6 +591,7 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
     channel: string
     message: string
     attachments?: AttachmentRecord[]
+    replay_context?: { rangeStartAt?: string; summaryLong?: string } | null
   }
   try {
     payload = JSON.parse(body)
@@ -591,6 +652,7 @@ export async function handleChat(req: IncomingMessage, res: ServerResponse): Pro
       callerRole: principal.role,
       onEvent: sendEvent,
       attachments: cleanAttachments,
+      replayContext: payload.replay_context ?? null,
     })
 
     sendEvent('done', { thread_id: payload.thread_id })
@@ -1880,6 +1942,36 @@ export async function startServer(): Promise<void> {
       if (!(await requireAuth(req, res))) return
       json(res, 200, getModeMetadata())
       return
+    }
+
+    // GET /atlas/conversations/<threadId>/summaries?limit=N — Phase 1.10ar
+    // chat-summary timeline rows for the cockpit horizontal bar.
+    {
+      const summaryMatch = method === 'GET' && url.startsWith('/atlas/conversations/')
+        ? url.match(/^\/atlas\/conversations\/([^/?]+)\/summaries(?:\?(.*))?$/)
+        : null
+      if (summaryMatch) {
+        if (!(await requireAuth(req, res))) return
+        const threadId = decodeURIComponent(summaryMatch[1])
+        if (!threadId) { json(res, 400, { error: 'threadId required' }); return }
+        const qs = new URLSearchParams(summaryMatch[2] ?? '')
+        const limitRaw = qs.get('limit')
+        const limit = Math.min(Math.max(parseInt(limitRaw ?? '30', 10) || 30, 1), 200)
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 200, { summaries: [] }); return }
+        const { data, error } = await sb
+          .from('atlas_chat_summaries')
+          .select('id, range_start_at, range_end_at, range_start_msg_id, range_end_msg_id, message_count, summary_short, topics, created_at')
+          .eq('thread_id', threadId)
+          .order('range_end_at', { ascending: false })
+          .limit(limit)
+        if (error) {
+          json(res, 500, { error: `summaries query failed: ${error.message ?? JSON.stringify(error)}` })
+          return
+        }
+        json(res, 200, { summaries: data ?? [] })
+        return
+      }
     }
 
     // GET /atlas/conversations/<threadId>?limit=N — chat history for the thread.
