@@ -5,6 +5,7 @@
 import { simple, debate } from './multi-brain'
 import { memorySearch } from './tools'
 import { validate, SPEC_TEMPLATE_SCAFFOLD, type ValidationResult } from './spec-template'
+import { injectMissingSections } from './section-injector'
 
 const COUNCIL_URL = process.env.COUNCIL_URL ?? 'https://just-reflection-production.up.railway.app'
 const COUNCIL_TOKEN = process.env.COUNCIL_API_TOKEN
@@ -108,6 +109,12 @@ async function fetchRelevantADRs(phase: string, goal: string): Promise<string> {
   return fetchMemoryDigest(query, 'adrs', ADR_CHAR_BUDGET, 5)
 }
 
+// Sentinel marker on the thrown Error so callers can distinguish "Council
+// endpoint is missing/disabled" (404) from generic 5xx / network errors. The
+// caller routes 404 through the deterministic fallback + section-injector
+// without crashing, since 404 has been a recurring cause of queue failures.
+export const COUNCIL_404_MARKER = '[council-404]'
+
 async function callCouncilWriteSpec(phase: string, context?: string): Promise<CouncilResponse> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), COUNCIL_TIMEOUT_MS)
@@ -121,6 +128,12 @@ async function callCouncilWriteSpec(phase: string, context?: string): Promise<Co
       },
       body: JSON.stringify({ phase, context }),
     })
+    if (res.status === 404) {
+      console.warn(
+        `[spec-draft] council /write-spec returned 404 — endpoint unavailable. Falling back to deterministic draft + section-injector. URL=${COUNCIL_URL}/write-spec`,
+      )
+      throw new Error(`${COUNCIL_404_MARKER} council /write-spec returned 404 (endpoint unavailable)`)
+    }
     if (!res.ok) {
       throw new Error(`council /write-spec returned ${res.status}`)
     }
@@ -210,6 +223,33 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
       ok: !!markdown && markdown.length > 200,
       note: 'used because Council unavailable',
     })
+
+    // Run the deterministic section-injector immediately after the fallback
+    // draft. Council normally guarantees the four mandatory sections (Task
+    // heading, Success criteria, Risks + mitigations, NEVER list); the Claude
+    // fallback frequently drops at least one. The injector is a no-op when
+    // sections are already present, so it cannot duplicate anything Council
+    // produced — but Council didn't run on this branch, so we always need it.
+    const injectStart = Date.now()
+    const injection = injectMissingSections(markdown, phase)
+    if (injection.injected.length > 0) {
+      markdown = injection.markdown
+      steps.push({
+        name: 'fallback.section_injector',
+        durationMs: Date.now() - injectStart,
+        costUsd: 0,
+        ok: true,
+        note: `injected: ${injection.injected.join(', ')}`,
+      })
+    } else {
+      steps.push({
+        name: 'fallback.section_injector',
+        durationMs: Date.now() - injectStart,
+        costUsd: 0,
+        ok: true,
+        note: 'no missing sections — fallback draft was complete',
+      })
+    }
   }
 
   // ─── Step 2: Multi-brain debate review ───────────────────────────────────────
@@ -306,6 +346,28 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
       ok: validation.ok,
       note: validation.ok ? 'all required sections present' : `still missing: ${validation.missing.join(', ')}`,
     })
+  }
+
+  // ─── Step 3b: Final safety net — deterministic section injector ─────────────
+  // The fix passes occasionally fail to add a missing section even when asked.
+  // Before letting the spec fall over the validation gate, run the injector one
+  // more time. It's a no-op when the spec is already complete (because every
+  // rule short-circuits on `present: true`), so this is safe on the happy path
+  // too. Only triggers when validation is still red after fix passes.
+  if (!validation.ok) {
+    const safetyStart = Date.now()
+    const injection = injectMissingSections(markdown, phase)
+    if (injection.injected.length > 0) {
+      markdown = injection.markdown
+      validation = validate(markdown)
+      steps.push({
+        name: 'safety-net.section_injector',
+        durationMs: Date.now() - safetyStart,
+        costUsd: 0,
+        ok: validation.ok,
+        note: `injected: ${injection.injected.join(', ')}; validation_ok=${validation.ok}`,
+      })
+    }
   }
 
   // ─── Step 4: Derive filename ─────────────────────────────────────────────────

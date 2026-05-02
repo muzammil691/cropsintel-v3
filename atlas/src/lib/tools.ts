@@ -437,7 +437,7 @@ export async function statusSnapshot(): Promise<unknown> {
 export interface AtlasDraftSpecResult {
   filename: string
   markdown: string
-  validation: { ok: boolean; missing: string[] }
+  validation: { ok: boolean; missing: string[]; errors?: string[] }
   cost_usd: number
   review_verdict: DraftResult['reviewVerdict']
   review_rationale?: string
@@ -465,7 +465,7 @@ export interface AtlasProposeAndQueueResult {
   action: 'queued' | 'awaiting_confirmation' | 'draft_only' | 'invariant_blocked' | 'validation_failed'
   filename: string
   spec_markdown: string
-  validation: { ok: boolean; missing: string[] }
+  validation: { ok: boolean; missing: string[]; errors?: string[] }
   trust_mode: string
   cost_usd: number
   review_verdict: DraftResult['reviewVerdict']
@@ -502,7 +502,7 @@ export async function atlasProposeAndQueue(
       review_verdict: draft.reviewVerdict,
       council: draft.council,
       steps: draft.steps,
-      next_step: `Spec failed structural validation after retries. Missing: ${draft.validation.missing.join(', ')}. Show the user the draft + missing sections and ask how to proceed.`,
+      next_step: `Spec failed structural validation after retries. ${(draft.validation.errors ?? draft.validation.missing.map(m => `Missing: ${m}`)).join(' ')} Show the user the draft + missing sections and ask how to proceed.`,
     }
   }
 

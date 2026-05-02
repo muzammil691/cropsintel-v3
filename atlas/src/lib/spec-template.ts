@@ -5,32 +5,44 @@
 export interface ValidationResult {
   ok: boolean
   missing: string[]
+  // Verbatim, header-exact strings naming each missing section so callers can
+  // surface a precise diagnostic instead of a generic "validation failed".
+  errors: string[]
 }
 
 interface SectionCheck {
   name: string
   pattern: RegExp
+  // Header text the validator expects to see literally — quoted in error
+  // messages so the failure clearly names what to add.
+  expected: string
 }
 
 const REQUIRED_SECTIONS: SectionCheck[] = [
-  { name: '# Task: Phase X.Y heading', pattern: /^#\s+Task:\s+Phase\s+\d+\.\d+[a-z0-9]*\s+[—\-]/im },
-  { name: '**Master plan reference:** line', pattern: /\*\*Master plan reference:\*\*/i },
-  { name: '**Estimated effort:** line', pattern: /\*\*Estimated effort:\*\*/i },
-  { name: '**Model:** line', pattern: /\*\*Model:\*\*/i },
-  { name: 'model: frontmatter', pattern: /^model:\s*\S+/im },
-  { name: '## Goal', pattern: /^##\s+Goal\b/im },
-  { name: '## Files or ## Architecture', pattern: /^##\s+(Files|Architecture)\b/im },
-  { name: '## Success criteria', pattern: /^##\s+Success criteria\b/im },
-  { name: '## Risks + mitigations', pattern: /^##\s+Risks\s*\+\s*mitigations\b/im },
-  { name: '## NEVER list', pattern: /^##\s+NEVER list\b/im },
+  { name: '# Task: Phase X.Y heading', pattern: /^#\s+Task:\s+Phase\s+\d+\.\d+[a-z0-9]*\s+[—\-]/im, expected: '# Task: Phase <X.Y> — <name>' },
+  { name: '**Master plan reference:** line', pattern: /\*\*Master plan reference:\*\*/i, expected: '**Master plan reference:**' },
+  { name: '**Estimated effort:** line', pattern: /\*\*Estimated effort:\*\*/i, expected: '**Estimated effort:**' },
+  { name: '**Model:** line', pattern: /\*\*Model:\*\*/i, expected: '**Model:**' },
+  { name: 'model: frontmatter', pattern: /^model:\s*\S+/im, expected: 'model: <model-id>' },
+  { name: '## Goal', pattern: /^##\s+Goal\b/im, expected: '## Goal' },
+  { name: '## Files or ## Architecture', pattern: /^##\s+(Files|Architecture)\b/im, expected: '## Files (or ## Architecture)' },
+  { name: '## Success criteria', pattern: /^##\s+Success criteria\b/im, expected: '## Success criteria' },
+  { name: '## Risks + mitigations', pattern: /^##\s+Risks\s*\+\s*mitigations\b/im, expected: '## Risks + mitigations' },
+  { name: '## NEVER list', pattern: /^##\s+NEVER list\b/im, expected: '## NEVER list' },
 ]
 
 export function validate(markdown: string): ValidationResult {
   const missing: string[] = []
+  const errors: string[] = []
   for (const check of REQUIRED_SECTIONS) {
-    if (!check.pattern.test(markdown)) missing.push(check.name)
+    if (!check.pattern.test(markdown)) {
+      missing.push(check.name)
+      errors.push(
+        `Missing required section: ${check.name} — spec must contain a literal "${check.expected}" header/line.`,
+      )
+    }
   }
-  return { ok: missing.length === 0, missing }
+  return { ok: missing.length === 0, missing, errors }
 }
 
 export const SPEC_TEMPLATE_SCAFFOLD = `# Task: Phase <X.Y> — <short feature name>
