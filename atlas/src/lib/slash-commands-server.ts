@@ -22,9 +22,12 @@ import {
   statusSnapshot,
   builderListQueue,
   builderListDone,
+  builderCancelTask,
+  builderSetPriority,
   verifierAudit,
   adelaTriggerScrape,
   memoryIngest,
+  memorySearch,
 } from './tools'
 import { getSupabaseClient } from './supabase'
 
@@ -117,6 +120,29 @@ const COMMANDS: SlashCommandSpec[] = [
     handler: handleIngest,
   },
   {
+    name: 'cancel',
+    description: 'Cancel a queued task by id (moves to cancelled/)',
+    argHint: '<taskId>',
+    minRole: 'operator',
+    estimatedCostUsd: 0,
+    handler: handleCancel,
+  },
+  {
+    name: 'priority',
+    description: 'Set queued task priority (1=urgent..10=lowest)',
+    argHint: '<taskId> <1-10>',
+    minRole: 'operator',
+    estimatedCostUsd: 0,
+    handler: handlePriority,
+  },
+  {
+    name: 'ask',
+    description: 'Search the institutional knowledge base for an answer',
+    argHint: '<question>',
+    estimatedCostUsd: 0.005,
+    handler: handleAsk,
+  },
+  {
     name: 'help',
     description: 'List available commands',
     estimatedCostUsd: 0,
@@ -124,7 +150,7 @@ const COMMANDS: SlashCommandSpec[] = [
   },
 ]
 
-const VIEWER_COMMANDS = new Set(['status', 'queue', 'done', 'cost', 'agents', 'help'])
+const VIEWER_COMMANDS = new Set(['status', 'queue', 'done', 'cost', 'agents', 'ask', 'help'])
 
 const PLAIN_WORD_COMMANDS = new Set(COMMANDS.map(c => c.name))
 
@@ -421,6 +447,94 @@ async function handleIngest(args: string[], _principal: AuthPrincipal): Promise<
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return `Ingest failed: ${msg}`
+  }
+}
+
+// Phase 1.10aw — /cancel <taskId>: moves a queued spec to cancelled/. The
+// underlying tool only operates on queued/ specs (in-progress/done are not
+// movable), so we surface a clear error when the spec isn't there. Operator-
+// gated because cancellation triggers a commit + push.
+async function handleCancel(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const taskId = args[0]
+  if (!taskId) {
+    return 'Usage: /cancel <taskId>  (e.g. /cancel phase-1.10aw)'
+  }
+  if (!/^[a-zA-Z0-9._-]{2,80}$/.test(taskId)) {
+    return `Rejected: "${taskId}" is not a valid task id (allowed: a-z, A-Z, 0-9, ._-, length 2-80).`
+  }
+  try {
+    const result = await builderCancelTask(taskId)
+    const pushNote = result.pushed ? '' : ' (commit landed locally, push deferred)'
+    return `Cancelled ${taskId}: moved to cancelled/${pushNote}`
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/ENOENT|no such file/i.test(msg)) {
+      return `Cancel failed: ${taskId} is not in queued/ (already in-progress, done, or cancelled).`
+    }
+    return `Cancel failed: ${msg}`
+  }
+}
+
+// Phase 1.10aw — /priority <taskId> <n>: rewrites a queued spec's frontmatter
+// priority field (1=urgent..10=lowest) and pushes so Builder picks the new
+// order on next loop. Operator-gated.
+async function handlePriority(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const taskId = args[0]
+  const rawPriority = args[1]
+  if (!taskId || !rawPriority) {
+    return 'Usage: /priority <taskId> <1-10>  (1=urgent, 10=lowest)'
+  }
+  if (!/^[a-zA-Z0-9._-]{2,80}$/.test(taskId)) {
+    return `Rejected: "${taskId}" is not a valid task id (allowed: a-z, A-Z, 0-9, ._-, length 2-80).`
+  }
+  const priority = Number.parseInt(rawPriority, 10)
+  if (!Number.isInteger(priority) || priority < 1 || priority > 10) {
+    return `Rejected: "${rawPriority}" is not a valid priority (must be integer in [1..10]).`
+  }
+  try {
+    const result = await builderSetPriority(taskId, priority)
+    if (!result.updated) {
+      return `Priority unchanged: ${taskId} already at priority ${priority}.`
+    }
+    const pushNote = result.pushed ? '' : ' (commit landed locally, push deferred)'
+    return `Priority set: ${taskId} → ${priority}${pushNote}`
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Priority failed: ${msg}`
+  }
+}
+
+// Phase 1.10aw — /ask <question>: routes the question through the institutional
+// memory store and returns the top hits. Cheaper than running a full chat turn,
+// and survives the slash-dispatcher's stateless contract (no thread/project
+// context required). Available to viewer role — read-only knowledge base lookup.
+async function handleAsk(args: string[], _principal: AuthPrincipal): Promise<string> {
+  const question = args.join(' ').trim()
+  if (!question) {
+    return 'Usage: /ask <question>  (searches the institutional knowledge base)'
+  }
+  if (question.length > 500) {
+    return `Rejected: question is ${question.length} chars (max 500).`
+  }
+  try {
+    const result = await memorySearch(question, { limit: 3 }) as {
+      results?: Array<{ source?: string; chunk?: string; score?: number }>
+      hits?: Array<{ source?: string; chunk?: string; score?: number }>
+    } | null
+    const hits = result?.results ?? result?.hits ?? []
+    if (hits.length === 0) {
+      return `No matches found for: "${question}"`
+    }
+    const lines = hits.slice(0, 3).map((h, i) => {
+      const src = h.source ?? 'unknown'
+      const score = typeof h.score === 'number' ? ` (${h.score.toFixed(2)})` : ''
+      const chunk = (h.chunk ?? '').replace(/\s+/g, ' ').trim().slice(0, 240)
+      return `${i + 1}. [${src}${score}] ${chunk}`
+    })
+    return `Top ${lines.length} matches:\n${lines.join('\n\n')}`
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return `Ask failed: ${msg}`
   }
 }
 

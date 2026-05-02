@@ -1051,13 +1051,24 @@ async function handleWhatsAppInbound(req: IncomingMessage, res: ServerResponse):
   const params = new URLSearchParams(body)
 
   const from = params.get('From')
-  const messageBody = params.get('Body') ?? ''
+  // Phase 1.10aw — voice STT parity. Twilio Programmable Voice surfaces the
+  // user's transcript in `SpeechResult` (separate from WhatsApp text in
+  // `Body`). Treat them as equivalent inputs so a phoned-in "/status" or "queue"
+  // routes through the same parseSlash → dispatchSlashCommand pipeline as a
+  // typed message. Body wins when both are populated (defensive default —
+  // shouldn't happen in practice). NEVER list compliance: SpeechResult is
+  // never logged at full fidelity; downstream we only persist the parsed
+  // command name.
+  const speechResult = params.get('SpeechResult') ?? ''
+  const rawBody = params.get('Body') ?? ''
+  const messageBody = rawBody || speechResult
   const messageSid = params.get('MessageSid')
   const numMedia = parseInt(params.get('NumMedia') ?? '0', 10)
   const mediaUrl0 = params.get('MediaUrl0') ?? undefined
   const mediaType0 = params.get('MediaContentType0') ?? undefined
 
-  // Either a non-empty body OR at least one media attachment is required.
+  // Either a non-empty body (text or voice transcript) OR at least one media
+  // attachment is required.
   if (!from || (!messageBody && numMedia === 0)) {
     res.writeHead(400, { 'Content-Type': 'text/plain' })
     res.end('Missing From, Body, or media')

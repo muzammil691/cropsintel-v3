@@ -154,7 +154,11 @@ export function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-export const PART_SEND_DELAY_MS = 250
+// Phase 1.10aw spec pins per-chunk delay at 300 ms — Twilio's WhatsApp gateway
+// occasionally re-orders chunks queued <300 ms apart, especially on the first
+// burst after an idle period. 300 ms is the smallest safe gap we've measured
+// without ordering glitches.
+export const PART_SEND_DELAY_MS = 300
 
 // Phase 1.10aw-rem — task-spec alias. The internal canonical name is
 // `splitForWhatsApp` (descriptive of the Twilio constraint), but the spec
