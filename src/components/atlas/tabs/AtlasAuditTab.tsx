@@ -10,6 +10,7 @@ import {
   diagnoseBatch,
   fetchCascadeRelation,
   autoFixQueue,
+  recheckArtifact,
   type VerifierRunRow,
   type DesignerRunRow,
   type DiagnosisBucket,
@@ -114,6 +115,16 @@ export default function AtlasAuditTab() {
     items: BatchDiagnoseItem[]
   } | null>(null)
   const [autoFixState, setAutoFixState] = useState<Record<string, 'queueing' | 'queued' | 'failed'>>({})
+  const [recheckBusy, setRecheckBusy] = useState<Record<string, boolean>>({})
+
+  async function refetchRuns() {
+    const [v, d] = await Promise.all([
+      fetchRecentVerifierRuns(50).catch(() => [] as VerifierRunRow[]),
+      fetchRecentDesignerRuns(50).catch(() => [] as DesignerRunRow[]),
+    ])
+    setVerifierRuns(v)
+    setDesignerRuns(d)
+  }
 
   const handleAction: React.ComponentProps<typeof AuditRow>['onAction'] = async (kind, row) => {
     if (kind === 'open-commit' && row.commit_sha) {
@@ -207,6 +218,39 @@ export default function AtlasAuditTab() {
           }).join(' | ')
         : 'No gaps recorded.'
       showToast(summary)
+      return
+    }
+
+    if (kind === 'recheck') {
+      setRecheckBusy(prev => ({ ...prev, [row.id]: true }))
+      showToast(`Rechecking ${row.source} for ${row.task_id}…`)
+      try {
+        const result = await recheckArtifact(row.source, row.task_id)
+        if (!result.ok) {
+          showToast(`Recheck failed: ${result.error ?? 'unknown error'}`)
+          return
+        }
+        // The new run row was written by the verifier/designer service.
+        // Refetch and let the audit-feed dedup decide whether the task
+        // should still appear.
+        await refetchRuns()
+        const verdict = extractRecheckVerdict(result.result)
+        if (verdict === 'pass') {
+          showToast(`✅ ${row.task_id} now passes — removed from audit.`)
+        } else if (verdict) {
+          showToast(`Recheck complete: ${verdict}. Row updated.`)
+        } else {
+          showToast('Recheck complete. List refreshed.')
+        }
+      } catch (e) {
+        showToast(`Recheck failed: ${e instanceof Error ? e.message : String(e)}`)
+      } finally {
+        setRecheckBusy(prev => {
+          const next = { ...prev }
+          delete next[row.id]
+          return next
+        })
+      }
       return
     }
   }
@@ -435,7 +479,11 @@ export default function AtlasAuditTab() {
                     aria-label={`Select audit row ${row.task_id}`}
                   />
                   <div className="flex-1 min-w-0">
-                    <AuditRow row={row} onAction={handleAction} />
+                    <AuditRow
+                      row={row}
+                      onAction={handleAction}
+                      recheckBusy={!!recheckBusy[row.id]}
+                    />
                   </div>
                 </div>
                 {diagnosing === row.id && (
@@ -470,6 +518,15 @@ export default function AtlasAuditTab() {
       )}
     </TabFrame>
   )
+}
+
+function extractRecheckVerdict(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null
+  const r = result as Record<string, unknown>
+  // Verifier returns { verdict: 'pass' | 'fail' | 'unknown' }.
+  // Designer returns the same shape.
+  const v = r.verdict
+  return typeof v === 'string' ? v : null
 }
 
 function normalizeDesignerVerdict(verdict: string): AuditVerdict {

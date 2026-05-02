@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle, MinusCircle, AlertTriangle, ExternalLink } from 'lucide-react'
+import { CheckCircle2, XCircle, MinusCircle, AlertTriangle, ExternalLink, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export type AuditRowSource = 'verifier' | 'designer'
@@ -19,13 +19,23 @@ export interface AuditRowData {
   raw?: Record<string, unknown>
 }
 
+export type AuditRowAction =
+  | 'diagnose'
+  | 'discuss'
+  | 'copy-cc-prompt'
+  | 'view-gaps'
+  | 'open-commit'
+  | 'recheck'
+
 interface AuditRowProps {
   row: AuditRowData
-  onAction: (kind: 'diagnose' | 'discuss' | 'copy-cc-prompt' | 'view-gaps' | 'open-commit', row: AuditRowData) => void
+  onAction: (kind: AuditRowAction, row: AuditRowData) => void
+  recheckBusy?: boolean
 }
 
-export function AuditRow({ row, onAction }: AuditRowProps) {
+export function AuditRow({ row, onAction, recheckBusy }: AuditRowProps) {
   const isFail = row.verdict === 'fail'
+  const showRecheck = isFail || row.verdict === 'unknown'
   return (
     <li className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2">
       <div className="flex items-start gap-2">
@@ -55,7 +65,7 @@ export function AuditRow({ row, onAction }: AuditRowProps) {
           <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 truncate">
             {row.summary}
           </p>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] flex-wrap">
             {isFail ? (
               <>
                 <ActionButton onClick={() => onAction('diagnose', row)}>Diagnose</ActionButton>
@@ -79,6 +89,19 @@ export function AuditRow({ row, onAction }: AuditRowProps) {
                 )}
               </>
             )}
+            {showRecheck && (
+              <ActionButton
+                onClick={() => onAction('recheck', row)}
+                disabled={recheckBusy}
+                title="Re-run the audit at current HEAD; if it passes the row drops off the list"
+              >
+                <RefreshCw
+                  className={cn('size-3 mr-0.5', recheckBusy && 'animate-spin')}
+                  aria-hidden
+                />
+                {recheckBusy ? 'Rechecking…' : 'Recheck'}
+              </ActionButton>
+            )}
           </div>
         </div>
       </div>
@@ -86,12 +109,24 @@ export function AuditRow({ row, onAction }: AuditRowProps) {
   )
 }
 
-function ActionButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+function ActionButton({
+  children,
+  onClick,
+  disabled,
+  title,
+}: {
+  children: React.ReactNode
+  onClick: () => void
+  disabled?: boolean
+  title?: string
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+      disabled={disabled}
+      title={title}
+      className="inline-flex items-center rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 disabled:opacity-60 disabled:cursor-not-allowed"
     >
       {children}
     </button>

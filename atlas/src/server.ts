@@ -3,7 +3,9 @@ import { WebSocketServer, WebSocket as WsWebSocket } from 'ws'
 import Anthropic from '@anthropic-ai/sdk'
 import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
-import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask } from './lib/tools'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, verifierAudit, designerAuditCommit } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import {
@@ -3128,6 +3130,53 @@ export async function startServer(): Promise<void> {
       const rows = data ?? []
       const filtered = includeAll ? rows : collapseLatestDesignerPerTask(rows).slice(0, limit)
       json(res, 200, { runs: filtered })
+      return
+    }
+
+    // POST /atlas/audit/recheck { kind, task_id }
+    // Re-runs verifier or designer for a task at current HEAD. If the new
+    // verdict is pass, the audit-feed dedup hides all the older fail rows
+    // so the task drops out of the audit tab automatically.
+    if (url === '/atlas/audit/recheck' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const raw = await readBody(req)
+      let payload: { kind?: string; task_id?: string }
+      try { payload = JSON.parse(raw) } catch { json(res, 400, { error: 'invalid JSON' }); return }
+      const kind = payload.kind
+      const taskId = payload.task_id
+      if (!taskId || (kind !== 'verifier' && kind !== 'designer')) {
+        json(res, 400, { error: 'kind must be verifier|designer; task_id required' })
+        return
+      }
+      // Resolve current HEAD on the Atlas worker's repo clone. If the clone
+      // is stale we still proceed — Verifier itself runs git fetch + reset
+      // to head_after before auditing.
+      let headSha = 'unknown'
+      try {
+        const execFileP = promisify(execFile)
+        const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], {
+          cwd: process.env.REPO_ROOT ?? '/workspace/cropsintel-v3',
+        })
+        headSha = stdout.trim()
+      } catch (err) {
+        console.warn('[atlas] recheck: failed to read HEAD —', err instanceof Error ? err.message : err)
+      }
+      try {
+        let result: unknown
+        if (kind === 'verifier') {
+          result = await verifierAudit(taskId, undefined, headSha)
+        } else {
+          // Designer needs head_before too; pass HEAD for both — designer
+          // re-audits the deployed UI at that SHA.
+          result = await designerAuditCommit(taskId, headSha, headSha)
+        }
+        json(res, 200, { ok: true, kind, task_id: taskId, head: headSha, result })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[atlas] recheck ${kind}/${taskId} failed:`, msg)
+        json(res, 500, { ok: false, error: msg })
+      }
       return
     }
 

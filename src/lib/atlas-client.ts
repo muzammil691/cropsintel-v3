@@ -1152,6 +1152,30 @@ export async function fetchRecentDesignerRuns(limit = 50): Promise<DesignerRunRo
   return Array.isArray(data?.runs) ? data!.runs! : []
 }
 
+export interface RecheckResult {
+  ok: boolean
+  kind: 'verifier' | 'designer'
+  task_id: string
+  head?: string
+  result?: unknown
+  error?: string
+}
+
+// POST /atlas/audit/recheck — re-runs verifier or designer for a task at
+// current HEAD. If the new verdict is pass, the server-side audit-feed
+// dedup hides all the older fail rows so the task drops out of the audit
+// tab on the next refetch.
+export async function recheckArtifact(
+  kind: 'verifier' | 'designer',
+  taskId: string,
+): Promise<RecheckResult> {
+  return fetchJson<RecheckResult>(`${ATLAS_URL}/atlas/audit/recheck`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, task_id: taskId }),
+  })
+}
+
 // Phase 1.10as — Designer screenshots for the cockpit Preview tab.
 export interface DesignerScreenshotRow {
   id: string
