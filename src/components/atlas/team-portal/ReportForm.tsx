@@ -190,7 +190,7 @@ export function ReportForm({ onSubmitted }: ReportFormProps) {
                 type="button"
                 onClick={() => removeAttachment(a.id)}
                 aria-label={`Remove ${a.name}`}
-                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
               >
                 ×
               </button>
@@ -200,12 +200,12 @@ export function ReportForm({ onSubmitted }: ReportFormProps) {
       )}
 
       {error && (
-        <p role="alert" className="text-xs text-red-700 dark:text-red-400">
+        <p role="alert" aria-live="assertive" className="text-xs text-red-700 dark:text-red-400">
           {error}
         </p>
       )}
       {info && !error && (
-        <p role="status" className="text-xs text-emerald-700 dark:text-emerald-400">
+        <p role="status" aria-live="polite" className="text-xs text-emerald-700 dark:text-emerald-400">
           {info}
         </p>
       )}

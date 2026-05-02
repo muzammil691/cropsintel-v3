@@ -26,6 +26,9 @@ interface NewProjectDialogProps {
  * On success, the parent ProjectSwitcher auto-switches to the new project so
  * the cockpit reloads against an empty plan/queue/audit set.
  */
+const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
+const SLUG_HELP = 'Lowercase letters, digits, and hyphens. Must start and end with a letter or digit.'
+
 export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDialogProps) {
   const [slug, setSlug] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -33,6 +36,7 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
   const [repoUrl, setRepoUrl] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [slugError, setSlugError] = useState<string | null>(null)
 
   function reset() {
     setSlug('')
@@ -40,12 +44,27 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
     setDescription('')
     setRepoUrl('')
     setError(null)
+    setSlugError(null)
+  }
+
+  function validateSlug(value: string): string | null {
+    const trimmed = value.trim()
+    if (!trimmed) return 'Slug is required.'
+    if (!SLUG_PATTERN.test(trimmed)) return SLUG_HELP
+    return null
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!slug.trim() || !displayName.trim()) {
-      setError('Slug and display name are required.')
+    const slugMsg = validateSlug(slug)
+    if (slugMsg) {
+      setSlugError(slugMsg)
+      setError(null)
+      return
+    }
+    setSlugError(null)
+    if (!displayName.trim()) {
+      setError('Display name is required.')
       return
     }
     setSubmitting(true)
@@ -90,15 +109,36 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
             <Input
               id="np-slug"
               value={slug}
-              onChange={(e) => setSlug(e.target.value)}
+              onChange={(e) => {
+                setSlug(e.target.value)
+                if (slugError) setSlugError(null)
+              }}
+              onBlur={() => {
+                const msg = validateSlug(slug)
+                if (msg && slug.trim()) setSlugError(msg)
+              }}
               placeholder="e.g. project-2"
               autoComplete="off"
               required
               pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
-              title="Lowercase letters, digits, and hyphens. Must start and end with a letter or digit."
+              title={SLUG_HELP}
               disabled={submitting}
+              aria-invalid={!!slugError}
+              aria-describedby={slugError ? 'np-slug-error' : 'np-slug-help'}
             />
-            <p className="text-[11px] text-slate-500">URL-safe identifier. Lowercase, hyphens.</p>
+            {slugError ? (
+              <p
+                id="np-slug-error"
+                role="alert"
+                className="text-[11px] text-red-600 dark:text-red-400"
+              >
+                {slugError}
+              </p>
+            ) : (
+              <p id="np-slug-help" className="text-[11px] text-slate-500">
+                {SLUG_HELP}
+              </p>
+            )}
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="np-display-name">Display name</Label>
@@ -134,7 +174,11 @@ export function NewProjectDialog({ open, onOpenChange, onCreated }: NewProjectDi
             />
           </div>
           {error && (
-            <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-xs text-red-700 dark:text-red-300"
+            >
               {error}
             </div>
           )}

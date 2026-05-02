@@ -97,64 +97,65 @@ export function AssignToTeamMenu({
         className="h-7 px-2 text-xs gap-1"
         disabled={busy}
         onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         <UserPlus2 className="size-3" /> Assign to team
         <ChevronDown className="size-3" />
       </Button>
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-64 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-lg">
-          <ul className="py-1 max-h-64 overflow-y-auto text-sm">
-            <li>
-              <button
-                type="button"
-                onClick={() => void handlePick(null, 'all admins')}
-                disabled={busy}
-                className={cn(
-                  'w-full text-left px-3 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-900',
-                  lastAssignedId === 'broadcast' && 'bg-emerald-50 dark:bg-emerald-950/30',
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">Broadcast to all admins</span>
-                  {lastAssignedId === 'broadcast' && <Check className="size-3 text-emerald-600" />}
-                </div>
-                <p className="text-[11px] text-slate-500">Any admin sees it in their portal</p>
-              </button>
-            </li>
-            <li className="border-t border-slate-100 dark:border-slate-800 my-1" />
+        <div className="absolute right-0 z-30 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-lg">
+          <div role="menu" className="py-1 max-h-64 overflow-y-auto text-sm">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void handlePick(null, 'all admins')}
+              disabled={busy}
+              className={cn(
+                'w-full text-left px-3 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-900 focus-visible:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800',
+                lastAssignedId === 'broadcast' && 'bg-emerald-50 dark:bg-emerald-950/30',
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Broadcast to all admins</span>
+                {lastAssignedId === 'broadcast' && <Check className="size-3 text-emerald-600" />}
+              </div>
+              <p className="text-[11px] text-slate-500">Any admin sees it in their portal</p>
+            </button>
+            <div role="separator" className="border-t border-slate-100 dark:border-slate-800 my-1" />
             {loading && (
-              <li className="px-3 py-2 text-xs text-slate-500">Loading members…</li>
+              <p className="px-3 py-2 text-xs text-slate-500">Loading members…</p>
             )}
             {!loading && members.length === 0 && (
-              <li className="px-3 py-2 text-xs text-slate-500">
+              <p className="px-3 py-2 text-xs text-slate-500">
                 No assignable members. Invite an admin or operator.
-              </li>
+              </p>
             )}
             {!loading && members.map((m) => {
               const label = m.display_name || m.phone
               return (
-                <li key={m.id}>
-                  <button
-                    type="button"
-                    onClick={() => void handlePick(m.id, label)}
-                    disabled={busy}
-                    className={cn(
-                      'w-full text-left px-3 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-900',
-                      lastAssignedId === m.id && 'bg-emerald-50 dark:bg-emerald-950/30',
-                    )}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span>
-                        {label}
-                        <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-400">{m.role}</span>
-                      </span>
-                      {lastAssignedId === m.id && <Check className="size-3 text-emerald-600" />}
-                    </div>
-                  </button>
-                </li>
+                <button
+                  key={m.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void handlePick(m.id, label)}
+                  disabled={busy}
+                  className={cn(
+                    'w-full text-left px-3 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-900 focus-visible:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800',
+                    lastAssignedId === m.id && 'bg-emerald-50 dark:bg-emerald-950/30',
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span>
+                      {label}
+                      <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-400">{m.role}</span>
+                    </span>
+                    {lastAssignedId === m.id && <Check className="size-3 text-emerald-600" />}
+                  </div>
+                </button>
               )
             })}
-          </ul>
+          </div>
         </div>
       )}
     </div>
