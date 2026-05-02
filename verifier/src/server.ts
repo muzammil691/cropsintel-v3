@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { verify } from './verify'
-import { writeVerifierRun } from './lib/audit'
+import { writeVerifierRun, writeUnknownVerifierRun } from './lib/audit'
 import { runResearch, type ResearchInput } from './research'
 import type { Gap } from './types'
 
@@ -16,17 +16,34 @@ const execFileP = promisify(execFile)
 // whatever HEAD it had when it started. Specs that create new files always
 // fail because the new files only exist on the just-pushed commit. Fix:
 // fetch + reset --hard to head_after at the start of every audit.
-async function syncRepoToHead(repoRoot: string, headAfter: string): Promise<void> {
-  if (!headAfter || headAfter === 'unknown') return
+//
+// Returns true if the post-sync HEAD matches headAfter, false otherwise.
+// A false return means the row should be marked unknown_reason='sync_failed'
+// so the workflow-trace checker still sees a row for the commit.
+async function syncRepoToHead(repoRoot: string, headAfter: string): Promise<boolean> {
+  if (!headAfter || headAfter === 'unknown') return true
   try {
     await execFileP('git', ['fetch', 'origin', 'main', '--quiet'], { cwd: repoRoot })
     await execFileP('git', ['reset', '--hard', headAfter], { cwd: repoRoot })
-    console.log(`[verifier-server] synced repo to ${headAfter.slice(0, 8)}`)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[verifier-server] sync to ${headAfter.slice(0, 8)} failed: ${msg.slice(0, 200)}`)
-    // Fallback: stay on whatever HEAD we had; gaps will reflect that.
+    // Fall through to verify — the post-sync HEAD log will reveal the drift.
   }
+
+  let postSyncHead = 'unknown'
+  try {
+    const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+    postSyncHead = stdout.trim()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[verifier-server] could not read post-sync HEAD: ${msg.slice(0, 200)}`)
+  }
+
+  console.log(
+    `[verifier-server] post-sync HEAD: ${postSyncHead.slice(0, 8)} (requested ${headAfter.slice(0, 8)})`,
+  )
+  return postSyncHead === headAfter
 }
 
 const REPO_ROOT = process.env.REPO_ROOT ?? join(__dirname, '..', '..')
@@ -89,9 +106,20 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
     return
   }
 
+  const auditStartedAt = Date.now()
   const taskSpecPath = findTaskSpec(task_id)
   if (!taskSpecPath) {
     console.log(`[verifier-server] task_id '${task_id}' not found — returning unknown verdict`)
+    // Write a row anyway so the workflow-trace invariant checker can confirm
+    // the audit happened. passed=NULL signals "no signal" rather than pass/fail.
+    await writeUnknownVerifierRun(
+      task_id,
+      null,
+      head_after,
+      'gate',
+      'spec_not_found',
+      Date.now() - auditStartedAt,
+    )
     send(res, 200, {
       verdict: 'unknown',
       confidence: 0,
@@ -103,10 +131,30 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
 
   console.log(`[verifier-server] auditing ${task_id} (${head_before}..${head_after}) spec=${taskSpecPath}`)
 
+  // Sync the local clone to the commit Builder just pushed so files-exist
+  // and other fs-based checks see the new files. If sync fails (post-sync
+  // HEAD ≠ requested), record an unknown row and bail — verifying against
+  // a stale tree produces misleading gaps.
+  const synced = await syncRepoToHead(REPO_ROOT, head_after)
+  if (!synced) {
+    await writeUnknownVerifierRun(
+      task_id,
+      taskSpecPath,
+      head_after,
+      'gate',
+      'sync_failed',
+      Date.now() - auditStartedAt,
+    )
+    send(res, 200, {
+      verdict: 'unknown',
+      confidence: 0,
+      gaps: [],
+      audit_run_id: randomUUID(),
+    })
+    return
+  }
+
   try {
-    // Sync the local clone to the commit Builder just pushed so files-exist
-    // and other fs-based checks see the new files.
-    await syncRepoToHead(REPO_ROOT, head_after)
     const result = await verify(taskSpecPath, head_after, 'gate')
     await writeVerifierRun(result, taskSpecPath, head_after, 'gate')
 
@@ -140,6 +188,17 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[verifier-server] verify() error:', msg)
+    // Record the crash so the workflow-trace checker still sees a row for
+    // this commit; downstream tooling can read unknown_reason='verify_crashed'
+    // to know why no real verdict appeared.
+    await writeUnknownVerifierRun(
+      task_id,
+      taskSpecPath,
+      head_after,
+      'gate',
+      'verify_crashed',
+      Date.now() - auditStartedAt,
+    )
     // Don't block on verifier errors
     send(res, 200, {
       verdict: 'unknown',

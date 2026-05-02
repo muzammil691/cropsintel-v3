@@ -1,9 +1,12 @@
-import { execSync } from 'child_process'
+import { execSync, execFile } from 'child_process'
+import { promisify } from 'util'
 import { resolve } from 'path'
 import { chunkBySize } from '../lib/chunker'
 import { embedAndStore } from '../embed'
 import { writeMemoryRun } from '../lib/audit'
 import { IngestResult, RawChunk } from '../types'
+
+const execFileP = promisify(execFile)
 
 const REPO_PATH = process.env.REPO_ROOT ?? resolve(__dirname, '../../../..')
 
@@ -15,9 +18,30 @@ interface GitCommit {
   files: string
 }
 
+// Memory's clone of origin/main is otherwise static after container boot —
+// the entrypoint pulls once, then the cron polls forever against the stale
+// HEAD. That makes every post-boot ship invisible to memory.ingest, which
+// surfaces in Atlas as `memory_ingest_missing` workflow-trace gaps. Same
+// pattern Designer + Verifier already use: hard-reset to origin/main before
+// touching the working tree. If the sync fails we proceed with the stale
+// clone (better than skipping ingest entirely) but log loudly so it's
+// visible in container logs.
+async function syncRepoBeforeIngest(repoRoot: string): Promise<void> {
+  try {
+    await execFileP('git', ['fetch', 'origin', 'main', '--quiet'], { cwd: repoRoot })
+    await execFileP('git', ['reset', '--hard', 'origin/main'], { cwd: repoRoot })
+    console.log('[memory-ingest] synced clone to origin/main')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[memory-ingest] sync failed: ${msg.slice(0, 200)} — continuing with stale clone`)
+  }
+}
+
 export async function ingestGithubHistory(): Promise<IngestResult> {
   const start = Date.now()
   const source = 'github-history' as const
+
+  await syncRepoBeforeIngest(REPO_PATH)
 
   let commits: GitCommit[]
   try {
@@ -68,6 +92,12 @@ export async function ingestGithubHistory(): Promise<IngestResult> {
     errors: [],
   }
 
+  // commit_shas powers Atlas's workflow-trace invariant checker — without it,
+  // Atlas can't tell whether a freshly-shipped commit actually made it into
+  // memory. Cap to the most recent shas to keep the row small.
+  const COMMIT_SHA_CAP = 200
+  const commitShas = commits.slice(0, COMMIT_SHA_CAP).map(c => c.hash)
+
   await writeMemoryRun({
     operation: 'ingest',
     source,
@@ -75,7 +105,10 @@ export async function ingestGithubHistory(): Promise<IngestResult> {
     chunks_skipped: skipped,
     cost_usd: costUsd,
     duration_ms: result.durationMs,
-    metadata: { total_commits: commits.length },
+    metadata: {
+      total_commits: commits.length,
+      commit_shas: commitShas,
+    },
   })
 
   console.log(`[github-history] Done: +${inserted} chunks, $${costUsd.toFixed(4)}`)
