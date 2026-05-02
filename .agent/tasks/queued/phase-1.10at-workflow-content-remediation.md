@@ -1,3 +1,6 @@
+---
+priority: 1
+---
 # Task: Phase 1.10at-rem — Atlas Workflow Content Remediation
 
 ## Goal
