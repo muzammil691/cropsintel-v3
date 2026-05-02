@@ -3,6 +3,7 @@
 // + filename + cost breakdown. Used by atlas.draft_spec and atlas.propose_and_queue.
 
 import { simple, debate } from './multi-brain'
+import { memorySearch } from './tools'
 import { validate, SPEC_TEMPLATE_SCAFFOLD, type ValidationResult } from './spec-template'
 
 const COUNCIL_URL = process.env.COUNCIL_URL ?? 'https://just-reflection-production.up.railway.app'
@@ -39,6 +40,49 @@ interface CouncilResponse {
   spec?: { markdown?: string; filename?: string }
 }
 
+interface MemorySearchHit {
+  content: string
+  source: string
+  sourcePath: string | null
+  similarity: number
+  metadata?: Record<string, unknown>
+}
+
+interface MemorySearchResponse {
+  chunks: MemorySearchHit[]
+}
+
+const PRIOR_INCIDENT_CHAR_BUDGET = 2000
+
+// Audit C1b: pull recent verifier/designer failures relevant to this phase from
+// the agent-history Memory source so Council writes a spec that explicitly avoids
+// them. Non-blocking: if Memory is unreachable or has no hits, return '' and let
+// the draft proceed exactly as before.
+async function fetchPriorIncidents(phase: string, goal: string): Promise<string> {
+  const goalSnippet = goal.replace(/\s+/g, ' ').slice(0, 240)
+  const query = `phase ${phase} prior failures and remediation gaps. ${goalSnippet}`
+  let raw: unknown
+  try {
+    raw = await memorySearch(query, { limit: 10, sources: ['agent-history'] })
+  } catch (err) {
+    console.warn('[spec-draft] memory.search(agent-history) failed — proceeding without prior context:', err instanceof Error ? err.message : err)
+    return ''
+  }
+  const hits = (raw as MemorySearchResponse | undefined)?.chunks
+  if (!Array.isArray(hits) || hits.length === 0) return ''
+
+  const out: string[] = []
+  let usedChars = 0
+  for (const h of hits) {
+    if (typeof h.content !== 'string' || h.content.trim().length === 0) continue
+    const block = `- ${h.content.trim()}`
+    if (usedChars + block.length > PRIOR_INCIDENT_CHAR_BUDGET) break
+    out.push(block)
+    usedChars += block.length
+  }
+  return out.join('\n\n')
+}
+
 async function callCouncilWriteSpec(phase: string, context?: string): Promise<CouncilResponse> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), COUNCIL_TIMEOUT_MS)
@@ -67,10 +111,27 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
   let markdown = ''
   const council = { used: false, error: undefined as string | undefined }
 
+  // ─── Step 0: Pull prior incidents from agent-history Memory ─────────────────
+  // Closes the audit C1 learning loop: each failed verifier/designer run was
+  // ingested as a memory chunk; we surface the relevant ones to Council so the
+  // new spec can explicitly avoid past gaps. Empty string if Memory has no
+  // hits or is unreachable — non-blocking.
+  const priorIncidents = await fetchPriorIncidents(phase, goal)
+  const augmentedGoal = priorIncidents
+    ? [
+        goal,
+        '',
+        '## Prior incidents on this scope',
+        priorIncidents,
+        '',
+        'Apply the lessons learned. Do NOT reintroduce the gaps listed above; address them explicitly in Success criteria or Risks + mitigations.',
+      ].join('\n')
+    : goal
+
   // ─── Step 1: Council writes first draft ──────────────────────────────────────
   const councilStart = Date.now()
   try {
-    const c = await callCouncilWriteSpec(phase, goal)
+    const c = await callCouncilWriteSpec(phase, augmentedGoal)
     const draft = c.spec_markdown ?? c.markdown ?? c.spec?.markdown ?? ''
     if (draft && draft.length > 200) {
       markdown = draft
@@ -93,7 +154,7 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
     const fbPrompt = [
       `Draft a CropsIntel V3 task spec for Phase ${phase}.`,
       ``,
-      `Goal (from user): ${goal}`,
+      `Goal (from user): ${augmentedGoal}`,
       ``,
       `The spec must follow this exact scaffold (replace placeholders, do not omit any section):`,
       ``,
