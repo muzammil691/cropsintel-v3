@@ -293,7 +293,7 @@ export function CockpitChat({
             size="icon"
             onClick={handleSend}
             disabled={isStreaming || !input.trim()}
-            className="shrink-0 mb-0.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+            className="shrink-0 mb-0.5 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200"
           >
             <Send className="size-4" />
             <span className="sr-only">Send</span>
@@ -318,7 +318,7 @@ export function CockpitChat({
             <Button variant="outline" onClick={() => setConfirmMention(null)}>
               Cancel
             </Button>
-            <Button onClick={confirmAndSend} className="bg-amber-600 hover:bg-amber-700 text-white">
+            <Button onClick={confirmAndSend} className="bg-amber-600 hover:bg-amber-700 text-white transition-colors duration-200">
               Send
             </Button>
           </DialogFooter>

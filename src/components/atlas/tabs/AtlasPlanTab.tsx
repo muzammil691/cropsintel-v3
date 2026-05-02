@@ -44,7 +44,7 @@ export default function AtlasPlanTab() {
 
   return (
     <section className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 shrink-0">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 shrink-0">
         <div className="min-w-0">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
             <Layers className="size-3.5" /> Plan
@@ -58,9 +58,11 @@ export default function AtlasPlanTab() {
           variant="ghost"
           onClick={load}
           disabled={loading}
-          className="shrink-0 text-xs"
+          aria-label="Refresh plan"
+          className="shrink-0 text-xs min-h-[44px] sm:min-h-0 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
         >
           <RefreshCw className={loading ? 'size-3.5 animate-spin' : 'size-3.5'} />
+          <span className="sr-only">Refresh plan</span>
         </Button>
       </div>
 
