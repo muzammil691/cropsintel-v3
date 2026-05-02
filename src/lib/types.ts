@@ -39,6 +39,16 @@ export type AdelaRunInsert = Database["public"]["Tables"]["adela_runs"]["Insert"
 export type LegacyUser = Database["public"]["Tables"]["legacy_users"]["Row"]
 export type LegacyUserInsert = Database["public"]["Tables"]["legacy_users"]["Insert"]
 
+// Relationship-graph spine (master plan §1.4) — types live in
+// `@/lib/relationship-graphs`; re-export for ergonomic imports.
+export type {
+  GraphCode,
+  GraphDefinition,
+  InformationWall,
+  WallSeverity,
+  UserGraphMembership,
+} from "@/lib/relationship-graphs"
+
 // Insert / Update variants — use when writing to the DB
 export type CommodityInsert = Database["public"]["Tables"]["commodities"]["Insert"]
 export type CompanyInsert = Database["public"]["Tables"]["companies"]["Insert"]
