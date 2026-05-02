@@ -49,7 +49,7 @@ function MigrationBanner() {
           size="sm"
           onClick={clearMigrationNotice}
           aria-label="Dismiss"
-          className="shrink-0 h-7 w-7 p-0 text-green-700 hover:text-green-900 hover:bg-green-100"
+          className="shrink-0 h-7 w-7 p-0 text-green-700 hover:text-green-900 hover:bg-green-100 transition-colors duration-200"
         >
           ✕
         </Button>

@@ -6,6 +6,7 @@ import { WorkflowGraph as WorkflowGraphView } from '@/components/atlas-workflow/
 import { NodeDetailDrawer } from '@/components/atlas-workflow/NodeDetailDrawer'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   fetchWorkflowGraph,
   refreshWorkflowGraph,
@@ -109,12 +110,13 @@ export default function AtlasWorkflowTab({ status, onOpenAgents, heartbeats }: A
               placeholder="Filter workflows, departments, models…"
               className="pl-8 pr-8 h-8 text-sm"
               aria-label="Filter workflow graph"
+              disabled={graphLoading && !graph}
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery('')}
-                className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200"
                 aria-label="Clear filter"
               >
                 <X className="size-3.5 text-slate-400" />
@@ -141,8 +143,15 @@ export default function AtlasWorkflowTab({ status, onOpenAgents, heartbeats }: A
             Commodity trade workflow graph
           </h3>
           {graphLoading && !graph && (
-            <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4 text-xs text-slate-500">
-              Loading workflow graph…
+            <div
+              className="space-y-3"
+              role="status"
+              aria-live="polite"
+              aria-label="Loading workflow graph"
+            >
+              <Skeleton className="h-64 w-full" />
+              <Skeleton className="h-32 w-full" />
+              <span className="sr-only">Loading workflow graph…</span>
             </div>
           )}
           {showEmptyState && (

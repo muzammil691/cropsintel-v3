@@ -32,7 +32,7 @@ function formatTime(ts: string): string {
 export function AnnouncementsBanner({ announcements, loading }: AnnouncementsBannerProps) {
   if (loading && !announcements) {
     return (
-      <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3">
+      <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3 sm:p-4">
         <div className="h-4 w-1/3 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
         <div className="mt-2 h-3 w-2/3 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
       </div>
@@ -49,7 +49,7 @@ export function AnnouncementsBanner({ announcements, loading }: AnnouncementsBan
     <section className="space-y-2">
       <div
         className={cn(
-          'rounded-md border px-3 py-2 flex items-start gap-2',
+          'rounded-md border px-3 py-2 sm:px-4 sm:py-3 flex items-start gap-2',
           HEALTH_TONE[build_health.overall],
         )}
       >
@@ -69,7 +69,7 @@ export function AnnouncementsBanner({ announcements, loading }: AnnouncementsBan
       </div>
 
       {(recent_ships.length > 0 || pinned_messages.length > 0) && (
-        <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3">
+        <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3 sm:p-4">
           <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 inline-flex items-center gap-1.5">
             <Megaphone className="size-3" /> Announcements from Atlas
           </h3>

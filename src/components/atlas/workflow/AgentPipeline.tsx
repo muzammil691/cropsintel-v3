@@ -35,10 +35,7 @@ export function AgentPipeline({ status, onOpenAgents, heartbeats }: AgentPipelin
   const ships = status?.recent_ships ?? []
 
   return (
-    <div
-      className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4"
-      style={{ minHeight: 280 }}
-    >
+    <div className="rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4 min-h-70">
       <div className="flex items-baseline justify-between gap-2 mb-3">
         <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
           Agent pipeline
@@ -46,8 +43,9 @@ export function AgentPipeline({ status, onOpenAgents, heartbeats }: AgentPipelin
         <span className="text-[10px] text-slate-400">click an agent to open the Agents tab</span>
       </div>
 
-      {/* Horizontal scrollable flow on small screens. */}
-      <div className="flex items-stretch gap-1 overflow-x-auto pb-2">
+      {/* Stacks vertically on mobile (<640px) so each agent gets its full
+          width; horizontal scrollable flow at sm and up. */}
+      <div className="flex flex-col sm:flex-row items-stretch gap-2 sm:gap-1 overflow-x-auto pb-2">
         {AGENTS.map((agent, i) => {
           const heartbeat = heartbeats?.[agent.key]
           const derived = deriveAgentStatus(heartbeat)
@@ -61,8 +59,8 @@ export function AgentPipeline({ status, onOpenAgents, heartbeats }: AgentPipelin
                 type="button"
                 onClick={onOpenAgents}
                 className={cn(
-                  'flex flex-col gap-1.5 rounded-lg border bg-white dark:bg-slate-950 px-3 py-2 text-left transition-colors',
-                  'hover:border-emerald-400 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'flex flex-col gap-1.5 rounded-lg border bg-white dark:bg-slate-950 px-3 py-2 text-left transition-all duration-200',
+                  'hover:border-emerald-400 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:border-emerald-400 focus-visible:shadow-sm',
                   derived === 'running' ? 'border-emerald-300 dark:border-emerald-800 shadow-[0_0_0_3px_rgba(16,185,129,0.15)]' : 'border-slate-200 dark:border-slate-800',
                   'min-w-[120px]',
                 )}

@@ -720,14 +720,14 @@ function ReportsInbox({
                         <button
                           type="button"
                           onClick={() => void onTriage(r.id, 'triaged')}
-                          className="text-[10px] rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-900"
+                          className="text-[10px] rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors duration-200"
                         >
                           Triage
                         </button>
                         <button
                           type="button"
                           onClick={() => void onTriage(r.id, 'dismissed')}
-                          className="text-[10px] rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-900"
+                          className="text-[10px] rounded border border-slate-200 dark:border-slate-700 px-1.5 py-0.5 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors duration-200"
                         >
                           Dismiss
                         </button>
