@@ -53,6 +53,40 @@ interface MemorySearchResponse {
 }
 
 const PRIOR_INCIDENT_CHAR_BUDGET = 2000
+const ADR_CHAR_BUDGET = 1500
+
+// Pull relevant Memory chunks from a single source, capped to the char budget.
+// Returns '' if Memory is unreachable, returns no hits, or every hit is empty.
+async function fetchMemoryDigest(
+  query: string,
+  source: 'agent-history' | 'adrs',
+  charBudget: number,
+  limit: number,
+): Promise<string> {
+  let raw: unknown
+  try {
+    raw = await memorySearch(query, { limit, sources: [source] })
+  } catch (err) {
+    console.warn(
+      `[spec-draft] memory.search(${source}) failed — proceeding without ${source} context:`,
+      err instanceof Error ? err.message : err,
+    )
+    return ''
+  }
+  const hits = (raw as MemorySearchResponse | undefined)?.chunks
+  if (!Array.isArray(hits) || hits.length === 0) return ''
+
+  const out: string[] = []
+  let used = 0
+  for (const h of hits) {
+    if (typeof h.content !== 'string' || h.content.trim().length === 0) continue
+    const block = `- ${h.content.trim()}`
+    if (used + block.length > charBudget) break
+    out.push(block)
+    used += block.length
+  }
+  return out.join('\n\n')
+}
 
 // Audit C1b: pull recent verifier/designer failures relevant to this phase from
 // the agent-history Memory source so Council writes a spec that explicitly avoids
@@ -61,26 +95,17 @@ const PRIOR_INCIDENT_CHAR_BUDGET = 2000
 async function fetchPriorIncidents(phase: string, goal: string): Promise<string> {
   const goalSnippet = goal.replace(/\s+/g, ' ').slice(0, 240)
   const query = `phase ${phase} prior failures and remediation gaps. ${goalSnippet}`
-  let raw: unknown
-  try {
-    raw = await memorySearch(query, { limit: 10, sources: ['agent-history'] })
-  } catch (err) {
-    console.warn('[spec-draft] memory.search(agent-history) failed — proceeding without prior context:', err instanceof Error ? err.message : err)
-    return ''
-  }
-  const hits = (raw as MemorySearchResponse | undefined)?.chunks
-  if (!Array.isArray(hits) || hits.length === 0) return ''
+  return fetchMemoryDigest(query, 'agent-history', PRIOR_INCIDENT_CHAR_BUDGET, 10)
+}
 
-  const out: string[] = []
-  let usedChars = 0
-  for (const h of hits) {
-    if (typeof h.content !== 'string' || h.content.trim().length === 0) continue
-    const block = `- ${h.content.trim()}`
-    if (usedChars + block.length > PRIOR_INCIDENT_CHAR_BUDGET) break
-    out.push(block)
-    usedChars += block.length
-  }
-  return out.join('\n\n')
+// Closes the Council ADR readback loop: Council records ADRs to
+// architecture_decisions during draft, but those decisions never fed back
+// into the next draft. Now we surface relevant past decisions so a new spec
+// either honors them or explicitly proposes superseding them.
+async function fetchRelevantADRs(phase: string, goal: string): Promise<string> {
+  const goalSnippet = goal.replace(/\s+/g, ' ').slice(0, 240)
+  const query = `phase ${phase} architectural decisions and trade-offs. ${goalSnippet}`
+  return fetchMemoryDigest(query, 'adrs', ADR_CHAR_BUDGET, 5)
 }
 
 async function callCouncilWriteSpec(phase: string, context?: string): Promise<CouncilResponse> {
@@ -111,22 +136,35 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
   let markdown = ''
   const council = { used: false, error: undefined as string | undefined }
 
-  // ─── Step 0: Pull prior incidents from agent-history Memory ─────────────────
-  // Closes the audit C1 learning loop: each failed verifier/designer run was
-  // ingested as a memory chunk; we surface the relevant ones to Council so the
-  // new spec can explicitly avoid past gaps. Empty string if Memory has no
-  // hits or is unreachable — non-blocking.
-  const priorIncidents = await fetchPriorIncidents(phase, goal)
-  const augmentedGoal = priorIncidents
-    ? [
-        goal,
-        '',
-        '## Prior incidents on this scope',
-        priorIncidents,
-        '',
-        'Apply the lessons learned. Do NOT reintroduce the gaps listed above; address them explicitly in Success criteria or Risks + mitigations.',
-      ].join('\n')
-    : goal
+  // ─── Step 0: Memory readback — prior incidents + relevant ADRs ──────────────
+  // Closes the audit C1 + ADR-readback loops:
+  //   * agent-history: failed verifier/designer runs → "don't repeat these gaps"
+  //   * adrs:          past architectural decisions  → "honor or explicitly supersede"
+  // Run in parallel; both are non-blocking (Memory unreachable → empty).
+  const [priorIncidents, relevantAdrs] = await Promise.all([
+    fetchPriorIncidents(phase, goal),
+    fetchRelevantADRs(phase, goal),
+  ])
+  const sections: string[] = [goal]
+  if (priorIncidents) {
+    sections.push(
+      '',
+      '## Prior incidents on this scope',
+      priorIncidents,
+      '',
+      'Apply the lessons learned. Do NOT reintroduce the gaps listed above; address them explicitly in Success criteria or Risks + mitigations.',
+    )
+  }
+  if (relevantAdrs) {
+    sections.push(
+      '',
+      '## Relevant prior architectural decisions',
+      relevantAdrs,
+      '',
+      'These decisions were ratified by Council. Honor them in the new spec, OR — if you propose superseding one — name the ADR explicitly and justify the change in Risks + mitigations.',
+    )
+  }
+  const augmentedGoal = sections.join('\n')
 
   // ─── Step 1: Council writes first draft ──────────────────────────────────────
   const councilStart = Date.now()

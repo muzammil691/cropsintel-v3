@@ -1148,13 +1148,15 @@ async function memoryIngestAfterShips(trustMode: TrustMode): Promise<void> {
     const first = ingestedCommitWindows.values().next().value
     if (first !== undefined) ingestedCommitWindows.delete(first)
   }
-  // Two sources fire in sequence after each ship window:
+  // Three sources fire in sequence after each ship window:
   //   github-history — commits & PR bodies (existing behavior)
   //   agent-history  — verifier_runs + designer_runs failures (audit C1a)
-  // The second source is what closes the learning loop: spec-draft (C1b)
-  // pulls from this index to surface "we already failed on this scope" before
-  // Council writes a fresh spec.
-  for (const source of ['github-history', 'agent-history'] as const) {
+  //   adrs           — architecture_decisions Council writes during draft
+  // Together they close the loop: spec-draft (C1b) pulls "we already failed
+  // on this scope" AND "we already debated this decision" before Council
+  // writes a fresh spec. ADR ingest runs even when no new ADR exists — the
+  // dedup in embedAndStore makes it a no-op cost (~$0.001) on idle windows.
+  for (const source of ['github-history', 'agent-history', 'adrs'] as const) {
     try {
       await dispatch({
         tool: 'memory.ingest' as ToolName,
