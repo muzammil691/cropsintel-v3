@@ -6,6 +6,11 @@ import { simple, debate } from './multi-brain'
 import { memorySearch } from './tools'
 import { validate, SPEC_TEMPLATE_SCAFFOLD, type ValidationResult } from './spec-template'
 import { injectMissingSections } from './section-injector'
+import {
+  classifyPrimaryDomain,
+  recordBuildAttempt,
+  type PrimaryDomain,
+} from './build-attempts'
 
 const COUNCIL_URL = process.env.COUNCIL_URL ?? 'https://just-reflection-production.up.railway.app'
 const COUNCIL_TOKEN = process.env.COUNCIL_API_TOKEN
@@ -31,6 +36,13 @@ export interface DraftResult {
     used: boolean
     error?: string
   }
+  /**
+   * Phase 2: pre-build memory record. Set when the planned row was inserted
+   * into atlas_build_attempts. builderQueueSpec uses this to flip the row
+   * to status='queued' once the spec lands on disk.
+   */
+  buildAttemptId?: string
+  primaryDomain?: PrimaryDomain
 }
 
 interface CouncilResponse {
@@ -372,6 +384,41 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
 
   // ─── Step 4: Derive filename ─────────────────────────────────────────────────
   const filename = deriveFilename(markdown, phase)
+  const taskId = filename.replace(/\.md$/, '')
+
+  // ─── Step 5: Pre-build memory record (Phase 2 of agent-loop redesign) ──────
+  // Insert a 'planned' row into atlas_build_attempts so the build is bookended
+  // in memory before Builder picks it up. Best-effort: any failure here does
+  // not block queueing — the spec still ships, we just lose the trace.
+  const primaryDomain = classifyPrimaryDomain(markdown)
+  let buildAttemptId: string | undefined
+  try {
+    const recorded = await recordBuildAttempt({
+      taskId,
+      specFilename: filename,
+      specMarkdown: markdown,
+      primaryDomain,
+      costUsd: totalCost,
+    })
+    if (recorded) {
+      buildAttemptId = recorded.id
+      steps.push({
+        name: 'build-attempt.planned',
+        durationMs: 0,
+        costUsd: 0,
+        ok: true,
+        note: `attempt_number=${recorded.attemptNumber} domain=${primaryDomain} sha=${recorded.specSha.slice(0, 12)}`,
+      })
+    }
+  } catch (err) {
+    steps.push({
+      name: 'build-attempt.planned',
+      durationMs: 0,
+      costUsd: 0,
+      ok: false,
+      note: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   return {
     filename,
@@ -382,6 +429,8 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
     reviewVerdict,
     reviewRationale,
     council,
+    buildAttemptId,
+    primaryDomain,
   }
 }
 

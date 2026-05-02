@@ -1,4 +1,5 @@
 import { getSupabaseClient } from './supabase'
+import { markBuildAttemptStatus } from './build-attempts'
 import { writeFile, readFile, readdir, rename } from 'fs/promises'
 import { resolve } from 'path'
 import { execFile } from 'child_process'
@@ -85,7 +86,11 @@ export async function memoryIngest(source: string): Promise<unknown> {
 
 // ─── Builder (file-system based) ────────────────────────────────────────────
 
-export async function builderQueueSpec(filename: string, body: string): Promise<{ path: string; sha: string; pushed: boolean }> {
+export async function builderQueueSpec(
+  filename: string,
+  body: string,
+  buildAttemptId?: string,
+): Promise<{ path: string; sha: string; pushed: boolean }> {
   if (!filename.endsWith('.md')) throw new Error('builder.queue_spec: filename must end in .md')
   if (!filename.startsWith('phase-')) throw new Error('builder.queue_spec: filename must start with "phase-"')
   const relPath = `.agent/tasks/queued/${filename}`
@@ -93,6 +98,15 @@ export async function builderQueueSpec(filename: string, body: string): Promise<
   await writeFile(fullPath, body, 'utf-8')
   // Auto-commit and push so Builder picks it up — Atlas owns the queue end-to-end
   const result = await gitCommitAndPush(`atlas: queue ${filename.replace(/\.md$/, '')}`, [relPath])
+
+  // Phase 2 of agent-loop redesign: flip the corresponding atlas_build_attempts
+  // row from 'planned' to 'queued' so the bookend is recorded. Best-effort —
+  // failure here doesn't affect the queue; spec-draft logged the planned row,
+  // and the post-ship hooks transition shipped/verified independently.
+  if (buildAttemptId) {
+    await markBuildAttemptStatus(buildAttemptId, 'queued')
+  }
+
   return { path: fullPath, sha: result.sha, pushed: result.pushed }
 }
 
@@ -548,7 +562,7 @@ export async function atlasProposeAndQueue(
 
   // ─── Mode-aware queueing ────────────────────────────────────────────────────
   if (trustMode === 'auto') {
-    const queueResult = await builderQueueSpec(draft.filename, draft.markdown)
+    const queueResult = await builderQueueSpec(draft.filename, draft.markdown, draft.buildAttemptId)
     let queueList: string[] = []
     try {
       const list = await builderListQueue()
