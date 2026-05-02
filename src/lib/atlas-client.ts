@@ -1396,6 +1396,12 @@ export interface BatchDiscussRow {
   reason: string
 }
 
+export interface BatchSkippedRow {
+  kind: DiagnoseArtifactKind
+  ref: string
+  reason: string
+}
+
 export interface BatchDiagnoseResult {
   results: Array<{ kind: DiagnoseArtifactKind; ref: string; bucket: DiagnosisBucket['bucket'] }>
   combined: {
@@ -1406,6 +1412,8 @@ export interface BatchDiagnoseResult {
     in_app: BatchInAppRow[]
     discuss: { seed: string; items: BatchDiscussRow[] } | null
   }
+  /** Items dropped pre-flight because the underlying task already passed in a later run. */
+  skipped_resolved?: BatchSkippedRow[]
 }
 
 export async function diagnoseBatch(items: BatchDiagnoseItem[]): Promise<BatchDiagnoseResult> {

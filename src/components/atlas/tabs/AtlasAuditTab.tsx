@@ -318,7 +318,11 @@ export default function AtlasAuditTab() {
     try {
       const result = await diagnoseBatch(items)
       setBatchResult({ result, items })
-      showToast(`Diagnosed ${result.results.length} row${result.results.length === 1 ? '' : 's'}.`)
+      const skipped = result.skipped_resolved?.length ?? 0
+      const note = skipped > 0
+        ? ` (skipped ${skipped} already-resolved row${skipped === 1 ? '' : 's'})`
+        : ''
+      showToast(`Diagnosed ${result.results.length} row${result.results.length === 1 ? '' : 's'}${note}.`)
     } catch (err) {
       showToast(`Batch diagnose failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -336,13 +340,15 @@ export default function AtlasAuditTab() {
     try {
       const result = await diagnoseBatch(items)
       const cc = result.combined.claude_code
+      const skipped = result.skipped_resolved?.length ?? 0
+      const skippedNote = skipped > 0 ? ` (${skipped} already-resolved skipped)` : ''
       if (!cc) {
-        showToast('No Claude Code prompts in the selection.')
+        showToast(`No Claude Code prompts in the selection${skippedNote}.`)
         setBatchResult({ result, items })
       } else {
         try {
           await navigator.clipboard.writeText(cc.prompt)
-          showToast(`Copied combined CC prompt (${cc.items.length} issue${cc.items.length === 1 ? '' : 's'}).`)
+          showToast(`Copied combined CC prompt (${cc.items.length} issue${cc.items.length === 1 ? '' : 's'})${skippedNote}.`)
         } catch {
           showToast('Clipboard write failed — open the result card to copy.')
         }

@@ -3527,13 +3527,55 @@ export async function startServer(): Promise<void> {
       }
 
       try {
+        // Pre-flight: drop items whose underlying task has since passed.
+        // Without this, fix-prompts kept getting generated for rows that
+        // had already been resolved by later commits — operators wasted
+        // cycles applying no-op patches. This mirrors the latest-per-task
+        // dedup used by /atlas/verifier/runs and /atlas/designer/runs.
+        const skippedResolved: Array<{ kind: DiagnoseArtifactKind; ref: string; reason: string }> = []
+        const liveItems: ArtifactInput[] = []
+        const sb = getSupabaseClient()
+        for (const it of items) {
+          const taskId = (it.payload['task_id'] as string | undefined) ?? null
+          if (!sb || !taskId) {
+            // No Supabase or no task_id → can't dedup; let the row through.
+            liveItems.push(it)
+            continue
+          }
+          let isResolved = false
+          if (it.kind === 'verifier_run') {
+            const { data } = await sb
+              .from('verifier_runs')
+              .select('passed, ran_at')
+              .eq('task_id', taskId)
+              .order('ran_at', { ascending: false })
+              .limit(1)
+            const latest = (data ?? [])[0] as { passed: boolean | null } | undefined
+            if (latest?.passed === true) isResolved = true
+          } else if (it.kind === 'designer_audit') {
+            const { data } = await sb
+              .from('designer_runs')
+              .select('verdict, created_at')
+              .eq('task_id', taskId)
+              .order('created_at', { ascending: false })
+              .limit(1)
+            const latest = (data ?? [])[0] as { verdict: string | null } | undefined
+            if (latest?.verdict === 'pass') isResolved = true
+          }
+          if (isResolved) {
+            skippedResolved.push({ kind: it.kind, ref: it.ref, reason: 'task has passed since this audit row was written' })
+          } else {
+            liveItems.push(it)
+          }
+        }
+
         // Concurrency cap = 5. Simple worker-pool approach.
         const buckets: Array<{ kind: DiagnoseArtifactKind; ref: string; bucket: DiagnosisBucket }> = []
         let cursor = 0
         const worker = async (): Promise<void> => {
-          while (cursor < items.length) {
+          while (cursor < liveItems.length) {
             const idx = cursor++
-            const input = items[idx]
+            const input = liveItems[idx]
             try {
               const bucket = await diagnose(input)
               buckets.push({ kind: input.kind, ref: input.ref, bucket })
@@ -3549,7 +3591,7 @@ export async function startServer(): Promise<void> {
             }
           }
         }
-        await Promise.all(Array.from({ length: Math.min(5, items.length) }, () => worker()))
+        await Promise.all(Array.from({ length: Math.min(5, liveItems.length || 1) }, () => worker()))
 
         // Build the combined result: per-bucket aggregations + one paste-able CC prompt.
         const autoRemediate = buckets
@@ -3635,6 +3677,9 @@ export async function startServer(): Promise<void> {
               ? { seed: combinedDiscussSeed, items: discussItems }
               : null,
           },
+          // Items dropped because their task has since passed. UI can toast
+          // this so operators know why a 5-row selection produced 3 issues.
+          skipped_resolved: skippedResolved,
         })
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
