@@ -8,10 +8,12 @@ import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import {
   sendWhatsAppReply,
+  sendWhatsAppReplyAutoSplit,
   sendWhatsAppMedia,
   downloadTwilioMedia,
   validateTwilioSignature,
 } from './lib/twilio'
+import { parseSlash, dispatchSlashCommand } from './lib/slash-commands-server'
 import {
   isPhoneAllowed,
   generateOtpCode,
@@ -1125,6 +1127,42 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
   const allow = await isPhoneAllowed(fromPhone)
   const callerRole: Role = allow.allowed ? allow.role : 'viewer'
 
+  // ─── Phase 1.10aw — slash command short-circuit ──────────────────────────
+  // Recognized slash / voice-prefix commands (e.g. "/status", "slash queue",
+  // bare "help") run server-side without going through the chat LLM. This
+  // gives instant replies for queue/cost/agent inspections.
+  const parsedSlash = parseSlash(inboundText)
+  if (parsedSlash) {
+    const principal: AuthPrincipalForSlash = {
+      phone: fromPhone,
+      sessionId: 'whatsapp',
+      role: callerRole,
+      memberId: allow.allowed ? allow.memberId : null,
+    }
+    const result = await dispatchSlashCommand(parsedSlash, principal)
+    const replyText = result.text
+    if (sb) {
+      await sb.from('atlas_conversations').insert({
+        thread_id: threadId,
+        channel: 'whatsapp',
+        role: 'atlas',
+        content: replyText,
+        metadata: {
+          slash_command: parsedSlash.name,
+          from_voice_note: isVoiceNote,
+          dispatch_cost_usd: result.cost_usd ?? 0,
+        },
+      })
+    }
+    await sendAtlasReply({
+      toWhatsApp: from,
+      threadId,
+      replyText,
+      triggeredByVoiceNote: isVoiceNote,
+    })
+    return
+  }
+
   // Run the chat turn — emits the assistant row with combined metadata.
   const assistantMetadata: Record<string, unknown> = { from_voice_note: isVoiceNote }
   const assistantText = await runChatTurn({
@@ -1143,6 +1181,16 @@ async function processWhatsAppMessage(params: ProcessParams): Promise<void> {
   })
 }
 
+// Local alias to keep the slash dispatcher's principal shape isolated from the
+// server's full AuthPrincipal (no session id for WhatsApp callers — they
+// authenticate by phone number, not session token).
+type AuthPrincipalForSlash = {
+  phone: string
+  sessionId: string
+  role: Role
+  memberId: string | null
+}
+
 // Sends the reply back to the user. Always sends a text body; additionally
 // generates an ElevenLabs voice note when the user has voice replies enabled
 // and the ElevenLabs monthly budget gate has not been tripped.
@@ -1157,12 +1205,14 @@ async function sendAtlasReply(params: {
   if (!replyText) return
 
   // 1. Always send text first so the user gets *something* even if voice fails.
-  const textResult = await sendWhatsAppReply(toWhatsApp, replyText)
-  if ('error' in textResult) {
-    console.error('[whatsapp-inbound] reply failed:', textResult.error)
-    return
+  // Auto-split sentence-aware so long Atlas answers don't get truncated by
+  // Twilio's 1600-char cap (Phase 1.10aw).
+  const textResult = await sendWhatsAppReplyAutoSplit(toWhatsApp, replyText)
+  if (textResult.errors.length > 0) {
+    console.error('[whatsapp-inbound] reply failed:', textResult.errors.join('; '))
+    if (textResult.sids.length === 0) return
   }
-  console.log(`[whatsapp-inbound] replied with sid=${textResult.sid}`)
+  console.log(`[whatsapp-inbound] replied with ${textResult.sids.length} part(s) sid=${textResult.sids.join(',')}`)
 
   // 2. Determine whether to also send a voice note.
   const prefs = await getVoicePrefs(fromPhone)

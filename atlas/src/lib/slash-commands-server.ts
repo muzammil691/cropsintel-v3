@@ -1,0 +1,301 @@
+// Phase 1.10aw — server-side slash-command parser + dispatcher.
+//
+// Mirrors the cockpit's atlas-slash-commands.ts but runs entirely server-side
+// so the WhatsApp inbound handler can recognize "/status", "queue", "slash help",
+// etc. and reply with the formatted result without going through the LLM.
+//
+// Voice STT often produces "slash status" (with a space) or just "status"
+// (no slash) — both forms are accepted. Plain-word recognition only fires when
+// the message is JUST that word so conversational messages like "what's the
+// status of the build" still fall through to chat.
+//
+// Cost-gating: each command declares an `estimatedCostUsd`. Cheap commands
+// (Supabase reads) skip checkBudget(); anything that could trigger paid models
+// goes through the gate first.
+//
+// Security: never expose the /help listing to a `viewer` role; viewers get a
+// read-only subset.
+
+import { roleAtLeast, type Role } from './auth'
+import { checkBudget, getBurnRate } from './cost-gate'
+import {
+  statusSnapshot,
+  builderListQueue,
+  builderListDone,
+} from './tools'
+import { getSupabaseClient } from './supabase'
+
+// Mirror of server.ts's AuthPrincipal — duplicated locally to avoid a
+// lib → server circular import. The shape MUST stay in sync; if server.ts adds
+// a field, mirror it here only if the slash dispatchers actually need it.
+export interface AuthPrincipal {
+  phone: string
+  sessionId: string
+  role: Role
+  memberId: string | null
+}
+
+export interface ParsedSlashCommand {
+  name: string
+  args: string[]
+  raw: string
+}
+
+export interface SlashDispatchResult {
+  text: string
+  cost_usd?: number
+}
+
+interface SlashCommandSpec {
+  name: string
+  description: string
+  /** Argument hint shown by /help. */
+  argHint?: string
+  /** Minimum role to invoke (default 'viewer'). */
+  minRole?: Role
+  /** Estimated USD cost — used to short-circuit checkBudget for cheap calls. */
+  estimatedCostUsd: number
+  handler: (args: string[], principal: AuthPrincipal) => Promise<string>
+}
+
+const COMMANDS: SlashCommandSpec[] = [
+  {
+    name: 'status',
+    description: 'Snapshot of queue + cost + agent activity',
+    estimatedCostUsd: 0.0005,
+    handler: handleStatus,
+  },
+  {
+    name: 'queue',
+    description: 'List queued specs (numbered)',
+    estimatedCostUsd: 0.0005,
+    handler: handleQueue,
+  },
+  {
+    name: 'done',
+    description: 'Last 5 shipped specs',
+    estimatedCostUsd: 0.0005,
+    handler: handleDone,
+  },
+  {
+    name: 'cost',
+    description: 'Cost today + month-to-date',
+    estimatedCostUsd: 0.0005,
+    handler: handleCost,
+  },
+  {
+    name: 'agents',
+    description: '7-agent health line',
+    estimatedCostUsd: 0.0005,
+    handler: handleAgents,
+  },
+  {
+    name: 'help',
+    description: 'List available commands',
+    estimatedCostUsd: 0,
+    handler: handleHelp,
+  },
+]
+
+const VIEWER_COMMANDS = new Set(['status', 'queue', 'done', 'cost', 'agents', 'help'])
+
+const PLAIN_WORD_COMMANDS = new Set(COMMANDS.map(c => c.name))
+
+/**
+ * Parse a slash command from inbound text. Recognizes:
+ *
+ *  - `/status`, `/status <args>` — leading slash
+ *  - `slash status`, `atlas status` — voice-STT prefixes
+ *  - bare `status` (or any other registered command name) when the entire
+ *    message is JUST that single word — keeps "what's the build status"
+ *    falling through to chat.
+ *
+ * Returns null when the input does not match any registered command.
+ *
+ * NEVER list compliance: filters OTP-looking 6-digit codes from the parsed
+ * args so transcribed voice notes containing OTPs never propagate downstream.
+ */
+export function parseSlash(text: string): ParsedSlashCommand | null {
+  if (!text) return null
+  const raw = text.trim()
+  if (!raw) return null
+
+  // Form 1: leading slash.
+  const slashMatch = raw.match(/^\/([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+([\s\S]*))?$/)
+  if (slashMatch) {
+    const name = slashMatch[1].toLowerCase()
+    const argString = (slashMatch[2] ?? '').trim()
+    if (!isKnownCommand(name)) return null
+    return { name, args: tokenize(argString), raw }
+  }
+
+  // Form 2: "slash X" or "atlas X" prefix.
+  const prefixMatch = raw.match(/^(?:slash|atlas)\s+([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+([\s\S]*))?$/i)
+  if (prefixMatch) {
+    const name = prefixMatch[1].toLowerCase()
+    const argString = (prefixMatch[2] ?? '').trim()
+    if (!isKnownCommand(name)) return null
+    return { name, args: tokenize(argString), raw }
+  }
+
+  // Form 3: bare command word — only when the WHOLE message is that single
+  // word (avoids hijacking conversational use of "status", "help", etc.).
+  const bareMatch = raw.match(/^([a-zA-Z][a-zA-Z0-9_-]*)\.?$/)
+  if (bareMatch) {
+    const name = bareMatch[1].toLowerCase()
+    if (PLAIN_WORD_COMMANDS.has(name)) {
+      return { name, args: [], raw }
+    }
+  }
+
+  return null
+}
+
+function tokenize(s: string): string[] {
+  if (!s) return []
+  // Strip 6-digit numeric tokens (likely OTP codes) so we never log them.
+  return s.split(/\s+/).filter(tok => tok.length > 0 && !/^\d{6}$/.test(tok))
+}
+
+function isKnownCommand(name: string): boolean {
+  return COMMANDS.some(c => c.name === name)
+}
+
+export async function dispatchSlashCommand(
+  cmd: ParsedSlashCommand,
+  principal: AuthPrincipal,
+): Promise<SlashDispatchResult> {
+  const spec = COMMANDS.find(c => c.name === cmd.name)
+  if (!spec) {
+    return { text: `Unknown command: /${cmd.name}. Send /help for the list.` }
+  }
+
+  // Role gate. Viewers can only invoke read-only commands.
+  const minRole: Role = spec.minRole ?? 'viewer'
+  if (!roleAtLeast(principal.role, minRole)) {
+    return { text: `Sorry — /${cmd.name} requires role ${minRole}; you are ${principal.role}.` }
+  }
+  if (principal.role === 'viewer' && !VIEWER_COMMANDS.has(spec.name)) {
+    return { text: `Sorry — /${cmd.name} is not available for viewer role.` }
+  }
+
+  // Cost-gate non-trivial commands.
+  if (spec.estimatedCostUsd > 0.01) {
+    const budget = await checkBudget(spec.estimatedCostUsd)
+    if (!budget.allow) {
+      return {
+        text: `Budget gate hit, command skipped: ${budget.reason ?? budget.status}`,
+        cost_usd: 0,
+      }
+    }
+  }
+
+  try {
+    const text = await spec.handler(cmd.args, principal)
+    return { text, cost_usd: spec.estimatedCostUsd }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { text: `Command /${cmd.name} failed: ${msg}` }
+  }
+}
+
+// ─── Handlers ───────────────────────────────────────────────────────────────
+
+async function handleStatus(_args: string[], _principal: AuthPrincipal): Promise<string> {
+  const snap = await statusSnapshot() as {
+    queuedSpecs: number
+    inFlightSpecs: number
+    doneSpecsTotal: number
+    costTodayUsd: number
+  }
+  const cost = Number.isFinite(snap.costTodayUsd) ? snap.costTodayUsd : 0
+  return `Queue: ${snap.queuedSpecs} | In flight: ${snap.inFlightSpecs} | Cost today: $${cost.toFixed(2)} | Done: ${snap.doneSpecsTotal}`
+}
+
+async function handleQueue(_args: string[], _principal: AuthPrincipal): Promise<string> {
+  const { specs } = await builderListQueue()
+  if (specs.length === 0) return 'Queue is empty.'
+  const top = specs.slice(0, 20)
+  const lines = top.map((s, i) => `${i + 1}. ${s.replace(/\.md$/, '')}`)
+  const more = specs.length > top.length ? `\n…and ${specs.length - top.length} more.` : ''
+  return `Queue (${specs.length}):\n${lines.join('\n')}${more}`
+}
+
+async function handleDone(_args: string[], _principal: AuthPrincipal): Promise<string> {
+  const { specs, count } = await builderListDone({ limit: 5 })
+  if (specs.length === 0) return 'Nothing shipped yet.'
+  // builderListDone returns ascending by name; take the last 5 (most recent
+  // by lexicographic spec id).
+  const recent = specs.slice(-5).reverse()
+  const lines = recent.map((s, i) => `${i + 1}. ${s.replace(/\.md$/, '')}`)
+  return `Last ${recent.length} shipped (of ${count} total):\n${lines.join('\n')}`
+}
+
+async function handleCost(_args: string[], _principal: AuthPrincipal): Promise<string> {
+  const burn = await getBurnRate()
+  const byProv = Object.entries(burn.byProvider)
+    .map(([p, v]) => `${p} $${v.toFixed(2)}`)
+    .join(' · ')
+  return `Today: $${burn.today.toFixed(2)} | MTD: $${burn.monthToDate.toFixed(2)} | Remaining: $${burn.capacity.toFixed(2)}${byProv ? `\n${byProv}` : ''}`
+}
+
+interface HeartbeatRow {
+  agent: string
+  state: string
+  task: string | null
+  updated_at: string
+}
+
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  atlas: 'Atlas',
+  builder: 'Builder',
+  verifier: 'Verifier',
+  designer: 'Designer',
+  council: 'Council',
+  memory: 'Memory',
+  adela: 'Adela',
+}
+
+const STALE_AFTER_MS = 5 * 60 * 1000
+
+async function handleAgents(_args: string[], _principal: AuthPrincipal): Promise<string> {
+  const sb = getSupabaseClient()
+  if (!sb) return 'Agent health unavailable (Supabase not configured).'
+  const { data } = await sb
+    .from('atlas_agent_heartbeats')
+    .select('agent, state, task, updated_at')
+  const rows = (data ?? []) as HeartbeatRow[]
+  const byAgent = new Map<string, HeartbeatRow>()
+  for (const r of rows) byAgent.set(r.agent, r)
+
+  const now = Date.now()
+  const parts: string[] = []
+  for (const [key, label] of Object.entries(AGENT_DISPLAY_NAMES)) {
+    const row = byAgent.get(key)
+    if (!row) {
+      parts.push(`${label} ⚪`)
+      continue
+    }
+    const ageMs = now - new Date(row.updated_at).getTime()
+    if (ageMs > STALE_AFTER_MS || row.state === 'unreachable' || row.state === 'stale') {
+      parts.push(`${label} 🔴`)
+    } else if (row.state === 'idle') {
+      parts.push(`${label} 🟢`)
+    } else {
+      parts.push(`${label} 🟡`)
+    }
+  }
+  return parts.join(' · ')
+}
+
+async function handleHelp(_args: string[], principal: AuthPrincipal): Promise<string> {
+  // Viewers get only read-only commands; everyone else gets the full list.
+  const visible = principal.role === 'viewer'
+    ? COMMANDS.filter(c => VIEWER_COMMANDS.has(c.name))
+    : COMMANDS
+  const lines = visible.map(c => {
+    const sig = c.argHint ? `/${c.name} ${c.argHint}` : `/${c.name}`
+    return `  ${sig} — ${c.description}`
+  })
+  return `Available commands:\n${lines.join('\n')}\n\nVoice tip: say "slash <command>" or just "<command>".`
+}

@@ -3,6 +3,7 @@
 // never expose it to the browser or any non-Atlas service.
 
 import { createHmac } from 'crypto'
+import { splitForWhatsApp, delay, PART_SEND_DELAY_MS, TWILIO_LIMIT } from './whatsapp-split'
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN
@@ -50,6 +51,31 @@ export async function sendWhatsAppReply(
   if (!res.ok) return { error: `Twilio API error: ${res.status} ${await res.text()}` }
   const data = (await res.json()) as { sid: string }
   return { sid: data.sid }
+}
+
+// Phase 1.10aw — auto-split long bodies into Twilio-safe chunks and send each
+// part sequentially with a small delay so WhatsApp preserves order. Returns
+// the SIDs of every successfully-sent part plus any errors. Callers in the
+// inbound webhook should fire-and-forget this (don't block the 200 response)
+// so the 250ms per-part delay never trips Twilio's 10s webhook SLA.
+export async function sendWhatsAppReplyAutoSplit(
+  toNumber: string,
+  body: string,
+  limit: number = TWILIO_LIMIT,
+): Promise<{ sids: string[]; errors: string[] }> {
+  const parts = splitForWhatsApp(body, limit)
+  const sids: string[] = []
+  const errors: string[] = []
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) await delay(PART_SEND_DELAY_MS)
+    const result = await sendWhatsAppReply(toNumber, parts[i])
+    if ('error' in result) {
+      errors.push(result.error)
+    } else {
+      sids.push(result.sid)
+    }
+  }
+  return { sids, errors }
 }
 
 // Outbound WhatsApp media (used for voice-note replies). Twilio fetches the

@@ -1,6 +1,13 @@
 import { getSupabaseClient } from '../lib/supabase'
 import { dispatch } from '../lib/dispatch'
-import { sendWhatsAppReply } from '../lib/twilio'
+import { sendWhatsAppReplyAutoSplit } from '../lib/twilio'
+
+// Phase 1.10aw — every WhatsApp ping from the conductor is wrapped in the
+// auto-splitter. Most pings are short (<200 chars) and pass straight through;
+// the wrap exists so anything embedding multi-line spec content (debate
+// summaries, log excerpts) never trips Twilio's 1600-char cap.
+const sendWhatsAppReply = (to: string, body: string) =>
+  sendWhatsAppReplyAutoSplit(to, body)
 import { simple, debate, DebateResult } from '../lib/multi-brain'
 import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
