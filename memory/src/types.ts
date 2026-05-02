@@ -7,6 +7,7 @@ export type SourceName =
   | 'conversations'
   | 'adrs'
   | 'github-history'
+  | 'agent-history'
 
 export interface MemoryChunk {
   id?: string

@@ -12,6 +12,7 @@ export async function ingestSource(source: SourceName | 'all'): Promise<IngestRe
   const { ingestConversations } = await import('./ingest/conversations')
   const { ingestAdrs } = await import('./ingest/adrs')
   const { ingestGithubHistory } = await import('./ingest/github-history')
+  const { ingestAgentHistory } = await import('./ingest/agent-history')
 
   const ALL: Record<SourceName, () => Promise<IngestResult>> = {
     'master-plan': ingestMasterPlan,
@@ -22,11 +23,16 @@ export async function ingestSource(source: SourceName | 'all'): Promise<IngestRe
     'conversations': ingestConversations,
     'adrs': ingestAdrs,
     'github-history': ingestGithubHistory,
+    'agent-history': ingestAgentHistory,
   }
 
+  // agent-history is high-priority: it's the only source that closes the
+  // learning loop (failed run → memory → next spec-draft sees the lesson),
+  // so refresh it before broader codebase passes.
   const PRIORITY_ORDER: SourceName[] = [
     'master-plan',
     'workflow-doc',
+    'agent-history',
     'audits',
     'github-history',
     'adrs',

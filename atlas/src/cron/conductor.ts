@@ -1148,16 +1148,24 @@ async function memoryIngestAfterShips(trustMode: TrustMode): Promise<void> {
     const first = ingestedCommitWindows.values().next().value
     if (first !== undefined) ingestedCommitWindows.delete(first)
   }
-  try {
-    await dispatch({
-      tool: 'memory.ingest' as ToolName,
-      arguments: { source: 'github-history' },
-      initiatedBy: 'cron',
-      trustMode: 'auto',
-    })
-    console.log(`[atlas-conductor] memory.ingest fired after ${shipCommits.length} ship commit(s)`)
-  } catch (err) {
-    console.warn('[atlas-conductor] memory.ingest after-ship dispatch failed:', err)
+  // Two sources fire in sequence after each ship window:
+  //   github-history — commits & PR bodies (existing behavior)
+  //   agent-history  — verifier_runs + designer_runs failures (audit C1a)
+  // The second source is what closes the learning loop: spec-draft (C1b)
+  // pulls from this index to surface "we already failed on this scope" before
+  // Council writes a fresh spec.
+  for (const source of ['github-history', 'agent-history'] as const) {
+    try {
+      await dispatch({
+        tool: 'memory.ingest' as ToolName,
+        arguments: { source },
+        initiatedBy: 'cron',
+        trustMode: 'auto',
+      })
+      console.log(`[atlas-conductor] memory.ingest(${source}) fired after ${shipCommits.length} ship commit(s)`)
+    } catch (err) {
+      console.warn(`[atlas-conductor] memory.ingest(${source}) after-ship dispatch failed:`, err)
+    }
   }
 }
 
