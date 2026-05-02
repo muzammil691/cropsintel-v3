@@ -1,7 +1,12 @@
 import { VerificationResult } from '../types'
 import { getSupabaseClient } from './supabase'
 
-export type UnknownReason = 'spec_not_found' | 'sync_failed' | 'judge_unreachable' | 'verify_crashed'
+export type UnknownReason =
+  | 'spec_not_found'
+  | 'sync_failed'
+  | 'judge_unreachable'
+  | 'verify_crashed'
+  | 'db_write_failed'
 
 export async function writeVerifierRun(
   result: VerificationResult,
@@ -28,7 +33,12 @@ export async function writeVerifierRun(
   })
 
   if (error) {
+    // Throw, don't swallow. The caller decides what to do (downgrade to
+    // verdict=unknown). Silently logging caused false-passes when Supabase
+    // was unreachable: server.ts would still respond verdict=pass even
+    // though no row was written, so agent-loop shipped unverified commits.
     console.error('[verifier] Failed to write audit log:', error.message)
+    throw new Error(`verifier_runs insert failed: ${error.message}`)
   }
 }
 
@@ -65,9 +75,9 @@ export async function writeUnknownVerifierRun(
 
   if (error) {
     console.error('[verifier] Failed to write unknown audit log:', error.message)
-  } else {
-    console.log(
-      `[verifier] wrote unknown verifier_runs row for ${taskId} @ ${commitSha.slice(0, 8)} (reason=${unknownReason})`,
-    )
+    throw new Error(`verifier_runs unknown insert failed: ${error.message}`)
   }
+  console.log(
+    `[verifier] wrote unknown verifier_runs row for ${taskId} @ ${commitSha.slice(0, 8)} (reason=${unknownReason})`,
+  )
 }

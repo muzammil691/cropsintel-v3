@@ -112,14 +112,19 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
     console.log(`[verifier-server] task_id '${task_id}' not found — returning unknown verdict`)
     // Write a row anyway so the workflow-trace invariant checker can confirm
     // the audit happened. passed=NULL signals "no signal" rather than pass/fail.
-    await writeUnknownVerifierRun(
-      task_id,
-      null,
-      head_after,
-      'gate',
-      'spec_not_found',
-      Date.now() - auditStartedAt,
-    )
+    try {
+      await writeUnknownVerifierRun(
+        task_id,
+        null,
+        head_after,
+        'gate',
+        'spec_not_found',
+        Date.now() - auditStartedAt,
+      )
+    } catch (writeErr) {
+      const wmsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
+      console.error(`[verifier-server] CRITICAL: spec_not_found row write failed: ${wmsg}`)
+    }
     send(res, 200, {
       verdict: 'unknown',
       confidence: 0,
@@ -137,14 +142,19 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   // a stale tree produces misleading gaps.
   const synced = await syncRepoToHead(REPO_ROOT, head_after)
   if (!synced) {
-    await writeUnknownVerifierRun(
-      task_id,
-      taskSpecPath,
-      head_after,
-      'gate',
-      'sync_failed',
-      Date.now() - auditStartedAt,
-    )
+    try {
+      await writeUnknownVerifierRun(
+        task_id,
+        taskSpecPath,
+        head_after,
+        'gate',
+        'sync_failed',
+        Date.now() - auditStartedAt,
+      )
+    } catch (writeErr) {
+      const wmsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
+      console.error(`[verifier-server] CRITICAL: sync_failed row write failed: ${wmsg}`)
+    }
     send(res, 200, {
       verdict: 'unknown',
       confidence: 0,
@@ -154,59 +164,94 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
     return
   }
 
+  let result
   try {
-    const result = await verify(taskSpecPath, head_after, 'gate')
-    await writeVerifierRun(result, taskSpecPath, head_after, 'gate')
-
-    const hasHardFail = result.gaps.some(g => g.severity === 'fail')
-    const verdict = result.passed ? 'pass' : 'fail'
-
-    // Confidence: programmatic hard fails → high confidence (0.85 ≥ threshold)
-    // warn-only fails → low confidence (0.55 < threshold, won't block)
-    // pass → high confidence (0.95)
-    let confidence: number
-    if (result.passed) {
-      confidence = 0.95
-    } else if (hasHardFail) {
-      confidence = 0.85
-    } else {
-      confidence = 0.55
-    }
-
-    send(res, 200, {
-      verdict,
-      confidence,
-      gaps: result.gaps.map(g => ({
-        check: g.check,
-        description: `${g.check}: ${g.actual}`,
-        severity: g.severity === 'fail' ? 'high' : 'medium',
-        fix: g.remediation,
-      })),
-      ai_judgment: result.judgmentCallNotes || undefined,
-      audit_run_id: randomUUID(),
-    })
+    result = await verify(taskSpecPath, head_after, 'gate')
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[verifier-server] verify() error:', msg)
-    // Record the crash so the workflow-trace checker still sees a row for
-    // this commit; downstream tooling can read unknown_reason='verify_crashed'
-    // to know why no real verdict appeared.
-    await writeUnknownVerifierRun(
-      task_id,
-      taskSpecPath,
-      head_after,
-      'gate',
-      'verify_crashed',
-      Date.now() - auditStartedAt,
-    )
-    // Don't block on verifier errors
+    // Recovery write may itself reject (DB down). Don't propagate — log
+    // CRITICAL and still respond verdict=unknown so agent-loop isn't blocked
+    // by a Verifier that can't even write its own crash row.
+    try {
+      await writeUnknownVerifierRun(
+        task_id,
+        taskSpecPath,
+        head_after,
+        'gate',
+        'verify_crashed',
+        Date.now() - auditStartedAt,
+      )
+    } catch (writeErr) {
+      const wmsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
+      console.error(`[verifier-server] CRITICAL: crash-row write also failed: ${wmsg}`)
+    }
     send(res, 200, {
       verdict: 'unknown',
       confidence: 0,
       gaps: [],
       audit_run_id: randomUUID(),
     })
+    return
   }
+
+  // Persist the audit row BEFORE responding. If the write fails, we must
+  // NOT reply verdict=pass — that would falsely attest a commit we never
+  // recorded. Downgrade to verdict=unknown with unknown_reason='db_write_failed'.
+  try {
+    await writeVerifierRun(result, taskSpecPath, head_after, 'gate')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[verifier-server] writeVerifierRun rejected — downgrading to verdict=unknown: ${msg}`)
+    try {
+      await writeUnknownVerifierRun(
+        task_id,
+        taskSpecPath,
+        head_after,
+        'gate',
+        'db_write_failed',
+        Date.now() - auditStartedAt,
+      )
+    } catch (writeErr) {
+      const wmsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
+      console.error(`[verifier-server] CRITICAL: db_write_failed recovery row also failed: ${wmsg}`)
+    }
+    send(res, 200, {
+      verdict: 'unknown',
+      confidence: 0,
+      gaps: [],
+      audit_run_id: randomUUID(),
+    })
+    return
+  }
+
+  const hasHardFail = result.gaps.some(g => g.severity === 'fail')
+  const verdict = result.passed ? 'pass' : 'fail'
+
+  // Confidence: programmatic hard fails → high confidence (0.85 ≥ threshold)
+  // warn-only fails → low confidence (0.55 < threshold, won't block)
+  // pass → high confidence (0.95)
+  let confidence: number
+  if (result.passed) {
+    confidence = 0.95
+  } else if (hasHardFail) {
+    confidence = 0.85
+  } else {
+    confidence = 0.55
+  }
+
+  send(res, 200, {
+    verdict,
+    confidence,
+    gaps: result.gaps.map(g => ({
+      check: g.check,
+      description: `${g.check}: ${g.actual}`,
+      severity: g.severity === 'fail' ? 'high' : 'medium',
+      fix: g.remediation,
+    })),
+    ai_judgment: result.judgmentCallNotes || undefined,
+    audit_run_id: randomUUID(),
+  })
 }
 
 async function handleResearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
