@@ -12,6 +12,7 @@ import {
   type PrimaryDomain,
 } from './build-attempts'
 import { preflightCheck, renderPreflightSection } from './preflight-verifier'
+import { setFrontmatterField } from './frontmatter'
 
 const COUNCIL_URL = process.env.COUNCIL_URL ?? 'https://just-reflection-production.up.railway.app'
 const COUNCIL_TOKEN = process.env.COUNCIL_API_TOKEN
@@ -419,11 +420,34 @@ export async function draftSpec(phase: string, goal: string): Promise<DraftResul
     })
   }
 
+  // ─── Step 4c: primary-domain frontmatter tag (Phase 4) ─────────────────────
+  // Classify and inject into the YAML frontmatter so Builder + future per-domain
+  // routing can read it without re-parsing the body. Routing itself is Phase 4b
+  // (deferred); today Builder logs the value but still uses Claude Code.
+  const primaryDomain = classifyPrimaryDomain(markdown)
+  try {
+    markdown = setFrontmatterField(markdown, 'primaryDomain', primaryDomain)
+    steps.push({
+      name: 'frontmatter.primary_domain',
+      durationMs: 0,
+      costUsd: 0,
+      ok: true,
+      note: `tagged primary-domain=${primaryDomain}`,
+    })
+  } catch (err) {
+    steps.push({
+      name: 'frontmatter.primary_domain',
+      durationMs: 0,
+      costUsd: 0,
+      ok: false,
+      note: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   // ─── Step 5: Pre-build memory record (Phase 2 of agent-loop redesign) ──────
   // Insert a 'planned' row into atlas_build_attempts so the build is bookended
   // in memory before Builder picks it up. Best-effort: any failure here does
   // not block queueing — the spec still ships, we just lose the trace.
-  const primaryDomain = classifyPrimaryDomain(markdown)
   let buildAttemptId: string | undefined
   try {
     const recorded = await recordBuildAttempt({

@@ -530,6 +530,14 @@ run_task() {
   fi
   echo "$LOOP_TAG using model: $MODEL"
 
+  # Phase 4 of agent-loop redesign: surface the spec's primary-domain tag for
+  # observability. Today every domain still routes to Claude Code. Phase 4b
+  # (deferred) wires an OpenAI Codex sibling for primary-domain=frontend specs.
+  local TASK_DOMAIN=$(grep -m1 "^primary-domain:" "$IN_PROGRESS_FILE" | sed 's/^primary-domain:[[:space:]]*//' | tr -d '"' | tr -d "'" )
+  if [ -n "$TASK_DOMAIN" ]; then
+    echo "$LOOP_TAG primary-domain: $TASK_DOMAIN (routing: claude-code; per-domain routing pending Phase 4b)"
+  fi
+
   # DIAGNOSTIC PASS: dump claude version + help BEFORE the actual run.
   # Tasks completing in 2-7s post-fix #1 means flags were rejected. We need to
   # SEE what flags this version of claude-code accepts. Output goes to log file.

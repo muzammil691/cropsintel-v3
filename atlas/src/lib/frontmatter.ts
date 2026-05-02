@@ -7,6 +7,14 @@ export interface SpecFrontmatter {
   dependsOn?: string[]
   blocks?: string[]
   model?: string
+  /**
+   * Phase 4 of agent-loop redesign: domain tag set by Atlas when the spec is
+   * drafted. Reserved values: 'frontend' | 'analytical' | 'research' | 'mixed'.
+   * Today Builder logs the value but still routes to Claude Code (mixed-domain
+   * specs always do; single-domain specs follow in Phase 4b when an OpenAI
+   * Codex sibling Builder exists).
+   */
+  primaryDomain?: 'frontend' | 'analytical' | 'research' | 'mixed'
   // Pass-through for any other scalar fields we don't model explicitly.
   extra?: Record<string, string>
 }
@@ -98,6 +106,11 @@ function parseFrontmatterLines(lines: string[]): SpecFrontmatter {
       fm.blocks = parseInlineList(stripped)
     } else if (key === 'model') {
       fm.model = stripped
+    } else if (key === 'primary-domain' || key === 'primaryDomain') {
+      if (stripped === 'frontend' || stripped === 'analytical' ||
+          stripped === 'research' || stripped === 'mixed') {
+        fm.primaryDomain = stripped
+      }
     } else {
       fm.extra = fm.extra ?? {}
       fm.extra[key] = stripped
@@ -146,6 +159,9 @@ export function serializeFrontmatter(fm: SpecFrontmatter): string {
   }
   if (fm.model !== undefined) {
     lines.push(`model: ${fm.model}`)
+  }
+  if (fm.primaryDomain !== undefined) {
+    lines.push(`primary-domain: ${fm.primaryDomain}`)
   }
   if (fm.extra) {
     for (const [k, v] of Object.entries(fm.extra)) {
