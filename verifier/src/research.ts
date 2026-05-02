@@ -37,6 +37,32 @@ const ANTHROPIC_MODEL = 'claude-opus-4-7'
 const OPENAI_MODEL = 'gpt-4o'
 const GEMINI_MODEL = 'gemini-2.5-pro'
 
+// Phase 5 of agent-loop redesign — role-specific lenses for the gap-debate.
+// Mirrors atlas/src/lib/multi-brain.ts so post-failure remediation gets the
+// same orthogonal critique as the pre-build debate. Each model speaks ONLY
+// from its specialty so we get three lenses on one set of gaps instead of
+// three overlapping critiques.
+const ANALYTICAL_LENS =
+  'You are the analytical reviewer in a 3-way diagnosis. Your specialty: ' +
+  'architectural soundness, type safety, business logic, foundation-first ' +
+  'dependency order, NEVER-list violations, security (no AI keys client-side, ' +
+  'RLS on new tables, info walls). Diagnose the gaps from THIS lens — trust ' +
+  'your peers (frontend & research) to cover their domains.'
+
+const FRONTEND_LENS =
+  'You are the frontend reviewer in a 3-way diagnosis. Your specialty: ' +
+  'shadcn-component fit, a11y (aria-label, role, focus-visible:ring, keyboard ' +
+  'nav), responsive layout (sm:/md:/lg: prefixes), motion (transition-colors ' +
+  'duration-200), design tokens, loading skeletons, ≥44px touch targets. ' +
+  'Diagnose the gaps from THIS lens — trust your peers to cover analytics ' +
+  'and research.'
+
+const RESEARCH_LENS =
+  'You are the research reviewer in a 3-way diagnosis. Your specialty: ' +
+  'V1/V2 audit lessons, master plan §11 phase ordering, workflow doc ' +
+  'cross-references, prior-art alignment, similar past failures. Diagnose ' +
+  'the gaps from THIS lens — trust your peers to cover analytics and frontend.'
+
 const MEMORY_URL = process.env.MEMORY_URL ?? ''
 const MEMORY_API_TOKEN = process.env.MEMORY_API_TOKEN ?? ''
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? ''
@@ -174,9 +200,15 @@ interface BrainVote {
   error?: string
 }
 
-async function askClaude(prompt: string): Promise<BrainVote> {
+async function askClaude(prompt: string, system?: string): Promise<BrainVote> {
   if (!ANTHROPIC_API_KEY) return { provider: 'claude', model: ANTHROPIC_MODEL, ok: false, raw: '', error: 'ANTHROPIC_API_KEY not set' }
   try {
+    const body: Record<string, unknown> = {
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
+    }
+    if (system) body.system = system
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -184,11 +216,7 @@ async function askClaude(prompt: string): Promise<BrainVote> {
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(30000),
     })
     if (!res.ok) {
@@ -202,13 +230,16 @@ async function askClaude(prompt: string): Promise<BrainVote> {
   }
 }
 
-async function askOpenAI(prompt: string): Promise<BrainVote> {
+async function askOpenAI(prompt: string, system?: string): Promise<BrainVote> {
   if (!OPENAI_API_KEY) return { provider: 'openai', model: OPENAI_MODEL, ok: false, raw: '', error: 'OPENAI_API_KEY not set' }
   try {
     const client = new OpenAI({ apiKey: OPENAI_API_KEY })
+    const messages: Array<{ role: 'system' | 'user'; content: string }> = []
+    if (system) messages.push({ role: 'system', content: system })
+    messages.push({ role: 'user', content: prompt })
     const res = await client.chat.completions.create({
       model: OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
+      messages,
       response_format: { type: 'json_object' },
       max_tokens: 1024,
     })
@@ -219,12 +250,13 @@ async function askOpenAI(prompt: string): Promise<BrainVote> {
   }
 }
 
-async function askGemini(prompt: string): Promise<BrainVote> {
+async function askGemini(prompt: string, system?: string): Promise<BrainVote> {
   if (!GOOGLE_API_KEY) return { provider: 'gemini', model: GEMINI_MODEL, ok: false, raw: '', error: 'GOOGLE_API_KEY not set' }
   try {
     const ai = new GoogleGenerativeAI(GOOGLE_API_KEY)
     const model = ai.getGenerativeModel({ model: GEMINI_MODEL, generationConfig: { responseMimeType: 'application/json' } })
-    const res = await model.generateContent(prompt)
+    const fullPrompt = system ? `${system}\n\n${prompt}` : prompt
+    const res = await model.generateContent(fullPrompt)
     const text = res.response.text()
     return { provider: 'gemini', model: GEMINI_MODEL, ok: true, raw: text, parsed: parseStructured(text) }
   } catch (err) {
@@ -293,10 +325,13 @@ export async function runResearch(input: ResearchInput): Promise<ResearchOutput>
   }
 
   const debatePrompt = buildDebatePrompt(input, similar)
+  // Each brain diagnoses from its specialty (Phase 5 of agent-loop redesign).
+  // Same prompt, different lenses → three orthogonal critiques rather than
+  // three overlapping ones.
   const [claudeVote, openaiVote, geminiVote] = await Promise.all([
-    askClaude(debatePrompt),
-    askOpenAI(debatePrompt),
-    askGemini(debatePrompt),
+    askClaude(debatePrompt, ANALYTICAL_LENS),
+    askOpenAI(debatePrompt, FRONTEND_LENS),
+    askGemini(debatePrompt, RESEARCH_LENS),
   ])
 
   const consolidated = consolidate([claudeVote, openaiVote, geminiVote])
