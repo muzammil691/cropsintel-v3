@@ -126,7 +126,7 @@ export function AssignmentRow({ assignment, canAct, onResolve, busy }: Assignmen
             href={`/atlas?tab=artifacts&focus=${encodeURIComponent(assignment.artifact_ref)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
+            className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
           >
             <ExternalLink className="size-3" /> View detail
           </a>

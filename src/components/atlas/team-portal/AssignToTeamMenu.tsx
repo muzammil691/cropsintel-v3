@@ -112,7 +112,7 @@ export function AssignToTeamMenu({
               onClick={() => void handlePick(null, 'all admins')}
               disabled={busy}
               className={cn(
-                'w-full text-left px-3 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-900 focus-visible:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800',
+                'w-full text-left px-3 py-1.5 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-900 focus-visible:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800',
                 lastAssignedId === 'broadcast' && 'bg-emerald-50 dark:bg-emerald-950/30',
               )}
             >
@@ -141,7 +141,7 @@ export function AssignToTeamMenu({
                   onClick={() => void handlePick(m.id, label)}
                   disabled={busy}
                   className={cn(
-                    'w-full text-left px-3 py-1.5 transition-colors duration-150 hover:bg-slate-50 dark:hover:bg-slate-900 focus-visible:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800',
+                    'w-full text-left px-3 py-1.5 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-900 focus-visible:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800',
                     lastAssignedId === m.id && 'bg-emerald-50 dark:bg-emerald-950/30',
                   )}
                 >

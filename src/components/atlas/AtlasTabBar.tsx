@@ -1,3 +1,4 @@
+import { useRef, type KeyboardEvent } from 'react'
 import { Layers, Inbox, Activity, FileSearch, Workflow, Boxes, Users, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -31,6 +32,39 @@ export const ATLAS_TABS: TabSpec[] = [
 ]
 
 export function AtlasTabBar({ active, onChange, badges, orientation = 'horizontal' }: AtlasTabBarProps) {
+  // Refs for each tab button so keyboard nav can call .focus() after activating.
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  function handleKeyDown(e: KeyboardEvent<HTMLButtonElement>, currentIdx: number): void {
+    let nextIdx: number | null = null
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIdx = (currentIdx + 1) % ATLAS_TABS.length
+        break
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIdx = (currentIdx - 1 + ATLAS_TABS.length) % ATLAS_TABS.length
+        break
+      case 'Home':
+        nextIdx = 0
+        break
+      case 'End':
+        nextIdx = ATLAS_TABS.length - 1
+        break
+      default:
+        return
+    }
+    e.preventDefault()
+    if (nextIdx !== null) {
+      const nextKey = ATLAS_TABS[nextIdx].key
+      onChange(nextKey)
+      // Defer focus until after re-render so the new tab is the focusable one
+      // (tabIndex flips from -1 to 0 on activation).
+      requestAnimationFrame(() => tabRefs.current[nextIdx!]?.focus())
+    }
+  }
+
   return (
     <div
       role="tablist"
@@ -42,20 +76,22 @@ export function AtlasTabBar({ active, onChange, badges, orientation = 'horizonta
           : 'flex-col border-r border-slate-200 dark:border-slate-800',
       )}
     >
-      {ATLAS_TABS.map((t) => {
+      {ATLAS_TABS.map((t, idx) => {
         const Icon = t.icon
         const isActive = t.key === active
         const badge = badges[t.key]
         return (
           <button
             key={t.key}
+            ref={(el) => { tabRefs.current[idx] = el }}
             type="button"
             role="tab"
             aria-selected={isActive}
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(t.key)}
+            onKeyDown={(e) => handleKeyDown(e, idx)}
             className={cn(
-              'relative inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium whitespace-nowrap transition-colors duration-150',
+              'relative inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium whitespace-nowrap transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-inset',
               isActive
                 ? 'text-emerald-700 dark:text-emerald-300 border-b-2 border-emerald-500'
                 : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 border-b-2 border-transparent',

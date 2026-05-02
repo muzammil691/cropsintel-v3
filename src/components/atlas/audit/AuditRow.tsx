@@ -94,6 +94,11 @@ export function AuditRow({ row, onAction, recheckBusy }: AuditRowProps) {
                 onClick={() => onAction('recheck', row)}
                 disabled={recheckBusy}
                 title="Re-run the audit at current HEAD; if it passes the row drops off the list"
+                ariaLabel={
+                  recheckBusy
+                    ? `Rechecking ${row.source} for ${row.task_id}…`
+                    : `Recheck ${row.source} audit for ${row.task_id} at current HEAD`
+                }
               >
                 <RefreshCw
                   className={cn('size-3 mr-0.5', recheckBusy && 'animate-spin')}
@@ -114,11 +119,13 @@ function ActionButton({
   onClick,
   disabled,
   title,
+  ariaLabel,
 }: {
   children: React.ReactNode
   onClick: () => void
   disabled?: boolean
   title?: string
+  ariaLabel?: string
 }) {
   return (
     <button
@@ -126,7 +133,8 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className="inline-flex items-center rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 disabled:opacity-60 disabled:cursor-not-allowed"
+      aria-label={ariaLabel}
+      className="inline-flex items-center rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 disabled:opacity-50 disabled:cursor-not-allowed"
     >
       {children}
     </button>

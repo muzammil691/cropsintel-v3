@@ -13,7 +13,7 @@ export function CascadeChip({ relation, className }: CascadeChipProps) {
   if (relation.kind === 'unknown') return null
 
   const base =
-    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border transition-colors duration-150'
+    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border transition-colors duration-200'
 
   if (relation.kind === 'introduced-here') {
     return (

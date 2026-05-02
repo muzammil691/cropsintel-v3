@@ -27,7 +27,7 @@ export function CombinedDiagnosisCard({
   const totalProcessed = result.results.length
 
   const buttonFocus =
-    'transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50'
+    'transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50'
 
   async function handleQueueAutoFixes() {
     if (busy || auto.length === 0) return

@@ -190,7 +190,7 @@ export function ReportForm({ onSubmitted }: ReportFormProps) {
                 type="button"
                 onClick={() => removeAttachment(a.id)}
                 aria-label={`Remove ${a.name}`}
-                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
               >
                 ×
               </button>
