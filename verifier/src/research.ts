@@ -328,11 +328,30 @@ export async function runResearch(input: ResearchInput): Promise<ResearchOutput>
   // Each brain diagnoses from its specialty (Phase 5 of agent-loop redesign).
   // Same prompt, different lenses → three orthogonal critiques rather than
   // three overlapping ones.
-  const [claudeVote, openaiVote, geminiVote] = await Promise.all([
+  let [claudeVote, openaiVote, geminiVote] = await Promise.all([
     askClaude(debatePrompt, ANALYTICAL_LENS),
     askOpenAI(debatePrompt, FRONTEND_LENS),
     askGemini(debatePrompt, RESEARCH_LENS),
   ])
+
+  // Step 2 of agent-loop stabilization: when Gemini fails transiently
+  // (503 / overloaded / timeout — the recurring pattern this week), fall
+  // back to a second GPT-4o call carrying the RESEARCH_LENS so the
+  // consolidator gets 3 votes instead of 2 + a hole.
+  if (!geminiVote.ok) {
+    const transient = /503|429|overloaded|service unavailable|high demand|timeout|etimedout/i.test(geminiVote.error ?? '')
+    if (transient) {
+      console.warn(`[research] Gemini transient failure — falling back to GPT-4o with RESEARCH_LENS`)
+      try {
+        const fallback = await askOpenAI(debatePrompt, RESEARCH_LENS)
+        if (fallback.ok) {
+          geminiVote = { ...fallback, provider: 'gemini-fallback-via-gpt4o' }
+        }
+      } catch (fbErr) {
+        console.error('[research] GPT-4o research fallback also failed:', fbErr instanceof Error ? fbErr.message : fbErr)
+      }
+    }
+  }
 
   const consolidated = consolidate([claudeVote, openaiVote, geminiVote])
 

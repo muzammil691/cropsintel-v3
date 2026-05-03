@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { AIJudgment, Gap, TaskSpec } from '../types'
+import { askGPT4oSecondJudge, isGeminiTransientFailure } from './gpt-4o-second-judge'
 
 function buildPrompt(spec: TaskSpec, fullRepoCode: string): string {
   return `You are a strict code quality reviewer for CropsIntel V3 with access to the entire codebase.
@@ -105,6 +106,30 @@ export async function askGemini25ProJudgment(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[verifier] Gemini judgment failed:', msg)
+
+    // Step 2 of agent-loop stabilization: fall back to GPT-4o as a second
+    // judge when Gemini is throwing transient errors (503 / 429 / overloaded /
+    // network timeouts). The fallback gives us back a real second opinion
+    // instead of leaving the verifier with only one judge (o3) and a
+    // gemini-judgment-failed gap that drives the aggregator into "disagree
+    // → escalate" loops.
+    //
+    // We only fall back on TRANSIENT failures. If Gemini returned a substantive
+    // response that we couldn't parse, that's a different problem and we keep
+    // the original error path so it surfaces clearly.
+    if (isGeminiTransientFailure(err)) {
+      console.warn('[verifier] Gemini transient failure — falling back to GPT-4o second judge')
+      try {
+        const fallback = await askGPT4oSecondJudge(spec, fullRepoCode)
+        return fallback
+      } catch (fbErr) {
+        const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr)
+        console.error('[verifier] GPT-4o fallback also failed:', fbMsg)
+        // Fall through to the original failure response below — both judges
+        // unavailable, manual review needed.
+      }
+    }
+
     return {
       passed: false,
       gaps: [{

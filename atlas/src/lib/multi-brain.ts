@@ -136,6 +136,33 @@ export async function debate(
       costUsd: geminiRes.value.costUsd, durationMs: Date.now() - start,
     })
     await recordCost('google', 'atlas', DEBATE_MODEL_GEMINI, geminiRes.value.inputTokens, geminiRes.value.outputTokens, geminiRes.value.costUsd)
+  } else {
+    // Step 2 of agent-loop stabilization: when Gemini fails (503/overloaded
+    // is the recurring pattern), fall back to GPT-4o with the RESEARCH_LENS
+    // so we still get 3 votes. Without this, every Gemini outage forced a
+    // 2/3 → 'no quorum' → escalate-to-user loop.
+    const reason = geminiRes.reason instanceof Error ? geminiRes.reason.message : String(geminiRes.reason ?? '')
+    const transient = /503|429|overloaded|service unavailable|high demand|timeout|etimedout/i.test(reason)
+    if (transient) {
+      console.warn(`[multi-brain] Gemini transient failure (${reason.slice(0, 80)}) — falling back to GPT-4o with RESEARCH_LENS`)
+      try {
+        const fallback = await askOpenAI({
+          prompt: debatePrompt,
+          model: DEBATE_MODEL_OPENAI,
+          systemPrompt: composeLensPrompt(opts?.systemPrompt, RESEARCH_LENS),
+        })
+        responses.push({
+          provider: 'openai',
+          model: `${DEBATE_MODEL_OPENAI}+research-fallback`,
+          content: fallback.content,
+          costUsd: fallback.costUsd,
+          durationMs: Date.now() - start,
+        })
+        await recordCost('openai', 'atlas', DEBATE_MODEL_OPENAI, fallback.inputTokens, fallback.outputTokens, fallback.costUsd)
+      } catch (fbErr) {
+        console.error('[multi-brain] GPT-4o research fallback also failed:', fbErr instanceof Error ? fbErr.message : fbErr)
+      }
+    }
   }
 
   const verdicts = responses.map(r => extractVerdict(r.content)).filter(Boolean) as string[]
