@@ -3144,6 +3144,24 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    if (url.split('?')[0] === '/atlas/health/build-loop' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { attempts: [], ts: new Date().toISOString() }); return }
+      const queryStr = url.includes('?') ? url.split('?')[1] : ''
+      const params = new URLSearchParams(queryStr)
+      const limitRaw = params.get('limit')
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? '3', 10) || 3, 1), 10)
+      const { data, error } = await sb
+        .from('atlas_build_attempts')
+        .select('id, task_id, spec_filename, primary_domain, status, attempt_number, planned_at, shipped_at, verified_at, completed_at')
+        .order('planned_at', { ascending: false })
+        .limit(limit)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { attempts: data ?? [], ts: new Date().toISOString() })
+      return
+    }
+
     // POST /atlas/audit/recheck { kind, task_id }
     // Re-runs verifier or designer for a task at current HEAD. If the new
     // verdict is pass, the audit-feed dedup hides all the older fail rows
