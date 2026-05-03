@@ -264,16 +264,34 @@ run_verifier_gate() {
     -H "Content-Type: application/json" \
     -d "{\"task_id\":\"$task_id\",\"head_before\":\"$head_before\",\"head_after\":\"$head_after\"}" \
     2>&1) || {
-    echo "$LOOP_TAG WARN: verifier unreachable, pushing anyway: $response" >&2
-    return 0
+    # Step 3 of agent-loop stabilization: treat verifier-unreachable as BLOCK,
+    # not silent-pass. Without this, every Verifier outage shipped unverified
+    # commits — defeats the purpose of having a gate. Operator gets WhatsApp
+    # ping so they can investigate.
+    echo "$LOOP_TAG verifier UNREACHABLE — BLOCKING push: $response" >&2
+    /usr/local/bin/notify-whatsapp.sh "🛑 Verifier unreachable for $task_id @ ${head_after:0:8}. Push blocked. Investigate verifier service." 2>/dev/null || true
+    git reset --hard "$head_before"
+    return 1
   }
 
   local verdict=$(echo "$response" | jq -r '.verdict // "unknown"')
   local confidence=$(echo "$response" | jq -r '.confidence // 0')
+  local unknown_reason=$(echo "$response" | jq -r '.unknown_reason // ""')
   echo "$LOOP_TAG verifier verdict: $verdict (confidence $confidence)"
 
   if [ "$verdict" = "pass" ]; then
     return 0
+  fi
+
+  # Step 3 of agent-loop stabilization: handle verdict='unknown' explicitly
+  # instead of letting it fall through to silent-pass. The verifier returns
+  # unknown for: spec_not_found, sync_failed, verify_crashed, db_write_failed,
+  # judge_unreachable. None of these mean "the code is fine."
+  if [ "$verdict" = "unknown" ]; then
+    echo "$LOOP_TAG verifier verdict UNKNOWN (reason=$unknown_reason) — BLOCKING push" >&2
+    /usr/local/bin/notify-whatsapp.sh "🛑 Verifier verdict=unknown for $task_id @ ${head_after:0:8} (reason=${unknown_reason:-unspecified}). Push blocked. Manual review needed." 2>/dev/null || true
+    git reset --hard "$head_before"
+    return 1
   fi
 
   if [ "$verdict" = "fail" ]; then
