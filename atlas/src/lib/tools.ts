@@ -298,16 +298,46 @@ export async function verifierAudit(taskId: string, headBefore?: string, headAft
   return res.json()
 }
 
-export async function verifierRecentRuns(limit = 10): Promise<unknown> {
+export async function verifierRecentRuns(
+  limit = 10,
+  opts?: { includeAll?: boolean },
+): Promise<unknown> {
   const sb = getSupabaseClient()
   if (!sb) throw new Error('Supabase client not configured')
+
+  // Step 4 of agent-loop stabilization: apply the same latest-per-task dedup
+  // that /atlas/verifier/runs already uses (shipped 365a1b5). Without this,
+  // Atlas's status reports keep surfacing ancient fails for tasks that have
+  // since passed — operator reads "5 of 10 null verdicts" alarms when in
+  // reality those rows are weeks old.
+  //
+  // Pulls a wider window then collapses. opts.includeAll bypasses the
+  // collapse for forensic queries.
+  const widerLimit = opts?.includeAll ? limit : Math.max(limit * 5, 200)
   const { data, error } = await sb
     .from('verifier_runs')
-    .select('id, task_id, commit_sha, mode, passed, gaps, duration_ms, ran_at')
+    .select('id, task_id, commit_sha, mode, passed, unknown_reason, gaps, duration_ms, ran_at')
     .order('ran_at', { ascending: false })
-    .limit(limit)
+    .limit(widerLimit)
   if (error) throw new Error(`verifier_runs query failed: ${error.message ?? JSON.stringify(error)}`)
-  return { runs: data ?? [] }
+
+  const rows = data ?? []
+  if (opts?.includeAll) return { runs: rows }
+
+  // Latest-per-task dedup. Drop tasks whose latest verdict is pass.
+  // Keep passed=null rows so operator sees genuinely-indeterminate state
+  // (db_write_failed / sync_failed / etc). limit applies after dedup.
+  const seen = new Set<string>()
+  const filtered: typeof rows = []
+  for (const r of rows) {
+    const tid = r.task_id ?? ''
+    if (!tid || seen.has(tid)) continue
+    seen.add(tid)
+    if (r.passed === true) continue
+    filtered.push(r)
+    if (filtered.length >= limit) break
+  }
+  return { runs: filtered }
 }
 
 // ─── Council ────────────────────────────────────────────────────────────────
