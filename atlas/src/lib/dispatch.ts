@@ -88,6 +88,11 @@ const READ_ONLY_TOOLS = new Set<ToolName>([
   // and stays passive. We allow it in all non-stopped modes; the tool itself enforces
   // the mode-specific queueing decision.
   'atlas.propose_and_queue',
+  // Plan-aware draft tools (A.6): produce markdown + diff but do NOT write — apply
+  // is gated behind plan.apply_amendment, which IS write-capable.
+  'plan.draft_amendment',
+  'plan.draft_new',
+  'plan.list_states',
 ])
 
 export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {

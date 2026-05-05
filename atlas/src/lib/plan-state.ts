@@ -115,6 +115,21 @@ export async function getPlanNodeState(planNodeId: string): Promise<PlanNodeStat
 }
 
 /**
+ * List ALL active state rows (no filter). Used by chat tool plan.list_states
+ * to answer "which phases are voided / queued / suggested?" without an id list.
+ */
+export async function listAllActivePlanNodeStates(): Promise<PlanNodeStateRow[]> {
+  const sb = getSupabaseClient()
+  if (!sb) return []
+  const { data } = await sb
+    .from('atlas_plan_node_state')
+    .select('*')
+    .is('cleared_at', null)
+    .order('set_at', { ascending: false })
+  return (data ?? []) as PlanNodeStateRow[]
+}
+
+/**
  * Bulk fetch — returns a Map<plan_node_id, PlanNodeStateRow[]> for the
  * provided node ids. Used by the Plan tab's GET /atlas/plan endpoint to
  * paint state overlays in a single round-trip.

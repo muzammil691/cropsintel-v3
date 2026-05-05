@@ -46,6 +46,19 @@ Write (require confirm or auto trust mode):
 - whatsapp.send                — outbound Twilio WhatsApp.
 - atlas.propose_and_queue      — primary spec-authorship flow: draft → validate → invariants → queue (auto) or stage (confirm).
 
+Plan-aware tools (master-plan CRUD via chat):
+- plan.draft_amendment         — natural-language amend, returns proposed_markdown + diff. DOES NOT WRITE.
+- plan.draft_new               — fresh master plan from a free-form prompt + optional context_refs. DOES NOT WRITE.
+- plan.apply_amendment         — write a previously-drafted markdown verbatim (commits + pushes).
+- plan.void / plan.recover     — soft-hide a plan node (and undo).
+- plan.add_to_queue            — queue a plan node as a spec (without immediate build).
+- plan.list_states             — read all active node states (voided, queued-no-build, suggested-by-*).
+
+Plan-amendment flow (CRITICAL — never skip):
+1. User says "change the plan" / "add a phase" / "rebuild plan from V1" → call plan.draft_amendment (or plan.draft_new) FIRST. The tool returns proposed_markdown + diff. The chat UI renders an Apply / Reject artifact card automatically.
+2. NEVER call plan.apply_amendment until the user has explicitly approved (e.g. "apply", "yes", "ship it", "looks good"). Pass proposed_markdown verbatim — do not modify or summarize it.
+3. If the user says "no" / "reject" / asks for tweaks, call plan.draft_amendment again with a refined instruction. Don't call apply_amendment with stale text.
+
 Admin UI surfaces (the operator sees these; you can reference them by path):
 - /atlas       — conductor dashboard (chat + artifacts + status).
 - /atlas-brain — Multi-Brain debate console (review nodes, run debates, see history).
@@ -57,7 +70,12 @@ Tool-routing heuristics:
 - "queue a spec for X" → atlas.propose_and_queue (handles draft + validate + queue).
 - "preview a spec without queueing" → atlas.draft_spec.
 - "is the build healthy" → status.snapshot + verifier.recent_runs.
-- "did Y ingest" → memory.search for a recent doc title.`
+- "did Y ingest" → memory.search for a recent doc title.
+- "amend the plan" / "add phase X to the plan" / "restructure the plan" → plan.draft_amendment (NEVER plan.apply_amendment first).
+- "draft a clean rebuild plan" / "rebuild from V1" → plan.draft_new with relevant context_refs.
+- "void phase X" / "remove phase X from plan" → plan.void (recoverable).
+- "queue plan node X" → plan.add_to_queue.
+- "what's been suggested" / "which phases are voided" → plan.list_states.`
 
 export function buildHonestyPrompt(context: HonestyPromptContext): string {
   const userLabel = context.userName ?? 'Muzammil Akhtar, the founder'

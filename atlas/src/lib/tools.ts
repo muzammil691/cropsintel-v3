@@ -1,3 +1,4 @@
+import Anthropic from '@anthropic-ai/sdk'
 import { getSupabaseClient } from './supabase'
 import { markBuildAttemptStatus } from './build-attempts'
 import { writeFile, readFile, readdir, rename } from 'fs/promises'
@@ -9,6 +10,17 @@ import { getCurrentMode } from './trust-mode'
 import { checkInvariants } from './invariants'
 import { parseSpec, setFrontmatterField } from './frontmatter'
 import { withGitLock } from './git-mutex'
+import {
+  draftPlanAmendment as planDraftAmendment,
+  applyPendingPlanAmendment as planApplyAmendment,
+  draftNewPlan as planDraftNew,
+  queueSpecFromPlanNode,
+} from './plan-server'
+import {
+  setPlanNodeState,
+  clearPlanNodeState,
+  listAllActivePlanNodeStates,
+} from './plan-state'
 
 const execFileP = promisify(execFile)
 
@@ -662,6 +674,127 @@ export async function atlasProposeAndQueue(
   }
 }
 
+// ─── Plan-aware chat tools (A.6) ────────────────────────────────────────────
+// These let the chat panel discuss + amend the master plan, draft fresh plans
+// from a free-form prompt, and mutate per-node state (void / queue) without
+// leaving the chat surface. Diff-and-confirm: drafting NEVER auto-writes;
+// the user clicks Apply on the artifact card to call plan.apply_amendment.
+
+let _anthropicClient: Anthropic | null = null
+function getAnthropicForPlan(): Anthropic {
+  if (_anthropicClient) return _anthropicClient
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set — plan.draft_amendment / plan.draft_new require Claude.')
+  _anthropicClient = new Anthropic({ apiKey })
+  return _anthropicClient
+}
+
+export interface PlanDraftResult {
+  proposed_markdown: string
+  current_markdown: string
+  diff: { addedLines: number; removedLines: number; unchangedLines: number; sample: { added: string[]; removed: string[] } }
+  reasoning: string
+}
+
+// NB: dispatch layer spreads `Object.values(arguments)` positionally — these
+// must take positional args (matching the order in the description's args=(...))
+// not a single object arg. The LLM reads the description and emits keys in
+// the same order; Object.values then preserves insertion order.
+
+export async function planDraftAmendmentTool(instruction: string): Promise<PlanDraftResult> {
+  if (!instruction || typeof instruction !== 'string') {
+    throw new Error('plan.draft_amendment: `instruction` is required')
+  }
+  const result = await planDraftAmendment(instruction, getAnthropicForPlan())
+  return {
+    proposed_markdown: result.proposedMarkdown,
+    current_markdown: result.currentMarkdown,
+    diff: result.diff,
+    reasoning: result.reasoning,
+  }
+}
+
+export async function planApplyAmendmentTool(proposed_markdown: string, summary?: string): Promise<{ ok: boolean; sha: string; pushed: boolean }> {
+  if (!proposed_markdown || typeof proposed_markdown !== 'string' || proposed_markdown.length < 100) {
+    throw new Error('plan.apply_amendment: `proposed_markdown` is required (min 100 chars). Pass the value from a prior plan.draft_amendment call exactly.')
+  }
+  const cleanSummary = (typeof summary === 'string' && summary.trim().length > 0) ? summary.trim() : 'chat-applied amendment'
+  const result = await planApplyAmendment(proposed_markdown, cleanSummary)
+  return { ok: true, sha: result.sha, pushed: result.pushed }
+}
+
+export async function planDraftNewTool(prompt: string, context_refs?: string[]): Promise<PlanDraftResult> {
+  if (!prompt || typeof prompt !== 'string') {
+    throw new Error('plan.draft_new: `prompt` is required (free-form goal description)')
+  }
+  const refs = Array.isArray(context_refs) ? context_refs.filter(s => typeof s === 'string') : []
+  const result = await planDraftNew(prompt, refs, getAnthropicForPlan())
+  return {
+    proposed_markdown: result.proposedMarkdown,
+    current_markdown: result.currentMarkdown,
+    diff: result.diff,
+    reasoning: result.reasoning,
+  }
+}
+
+export async function planVoidTool(plan_node_id: string, reason?: string): Promise<{ ok: boolean; rowId?: string; reason?: string }> {
+  if (!plan_node_id || typeof plan_node_id !== 'string') {
+    throw new Error('plan.void: `plan_node_id` is required')
+  }
+  return setPlanNodeState({
+    planNodeId: plan_node_id,
+    state: 'voided',
+    reason,
+    setBy: 'user',
+  })
+}
+
+export async function planRecoverTool(plan_node_id: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!plan_node_id || typeof plan_node_id !== 'string') {
+    throw new Error('plan.recover: `plan_node_id` is required')
+  }
+  return clearPlanNodeState(plan_node_id, 'voided')
+}
+
+export async function planAddToQueueTool(
+  plan_node_id: string,
+  title: string,
+  node_body?: string,
+  phase_hint?: string,
+): Promise<{ ok: boolean; filename: string; sha: string; pushed: boolean }> {
+  if (!plan_node_id || typeof plan_node_id !== 'string') {
+    throw new Error('plan.add_to_queue: `plan_node_id` is required')
+  }
+  if (!title || typeof title !== 'string') {
+    throw new Error('plan.add_to_queue: `title` is required (the plan node\'s heading text)')
+  }
+  const queued = await queueSpecFromPlanNode(
+    title,
+    node_body ?? '',
+    phase_hint ?? 'plan',
+  )
+  await setPlanNodeState({
+    planNodeId: plan_node_id,
+    state: 'queued-no-build',
+    setBy: 'user',
+    metadata: { spec_filename: queued.filename },
+  }).catch(err => console.warn('[plan.add_to_queue] state row insert failed (non-fatal):', err))
+  return { ok: true, filename: queued.filename, sha: queued.sha, pushed: queued.pushed }
+}
+
+export async function planListStatesTool(): Promise<{ states: Array<{ plan_node_id: string; state: string; reason: string | null; set_by: string | null; set_at: string }> }> {
+  const rows = await listAllActivePlanNodeStates()
+  return {
+    states: rows.map(row => ({
+      plan_node_id: row.plan_node_id,
+      state: row.state,
+      reason: row.reason,
+      set_by: row.set_by,
+      set_at: row.set_at,
+    })),
+  }
+}
+
 // ─── Tool registry (for LLM function-calling) ───────────────────────────────
 
 export const TOOLS = {
@@ -684,6 +817,18 @@ export const TOOLS = {
   'designer.review_spec': { fn: designerReviewSpec, description: 'Run Designer review on a task spec. args=(task_id, spec_markdown). Returns verdict + gaps.' },
   'whatsapp.send':        { fn: whatsappSend,       description: 'Send a WhatsApp message to a number. to=E.164 format like +971501234567.' },
   'status.snapshot':      { fn: statusSnapshot,     description: 'Compute and return a fresh project status snapshot.' },
+  // ─── Plan-aware tools (A.6) ────────────────────────────────────────────
+  // Diff-and-confirm: draft tools NEVER auto-write. After draft_amendment or
+  // draft_new returns, ALWAYS show the user the artifact card with the diff
+  // and wait for explicit approval ("apply" / "yes" / "go ahead") before
+  // calling apply_amendment with the same proposed_markdown.
+  'plan.draft_amendment': { fn: planDraftAmendmentTool, description: 'Draft an amendment to the master plan from a natural-language instruction. Returns proposed_markdown + current_markdown + diff summary + reasoning. DOES NOT WRITE — chat shows the user an Apply/Reject card. Use whenever the user says "change the plan", "add a phase", "rename X in the plan", "void/move/restructure", etc. args=(instruction).' },
+  'plan.apply_amendment': { fn: planApplyAmendmentTool, description: 'Apply a previously-drafted plan amendment. Pass proposed_markdown verbatim from a prior plan.draft_amendment or plan.draft_new result. Writes + commits + pushes to git. ONLY call after the user has explicitly approved (e.g. they said "apply", "yes", "ship it"). args=(proposed_markdown, summary).' },
+  'plan.draft_new':       { fn: planDraftNewTool,       description: 'Draft a brand-new master plan from a free-form prompt. Use when the user wants a clean rebuild plan (e.g. "draft a plan to rebuild from V1"). Optional context_refs is an array of file paths inlined as reference docs (e.g. ["docs/v3-step2-v1-audit.md"]). DOES NOT WRITE — same diff-and-confirm flow as plan.draft_amendment. args=(prompt, context_refs?).' },
+  'plan.void':            { fn: planVoidTool,           description: 'Mark a plan node as voided. Hidden by default in the Plan tab tree, visible under the Voided filter. Recoverable via plan.recover. args=(plan_node_id, reason?).' },
+  'plan.recover':         { fn: planRecoverTool,        description: 'Recover a previously-voided plan node — clears the voided state row. args=(plan_node_id).' },
+  'plan.add_to_queue':    { fn: planAddToQueueTool,     description: 'Queue a plan node as a spec WITHOUT immediately building. Same effect as the ➕ button on the Plan tab. Caller must pass plan_node_id + title (the node\'s heading text); node_body and phase_hint are optional. args=(plan_node_id, title, node_body?, phase_hint?).' },
+  'plan.list_states':     { fn: planListStatesTool,     description: 'List all currently-active plan-node states (voided / queued-no-build / suggested-by-multi-brain / suggested-by-verifier / optional). Read-only. Use to answer "which phases are voided", "what did Multi-Brain suggest", etc.' },
 } as const
 
 export type ToolName = keyof typeof TOOLS
