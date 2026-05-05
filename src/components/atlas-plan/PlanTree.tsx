@@ -15,6 +15,13 @@ interface PlanTreeProps {
   selectedIds: Set<string>
   onToggleSelected: (id: string) => void
   statusByTitle: Map<string, SpecStatus>
+  /**
+   * Phase A.1: filter the rendered tree to a single status. 'all' renders
+   * everything (default behavior). When set to a specific status, a node is
+   * shown only if it (or any descendant) matches — so collapsing parents
+   * still reveal filtered leaves.
+   */
+  statusFilter?: 'all' | SpecStatus
   onMoveUp: (node: PlanNode) => void
   onMoveDown: (node: PlanNode) => void
   onBuildNow: (node: PlanNode) => void
@@ -34,10 +41,34 @@ const STATUS_DOT: Record<SpecStatus, string> = {
   blocked: 'bg-rose-500',
 }
 
+// Phase A.1: a node passes the status filter if it (or any descendant) has
+// the selected status. Walks the subtree; cheap because the master plan
+// rarely exceeds a few hundred nodes.
+function subtreeMatchesStatus(
+  node: PlanNode,
+  target: SpecStatus,
+  statusByTitle: Map<string, SpecStatus>,
+): boolean {
+  if (inferStatusFor(node.title, statusByTitle) === target) return true
+  for (const child of node.children) {
+    if (subtreeMatchesStatus(child, target, statusByTitle)) return true
+  }
+  return false
+}
+
 export function PlanTree(props: PlanTreeProps) {
+  const filter = props.statusFilter ?? 'all'
+  const visibleChildren = filter === 'all'
+    ? props.root.children
+    : props.root.children.filter(c => subtreeMatchesStatus(c, filter, props.statusByTitle))
   return (
     <div className="text-sm">
-      {props.root.children.map(child => (
+      {visibleChildren.length === 0 && filter !== 'all' && (
+        <p className="text-[11px] text-slate-500 italic px-2 py-3">
+          No nodes match the "{filter}" filter.
+        </p>
+      )}
+      {visibleChildren.map(child => (
         <PlanNodeRow key={child.id} node={child} depth={0} {...props} />
       ))}
     </div>
@@ -51,12 +82,25 @@ interface PlanNodeRowProps extends PlanTreeProps {
 
 function PlanNodeRow(props: PlanNodeRowProps) {
   const { node, depth } = props
+  const filter = props.statusFilter ?? 'all'
   const [open, setOpen] = useState(depth < 2)
   const hasChildren = node.children.length > 0
 
   const status: SpecStatus = useMemo(() => {
-    return inferStatus(node.title, props.statusByTitle)
+    return inferStatusFor(node.title, props.statusByTitle)
   }, [node.title, props.statusByTitle])
+
+  // Skip rendering this row entirely when a filter is active and neither
+  // this node nor any descendant matches.
+  if (filter !== 'all' && !subtreeMatchesStatus(node, filter, props.statusByTitle)) {
+    return null
+  }
+
+  // When filtering, also filter the rendered children list so collapsed-open
+  // parents don't reveal non-matching leaves.
+  const renderedChildren = filter === 'all'
+    ? node.children
+    : node.children.filter(c => subtreeMatchesStatus(c, filter, props.statusByTitle))
 
   const isSelected = props.selectedId === node.id
   const isMultiChecked = props.selectedIds.has(node.id)
@@ -163,9 +207,9 @@ function PlanNodeRow(props: PlanNodeRowProps) {
           </Button>
         </div>
       </div>
-      {open && hasChildren && (
+      {open && renderedChildren.length > 0 && (
         <div role="group">
-          {node.children.map(child => (
+          {renderedChildren.map(child => (
             <PlanNodeRow key={child.id} {...props} node={child} depth={depth + 1} />
           ))}
         </div>
@@ -174,7 +218,7 @@ function PlanNodeRow(props: PlanNodeRowProps) {
   )
 }
 
-function inferStatus(title: string, statusByTitle: Map<string, SpecStatus>): SpecStatus {
+function inferStatusFor(title: string, statusByTitle: Map<string, SpecStatus>): SpecStatus {
   const norm = title.toLowerCase()
   for (const [key, status] of statusByTitle.entries()) {
     if (norm.includes(key) || key.includes(norm)) return status
