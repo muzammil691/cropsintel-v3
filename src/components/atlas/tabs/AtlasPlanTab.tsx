@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Layers, RefreshCw, ListTree, Network } from 'lucide-react'
+import { Layers, RefreshCw, ListTree, Network, CheckSquare, X } from 'lucide-react'
 import {
   fetchPlan,
   buildFromPlanNode,
@@ -44,6 +44,47 @@ function findParentAndIndex(
   return null
 }
 
+// Phase A.4: locate a PlanNode by id anywhere in the tree. Used by bulk
+// operations to translate the selectedIds Set into actual PlanNode objects.
+function findNodeById(root: PlanNode, targetId: string): PlanNode | null {
+  if (root.id === targetId) return root
+  for (const child of root.children) {
+    const hit = findNodeById(child, targetId)
+    if (hit) return hit
+  }
+  return null
+}
+
+// Phase A.4: tiny worker-pool that runs `task(item)` for each item with a
+// concurrency cap of 3 (matches the batch-diagnose pattern in
+// AtlasArtifactsTab so we don't slam Atlas's API). Returns counts of
+// successes vs failures so the UI can toast a single summary line.
+async function runWithConcurrency<T>(
+  items: T[],
+  task: (item: T) => Promise<unknown>,
+  concurrency = 3,
+): Promise<{ ok: number; failed: number; errors: string[] }> {
+  let ok = 0
+  let failed = 0
+  const errors: string[] = []
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const idx = cursor++
+      try {
+        await task(items[idx])
+        ok++
+      } catch (err) {
+        failed++
+        const msg = err instanceof Error ? err.message : String(err)
+        if (errors.length < 5) errors.push(msg.slice(0, 160))
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length || 1) }, () => worker()))
+  return { ok, failed, errors }
+}
+
 // Count how many nodes in the (sub)tree have each status. Used to populate
 // the count pills in the filter bar.
 function countByStatus(node: PlanNode, infer: (n: PlanNode) => SpecStatus): Record<SpecStatus, number> {
@@ -66,6 +107,9 @@ export default function AtlasPlanTab() {
   const [busyNode, setBusyNode] = useState<string | null>(null)
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [viewMode, setViewMode] = useState<ViewMode>('tree')
+  const [multiSelectMode, setMultiSelectMode] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkResult, setBulkResult] = useState<string | null>(null)
 
   const load = () => {
     setLoading(true)
@@ -185,10 +229,71 @@ export default function AtlasPlanTab() {
   })
 
   const onChangePhase = (_node: PlanNode) => {
-    // Phase A.2 ships the backend; the UI picker is part of A.4 (multi-select
-    // + bulk operations) where we have a target-phase chooser. For now this
-    // surfaces a hint rather than no-op silently.
-    setError('Change phase: coming with A.4 (target picker). Backend ready; UI picker pending.')
+    // Backend route /atlas/plan/change-phase is live (A.2). A target-phase
+    // picker UI is a future polish; for now surface a hint so the action
+    // doesn't silently no-op.
+    setError('Change phase: backend ready, target-picker UI pending. Use Move up/down or chat to relocate for now.')
+  }
+
+  // ─── Phase A.4 — multi-select + bulk operations ───────────────────────────
+  const selectedNodes: PlanNode[] = useMemo(() => {
+    if (!tree || selectedIds.size === 0) return []
+    const out: PlanNode[] = []
+    for (const id of selectedIds) {
+      const found = findNodeById(tree, id)
+      if (found) out.push(found)
+    }
+    return out
+  }, [tree, selectedIds])
+
+  const clearSelection = () => setSelectedIds(new Set())
+
+  const runBulk = async (
+    label: string,
+    nodes: PlanNode[],
+    task: (n: PlanNode) => Promise<unknown>,
+  ) => {
+    if (nodes.length === 0) return
+    setBulkBusy(true)
+    setBulkResult(null)
+    setError(null)
+    const result = await runWithConcurrency(nodes, task, 3)
+    setBulkBusy(false)
+    setBulkResult(
+      result.failed > 0
+        ? `${label}: ${result.ok}/${nodes.length} succeeded; ${result.failed} failed (${result.errors[0] ?? 'see console'})`
+        : `${label}: ${result.ok}/${nodes.length} succeeded.`,
+    )
+    load()
+  }
+
+  const onBulkAddToQueue = () => void runBulk('Queue', selectedNodes, n =>
+    addPlanNodeToQueue(n.id, n.title, n.body ?? '', 'plan').then(() => {
+      setQueuedIds(prev => new Set(prev).add(n.id))
+    }),
+  )
+
+  const onBulkVoid = () => void runBulk('Void', selectedNodes, n =>
+    voidPlanNode(n.id).then(() => {
+      setVoidedIds(prev => new Set(prev).add(n.id))
+    }),
+  )
+
+  const onBulkDiscuss = () => {
+    if (selectedNodes.length === 0) return
+    const seed = [
+      `Discuss ${selectedNodes.length} plan nodes with me:`,
+      '',
+      ...selectedNodes.slice(0, 8).map((n, i) => {
+        const excerpt = (n.body ?? '').replace(/\s+/g, ' ').slice(0, 140)
+        return `${i + 1}. ${n.title}${excerpt ? `\n   ${excerpt}` : ''}`
+      }),
+      selectedNodes.length > 8 ? `… and ${selectedNodes.length - 8} more` : '',
+      '',
+      'Suggest a deploy order based on dependencies + scope. Flag risks.',
+    ].filter(Boolean).join('\n')
+    window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: seed }))
+    setBulkResult(`Discussion seeded with ${selectedNodes.length} nodes — open chat.`)
   }
 
   const onDiscuss = (node: PlanNode) => {
@@ -219,6 +324,21 @@ export default function AtlasPlanTab() {
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {/* Multi-select toggle (Phase A.4) */}
+            <Button
+              type="button"
+              size="sm"
+              variant={multiSelectMode ? 'default' : 'ghost'}
+              onClick={() => {
+                setMultiSelectMode(v => !v)
+                if (multiSelectMode) clearSelection()
+              }}
+              aria-pressed={multiSelectMode}
+              className="text-[11px] h-7 px-2 gap-1 transition-colors duration-200"
+            >
+              <CheckSquare className="size-3" />
+              {multiSelectMode ? 'Selecting' : 'Select'}
+            </Button>
             {/* Tree ↔ Graph view toggle (Phase A.3) */}
             <div role="tablist" aria-label="View mode" className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden">
               <button
@@ -297,6 +417,61 @@ export default function AtlasPlanTab() {
         </div>
       </div>
 
+      {/* Phase A.4 — bulk action bar. Shown when multi-select mode is on AND
+          at least one node is selected. Buttons fan out concurrency=3. */}
+      {multiSelectMode && selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 sm:px-4 py-2 border-b border-slate-200 dark:border-slate-800 bg-emerald-50/60 dark:bg-emerald-950/30">
+          <span className="text-[11px] font-medium text-emerald-900 dark:text-emerald-200 mr-1">
+            {selectedIds.size} selected
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={bulkBusy}
+            onClick={onBulkAddToQueue}
+            className="text-[11px] h-7 px-2 transition-colors duration-200"
+          >
+            Add all to queue
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={bulkBusy}
+            onClick={onBulkVoid}
+            className="text-[11px] h-7 px-2 transition-colors duration-200"
+          >
+            Void all
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={bulkBusy}
+            onClick={onBulkDiscuss}
+            className="text-[11px] h-7 px-2 transition-colors duration-200"
+          >
+            Discuss all
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={bulkBusy}
+            onClick={clearSelection}
+            className="ml-auto text-[11px] h-7 px-2 transition-colors duration-200"
+          >
+            <X className="size-3" /> Clear
+          </Button>
+        </div>
+      )}
+      {bulkResult && (
+        <div role="status" aria-live="polite" className="px-3 sm:px-4 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300 border-b border-slate-200 dark:border-slate-800 bg-emerald-50/40 dark:bg-emerald-950/20">
+          {bulkResult}
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-slate-50/40 dark:bg-slate-900/20">
         {loading && !tree && (
           <div className="space-y-3 p-3">
@@ -318,7 +493,7 @@ export default function AtlasPlanTab() {
             root={tree}
             selectedId={selectedId}
             onSelect={(n) => setSelectedId(n.id)}
-            multiSelect={false}
+            multiSelect={multiSelectMode}
             selectedIds={selectedIds}
             onToggleSelected={(id) => {
               setSelectedIds((prev) => {
