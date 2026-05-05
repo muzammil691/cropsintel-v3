@@ -65,11 +65,42 @@ export async function readPlanMarkdown(): Promise<string> {
   return readFile(path, 'utf-8')
 }
 
-export async function getPlanResponse(): Promise<{ updatedAt: string; sha: string; tree: PlanTree['root']; flat: PlanTree['flat'] }> {
+export async function getPlanResponse(): Promise<{
+  updatedAt: string
+  sha: string
+  tree: PlanTree['root']
+  flat: PlanTree['flat']
+  /** Phase A.5: per-node active state overlay from atlas_plan_node_state. */
+  nodeStates: Record<string, string[]>
+}> {
   const md = await readPlanMarkdown()
   const tree = parsePlan(md)
   const sha = await gitHeadSha()
-  return { updatedAt: new Date().toISOString(), sha, tree: tree.root, flat: tree.flat }
+
+  // Phase A.5: bulk-fetch active state rows for every node id in the parsed
+  // tree, so the Plan tab can paint void/queued/suggested badges in a single
+  // round-trip. Failures here are non-fatal — empty map → no overlays, tree
+  // still renders.
+  const ids = tree.flat.map(n => n.id)
+  let nodeStates: Record<string, string[]> = {}
+  try {
+    const { getPlanNodeStatesBulk } = await import('./plan-state.js')
+    const map = await getPlanNodeStatesBulk(ids)
+    for (const [id, rows] of map.entries()) {
+      nodeStates[id] = rows.map(r => r.state)
+    }
+  } catch (err) {
+    console.warn('[plan-server] node-state bulk fetch failed (non-fatal):', err instanceof Error ? err.message : err)
+    nodeStates = {}
+  }
+
+  return {
+    updatedAt: new Date().toISOString(),
+    sha,
+    tree: tree.root,
+    flat: tree.flat,
+    nodeStates,
+  }
 }
 
 export async function writePlanMarkdown(

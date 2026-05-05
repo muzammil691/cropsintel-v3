@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Hammer, MessageSquare, Plus, Trash2, Undo2, FolderInput, Inbox } from 'lucide-react'
+import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Hammer, MessageSquare, Plus, Trash2, Undo2, FolderInput, Inbox, Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
@@ -48,6 +48,12 @@ interface PlanTreeProps {
   queuedIds?: Set<string>
   /** Set of plan-node ids that have shipped (verified). Toggles Undeploy. */
   shippedIds?: Set<string>
+  /**
+   * Phase A.5: ids carrying state='suggested-by-multi-brain' or
+   * 'suggested-by-verifier'. Renders a ⭐ badge inline so the user can
+   * see what the agents recommended next.
+   */
+  suggestedIds?: Set<string>
 }
 
 const STATUS_ICON: Record<SpecStatus, string> = {
@@ -182,6 +188,16 @@ function PlanNodeRow(props: PlanNodeRowProps) {
           className={cn('mt-2 size-2 rounded-full shrink-0', STATUS_DOT[status])}
           title={STATUS_ICON[status]}
         />
+        {/* Phase A.5: ⭐ badge for nodes Multi-Brain / Verifier recommended. */}
+        {props.suggestedIds?.has(node.id) && (
+          <span
+            className="mt-1 inline-flex items-center text-amber-500"
+            title="Suggested by Multi-Brain or Verifier"
+          >
+            <Star className="size-3 fill-current" aria-hidden />
+            <span className="sr-only">Suggested by Multi-Brain or Verifier</span>
+          </span>
+        )}
         <div className="flex-1 min-w-0">
           <div className={cn('font-medium text-slate-900 dark:text-slate-100 truncate', node.level === 1 && 'text-base')}>
             {node.title}

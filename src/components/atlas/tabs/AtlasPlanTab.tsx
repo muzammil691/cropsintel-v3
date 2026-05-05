@@ -110,12 +110,37 @@ export default function AtlasPlanTab() {
   const [multiSelectMode, setMultiSelectMode] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkResult, setBulkResult] = useState<string | null>(null)
+  // Phase A.2/A.5 state-overlay sets. Declared up front so load() can
+  // populate them without a use-before-declare warning.
+  const [voidedIds, setVoidedIds] = useState<Set<string>>(new Set())
+  const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set())
+  const [suggestedIds, setSuggestedIds] = useState<Set<string>>(new Set())
+  const [shippedIds] = useState<Set<string>>(new Set())
 
   const load = () => {
     setLoading(true)
     setError(null)
     fetchPlan()
-      .then((res) => setTree(res.tree))
+      .then((res) => {
+        setTree(res.tree)
+        // Phase A.5: paint state overlays from server. nodeStates is
+        // map<plan_node_id, string[]> — each id can carry multiple
+        // active states (queued-no-build + suggested-by-X simultaneously).
+        const states = res.nodeStates ?? {}
+        const newVoided = new Set<string>()
+        const newQueued = new Set<string>()
+        const newSuggested = new Set<string>()
+        for (const [id, list] of Object.entries(states)) {
+          if (list.includes('voided')) newVoided.add(id)
+          if (list.includes('queued-no-build')) newQueued.add(id)
+          if (list.includes('suggested-by-multi-brain') || list.includes('suggested-by-verifier')) {
+            newSuggested.add(id)
+          }
+        }
+        setVoidedIds(newVoided)
+        setQueuedIds(newQueued)
+        setSuggestedIds(newSuggested)
+      })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }
@@ -189,10 +214,6 @@ export default function AtlasPlanTab() {
   // (toggling voidedIds / queuedIds locally before reload) is intentionally
   // skipped — the round-trip is fast and a stale view is worse than 1 sec
   // of "loading" feedback.
-  const [voidedIds, setVoidedIds] = useState<Set<string>>(new Set())
-  const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set())
-  const [shippedIds] = useState<Set<string>>(new Set()) // populated in A.5 from build_attempts
-
   const runWithBusy = async (node: PlanNode, fn: () => Promise<unknown>) => {
     setBusy(true)
     setBusyNode(node.id)
@@ -517,6 +538,7 @@ export default function AtlasPlanTab() {
             voidedIds={voidedIds}
             queuedIds={queuedIds}
             shippedIds={shippedIds}
+            suggestedIds={suggestedIds}
           />
         )}
         {tree && viewMode === 'graph' && (

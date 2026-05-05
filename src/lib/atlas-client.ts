@@ -1016,6 +1016,12 @@ export interface PlanResponse {
   sha: string
   tree: PlanNode
   flat: PlanNode[]
+  /**
+   * Phase A.5: per-node active states from atlas_plan_node_state. Map from
+   * plan_node_id → array of active state names (e.g. ['voided'] or
+   * ['queued-no-build', 'suggested-by-multi-brain']). Missing key = no overlay.
+   */
+  nodeStates?: Record<string, string[]>
 }
 
 export async function fetchPlan(): Promise<PlanResponse> {
