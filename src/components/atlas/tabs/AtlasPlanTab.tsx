@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Layers, RefreshCw } from 'lucide-react'
+import { Layers, RefreshCw, ListTree, Network } from 'lucide-react'
 import {
   fetchPlan,
   buildFromPlanNode,
@@ -13,6 +13,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { PlanTree, type SpecStatus } from '@/components/atlas-plan/PlanTree'
+import { PlanGraphView } from '@/components/atlas-plan/PlanGraphView'
+
+type ViewMode = 'tree' | 'graph'
 
 type StatusFilter = 'all' | SpecStatus
 
@@ -62,6 +65,7 @@ export default function AtlasPlanTab() {
   const [busy, setBusy] = useState(false)
   const [busyNode, setBusyNode] = useState<string | null>(null)
   const [filter, setFilter] = useState<StatusFilter>('all')
+  const [viewMode, setViewMode] = useState<ViewMode>('tree')
 
   const load = () => {
     setLoading(true)
@@ -214,16 +218,49 @@ export default function AtlasPlanTab() {
               Knowledge tree of phases, sub-tasks, and ADRs from master plan.
             </p>
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={load}
-            disabled={loading}
-            className="shrink-0 text-xs min-h-[44px] sm:min-h-0 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
-          >
-            <RefreshCw className={loading ? 'size-3.5 animate-spin' : 'size-3.5'} />
-            <span className="sr-only">Refresh plan</span>
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Tree ↔ Graph view toggle (Phase A.3) */}
+            <div role="tablist" aria-label="View mode" className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'tree' ? 'true' : 'false'}
+                onClick={() => setViewMode('tree')}
+                className={cn(
+                  'px-2 py-1 text-[11px] font-medium inline-flex items-center gap-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-inset',
+                  viewMode === 'tree'
+                    ? 'bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200'
+                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+                )}
+              >
+                <ListTree className="size-3" /> Tree
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'graph' ? 'true' : 'false'}
+                onClick={() => setViewMode('graph')}
+                className={cn(
+                  'px-2 py-1 text-[11px] font-medium inline-flex items-center gap-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-inset border-l border-slate-200 dark:border-slate-700',
+                  viewMode === 'graph'
+                    ? 'bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200'
+                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+                )}
+              >
+                <Network className="size-3" /> Graph
+              </button>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={load}
+              disabled={loading}
+              className="shrink-0 text-xs min-h-11 sm:min-h-0 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+            >
+              <RefreshCw className={loading ? 'size-3.5 animate-spin' : 'size-3.5'} />
+              <span className="sr-only">Refresh plan</span>
+            </Button>
+          </div>
         </div>
         {/* Phase A.1: status filter pills. Single-select. Counts come from
             countByStatus() which uses the same status inference as PlanTree. */}
@@ -276,7 +313,7 @@ export default function AtlasPlanTab() {
             {error}
           </div>
         )}
-        {tree && (
+        {tree && viewMode === 'tree' && (
           <PlanTree
             root={tree}
             selectedId={selectedId}
@@ -291,6 +328,27 @@ export default function AtlasPlanTab() {
                 return next
               })
             }}
+            statusByTitle={statusByTitle}
+            statusFilter={filter}
+            onMoveUp={onMoveUp}
+            onMoveDown={onMoveDown}
+            onBuildNow={onBuild}
+            onDiscuss={onDiscuss}
+            onVoid={onVoid}
+            onRecover={onRecover}
+            onUndeploy={onUndeploy}
+            onAddToQueue={onAddToQueue}
+            onChangePhase={onChangePhase}
+            voidedIds={voidedIds}
+            queuedIds={queuedIds}
+            shippedIds={shippedIds}
+          />
+        )}
+        {tree && viewMode === 'graph' && (
+          <PlanGraphView
+            root={tree}
+            selectedId={selectedId}
+            onSelect={(n) => setSelectedId(n.id)}
             statusByTitle={statusByTitle}
             statusFilter={filter}
             onMoveUp={onMoveUp}
