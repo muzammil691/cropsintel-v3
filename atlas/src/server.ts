@@ -103,6 +103,7 @@ import {
   queueSpecFromPlanNode,
 } from './lib/plan-server'
 import { getWorkflowGraph, clearWorkflowCache } from './lib/workflow-parser'
+import { setPlanNodeState, clearPlanNodeState } from './lib/plan-state'
 import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind, type DiagnosisBucket } from './lib/diagnose'
 import { traceArtifact, formatTraceForChat } from './lib/workflow-trace'
 import { buildClaudeCodePrompt } from './lib/claude-code-prompt-builder'
@@ -3046,6 +3047,158 @@ export async function startServer(): Promise<void> {
           payload.phase_hint ?? 'plan',
         )
         json(res, 200, { ok: true, ...r })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase A.2: 5 plan-state mutation routes ─────────────────────────────
+    // All require admin role (matches /atlas/plan/build) and operate on the
+    // atlas_plan_node_state table. The master-plan markdown is read-only here;
+    // these routes record overlay state that the Plan tab reads at render-time.
+
+    // POST /atlas/plan/void — mark a node as voided. Tree hides by default,
+    // visible under the "Voided" filter. Recoverable via /atlas/plan/recover.
+    if (url === '/atlas/plan/void' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { plan_node_id?: string; reason?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id) { json(res, 400, { error: 'plan_node_id required' }); return }
+      const result = await setPlanNodeState({
+        planNodeId: payload.plan_node_id,
+        state: 'voided',
+        reason: payload.reason,
+        setBy: 'user',
+      })
+      if (!result.ok) {
+        json(res, 500, { error: result.reason ?? 'failed' })
+        return
+      }
+      json(res, 200, { ok: true, row_id: result.rowId })
+      return
+    }
+
+    // POST /atlas/plan/recover — clear the voided state.
+    if (url === '/atlas/plan/recover' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { plan_node_id?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id) { json(res, 400, { error: 'plan_node_id required' }); return }
+      const result = await clearPlanNodeState(payload.plan_node_id, 'voided')
+      if (!result.ok) {
+        json(res, 500, { error: result.reason ?? 'failed' })
+        return
+      }
+      json(res, 200, { ok: true })
+      return
+    }
+
+    // POST /atlas/plan/undeploy — flag a shipped node for revert. We DON'T
+    // hard-revert files automatically; instead we ping the operator with a
+    // WhatsApp + record the request. Full revert is a separate
+    // remediation-spec drafting flow that the operator confirms.
+    if (url === '/atlas/plan/undeploy' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { plan_node_id?: string; reason?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id) { json(res, 400, { error: 'plan_node_id required' }); return }
+      try {
+        await sendWhatsAppReply(
+          process.env.MUZAMMIL_WHATSAPP ?? '+971562556592',
+          `🔄 Undeploy requested for plan node ${payload.plan_node_id}.${payload.reason ? ` Reason: ${payload.reason}` : ''} Confirm in cockpit to draft a revert spec.`,
+        )
+      } catch (err) {
+        console.warn('[atlas-plan/undeploy] WhatsApp ping failed:', err instanceof Error ? err.message : err)
+      }
+      json(res, 200, {
+        ok: true,
+        message: 'Undeploy request recorded. Confirm in chat to draft a revert spec.',
+      })
+      return
+    }
+
+    // POST /atlas/plan/add-to-queue — queue the spec without immediately
+    // building. Same as /atlas/plan/build but also writes a queued-no-build
+    // overlay so the Plan tab badge reflects the pending state.
+    if (url === '/atlas/plan/add-to-queue' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { plan_node_id?: string; title?: string; node_body?: string; phase_hint?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id || !payload.title) {
+        json(res, 400, { error: 'plan_node_id and title required' })
+        return
+      }
+      try {
+        const r = await queueSpecFromPlanNode(
+          payload.title,
+          payload.node_body ?? '',
+          payload.phase_hint ?? 'plan',
+        )
+        await setPlanNodeState({
+          planNodeId: payload.plan_node_id,
+          state: 'queued-no-build',
+          setBy: 'user',
+          metadata: { spec_filename: r.filename },
+        })
+        json(res, 200, { ok: true, filename: r.filename, sha: r.sha, pushed: r.pushed })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/change-phase — re-parent a node under a different
+    // phase. Thin wrapper over reorderPlanNode that lets callers omit
+    // new_index (defaults to end of new parent's children).
+    if (url === '/atlas/plan/change-phase' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { plan_node_id?: string; new_parent_id?: string; new_index?: number }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id || !payload.new_parent_id) {
+        json(res, 400, { error: 'plan_node_id and new_parent_id required' })
+        return
+      }
+      try {
+        const result = await reorderPlanNode(
+          payload.plan_node_id,
+          payload.new_parent_id,
+          // Use a large index to default to "end of new parent's children";
+          // reorderPlanNode clamps to children.length.
+          payload.new_index ?? Number.MAX_SAFE_INTEGER,
+        )
+        // result already carries an `ok` field from reorderPlanNode; spread directly.
+        json(res, 200, result)
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }

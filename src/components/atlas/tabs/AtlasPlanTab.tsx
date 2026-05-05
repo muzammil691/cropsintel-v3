@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Layers, RefreshCw } from 'lucide-react'
-import { fetchPlan, buildFromPlanNode, reorderPlan, type PlanNode } from '@/lib/atlas-client'
+import {
+  fetchPlan,
+  buildFromPlanNode,
+  reorderPlan,
+  voidPlanNode,
+  recoverPlanNode,
+  undeployPlanNode,
+  addPlanNodeToQueue,
+  type PlanNode,
+} from '@/lib/atlas-client'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { PlanTree, type SpecStatus } from '@/components/atlas-plan/PlanTree'
@@ -127,6 +136,57 @@ export default function AtlasPlanTab() {
   const onMoveUp = (node: PlanNode) => void reorder(node, 'up')
   const onMoveDown = (node: PlanNode) => void reorder(node, 'down')
 
+  // Phase A.2 state-mutation handlers. Each: set busy → call client → reload
+  // → clear busy. Errors surface in the existing red banner. Optimistic UI
+  // (toggling voidedIds / queuedIds locally before reload) is intentionally
+  // skipped — the round-trip is fast and a stale view is worse than 1 sec
+  // of "loading" feedback.
+  const [voidedIds, setVoidedIds] = useState<Set<string>>(new Set())
+  const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set())
+  const [shippedIds] = useState<Set<string>>(new Set()) // populated in A.5 from build_attempts
+
+  const runWithBusy = async (node: PlanNode, fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setBusyNode(node.id)
+    try {
+      await fn()
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+      setBusyNode(null)
+    }
+  }
+
+  const onVoid = (node: PlanNode) => void runWithBusy(node, async () => {
+    await voidPlanNode(node.id)
+    setVoidedIds(prev => new Set(prev).add(node.id))
+  })
+
+  const onRecover = (node: PlanNode) => void runWithBusy(node, async () => {
+    await recoverPlanNode(node.id)
+    setVoidedIds(prev => {
+      const next = new Set(prev); next.delete(node.id); return next
+    })
+  })
+
+  const onUndeploy = (node: PlanNode) => void runWithBusy(node, async () => {
+    await undeployPlanNode(node.id)
+  })
+
+  const onAddToQueue = (node: PlanNode) => void runWithBusy(node, async () => {
+    await addPlanNodeToQueue(node.id, node.title, node.body ?? '', 'plan')
+    setQueuedIds(prev => new Set(prev).add(node.id))
+  })
+
+  const onChangePhase = (_node: PlanNode) => {
+    // Phase A.2 ships the backend; the UI picker is part of A.4 (multi-select
+    // + bulk operations) where we have a target-phase chooser. For now this
+    // surfaces a hint rather than no-op silently.
+    setError('Change phase: coming with A.4 (target picker). Backend ready; UI picker pending.')
+  }
+
   const onDiscuss = (node: PlanNode) => {
     // Seed the cockpit chat with the node title + body excerpt so Atlas can
     // discuss this specific phase. CockpitChat listens for this event and
@@ -237,6 +297,14 @@ export default function AtlasPlanTab() {
             onMoveDown={onMoveDown}
             onBuildNow={onBuild}
             onDiscuss={onDiscuss}
+            onVoid={onVoid}
+            onRecover={onRecover}
+            onUndeploy={onUndeploy}
+            onAddToQueue={onAddToQueue}
+            onChangePhase={onChangePhase}
+            voidedIds={voidedIds}
+            queuedIds={queuedIds}
+            shippedIds={shippedIds}
           />
         )}
         {busy && busyNode && (

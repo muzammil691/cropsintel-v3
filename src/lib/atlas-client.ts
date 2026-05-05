@@ -1050,6 +1050,81 @@ export async function reorderPlan(
   })
 }
 
+// ── Phase A.2: 5 plan-state mutation client functions ────────────────────
+
+/** Mark a plan node as voided (hidden from default view, recoverable). */
+export async function voidPlanNode(planNodeId: string, reason?: string): Promise<{ ok: true; row_id?: string }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/void`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_node_id: planNodeId, reason }),
+  })
+}
+
+/** Clear a node's voided state — node returns to default-visible. */
+export async function recoverPlanNode(planNodeId: string): Promise<{ ok: true }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/recover`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_node_id: planNodeId }),
+  })
+}
+
+/**
+ * Request a node be undeployed. Records the intent + WhatsApp pings the
+ * operator. Does NOT auto-revert files — the operator confirms in chat
+ * which then drafts a revert spec.
+ */
+export async function undeployPlanNode(
+  planNodeId: string,
+  reason?: string,
+): Promise<{ ok: true; message: string }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/undeploy`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_node_id: planNodeId, reason }),
+  })
+}
+
+/**
+ * Queue the spec without immediate Builder pickup. Marks the node with
+ * state='queued-no-build' so the badge reflects pending status. Distinct
+ * from buildFromPlanNode which queues AND builds.
+ */
+export async function addPlanNodeToQueue(
+  planNodeId: string,
+  title: string,
+  nodeBody: string,
+  phaseHint?: string,
+): Promise<{ ok: true; filename: string; sha: string; pushed: boolean }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/add-to-queue`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      plan_node_id: planNodeId,
+      title,
+      node_body: nodeBody,
+      phase_hint: phaseHint ?? 'plan',
+    }),
+  })
+}
+
+/**
+ * Re-parent a node under a different phase. Wraps reorderPlan so callers
+ * don't need to compute new_index — defaults to end-of-children.
+ */
+export async function changePlanNodePhase(
+  planNodeId: string,
+  newParentId: string,
+  newIndex?: number,
+): Promise<{ ok: true; sha: string }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/change-phase`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_node_id: planNodeId, new_parent_id: newParentId, new_index: newIndex }),
+  })
+}
+
 export async function buildFromPlanNode(
   title: string,
   nodeBody: string,

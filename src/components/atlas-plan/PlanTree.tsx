@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Hammer, MessageSquare, Plus } from 'lucide-react'
+import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Hammer, MessageSquare, Plus, Trash2, Undo2, FolderInput, Inbox } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
@@ -26,6 +26,28 @@ interface PlanTreeProps {
   onMoveDown: (node: PlanNode) => void
   onBuildNow: (node: PlanNode) => void
   onDiscuss: (node: PlanNode) => void
+  /**
+   * Phase A.2: optional plan-state mutation handlers. When omitted, the
+   * corresponding button is hidden — keeps PlanTree backwards-compatible
+   * with any caller that doesn't yet know about voids/queue/undeploy.
+   */
+  onVoid?: (node: PlanNode) => void
+  onRecover?: (node: PlanNode) => void
+  onUndeploy?: (node: PlanNode) => void
+  onAddToQueue?: (node: PlanNode) => void
+  onChangePhase?: (node: PlanNode) => void
+  /**
+   * Set of plan-node ids currently marked voided. Used to swap Void → Recover
+   * button on those rows. Omit (or pass empty set) when state is unknown.
+   */
+  voidedIds?: Set<string>
+  /**
+   * Set of plan-node ids currently in the queue (queued-no-build state). Used
+   * to suppress the "Add to queue" button on already-queued rows.
+   */
+  queuedIds?: Set<string>
+  /** Set of plan-node ids that have shipped (verified). Toggles Undeploy. */
+  shippedIds?: Set<string>
 }
 
 const STATUS_ICON: Record<SpecStatus, string> = {
@@ -205,6 +227,66 @@ function PlanNodeRow(props: PlanNodeRowProps) {
           >
             <MessageSquare className="size-3" />
           </Button>
+          {/* Phase A.2: state-mutation buttons. Each is conditional on its
+              handler being passed AND the row's current state (e.g. Recover
+              shows when voided, otherwise Void shows; Undeploy only on
+              shipped). All tiny icon buttons to keep row density tight. */}
+          {props.onAddToQueue && !props.queuedIds?.has(node.id) && !props.shippedIds?.has(node.id) && (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Add to queue"
+              onClick={(e) => { e.stopPropagation(); props.onAddToQueue!(node) }}
+            >
+              <Inbox className="size-3" />
+            </Button>
+          )}
+          {props.onUndeploy && props.shippedIds?.has(node.id) && (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Request undeploy"
+              onClick={(e) => { e.stopPropagation(); props.onUndeploy!(node) }}
+            >
+              <Undo2 className="size-3" />
+            </Button>
+          )}
+          {props.onChangePhase && (
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Change phase"
+              onClick={(e) => { e.stopPropagation(); props.onChangePhase!(node) }}
+            >
+              <FolderInput className="size-3" />
+            </Button>
+          )}
+          {props.voidedIds?.has(node.id)
+            ? props.onRecover && (
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Recover voided node"
+                  onClick={(e) => { e.stopPropagation(); props.onRecover!(node) }}
+                >
+                  <Undo2 className="size-3 text-emerald-600" />
+                </Button>
+              )
+            : props.onVoid && (
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Void this node"
+                  onClick={(e) => { e.stopPropagation(); props.onVoid!(node) }}
+                >
+                  <Trash2 className="size-3 text-rose-500" />
+                </Button>
+              )}
         </div>
       </div>
       {open && renderedChildren.length > 0 && (
