@@ -149,6 +149,15 @@ export default function AtlasPlanTab() {
     load()
   }, [])
 
+  // A.6c: chat-driven plan amendments dispatch this event after Apply succeeds.
+  // Re-fetch the tree so the new node / removed node shows up without a manual
+  // refresh click.
+  useEffect(() => {
+    const handler = () => load()
+    window.addEventListener('atlas:plan-refresh', handler as EventListener)
+    return () => window.removeEventListener('atlas:plan-refresh', handler as EventListener)
+  }, [])
+
   const statusByTitle = useMemo(() => new Map<string, SpecStatus>(), [])
 
   // Same status inference as PlanTree uses internally — duplicated here so

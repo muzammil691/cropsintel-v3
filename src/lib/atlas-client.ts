@@ -1044,6 +1044,56 @@ export async function amendPlan(instruction: string): Promise<{ ok: true; sha: s
   })
 }
 
+// ─── A.6c: diff-and-confirm draft + apply ───────────────────────────────────
+
+export interface PlanDiff {
+  addedLines: number
+  removedLines: number
+  unchangedLines: number
+  sample: { added: string[]; removed: string[] }
+}
+
+export interface PlanDraftResult {
+  ok: true
+  proposed_markdown: string
+  current_markdown: string
+  diff: PlanDiff
+  reasoning: string
+}
+
+/** Draft an amendment to the master plan (does NOT write). */
+export async function draftPlanAmendment(instruction: string): Promise<PlanDraftResult> {
+  return fetchJson<PlanDraftResult>(`${ATLAS_URL}/atlas/plan/draft-amendment`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruction }),
+  })
+}
+
+/** Draft a brand-new master plan from a free-form prompt (does NOT write). */
+export async function draftNewPlan(
+  prompt: string,
+  contextRefs: string[] = [],
+): Promise<PlanDraftResult> {
+  return fetchJson<PlanDraftResult>(`${ATLAS_URL}/atlas/plan/draft-new`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, context_refs: contextRefs }),
+  })
+}
+
+/** Apply a previously-drafted plan amendment — writes + commits + pushes. */
+export async function applyPlanAmendment(
+  proposedMarkdown: string,
+  summary: string,
+): Promise<{ ok: true; sha: string; pushed: boolean }> {
+  return fetchJson<{ ok: true; sha: string; pushed: boolean }>(`${ATLAS_URL}/atlas/plan/apply-amendment`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ proposed_markdown: proposedMarkdown, summary }),
+  })
+}
+
 export async function reorderPlan(
   movedId: string,
   newParentId: string,
