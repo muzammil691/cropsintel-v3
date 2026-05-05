@@ -323,3 +323,170 @@ export async function amendPlanWithClaude(
 
   return { markdown: stripped, reasoning: 'amended via claude-opus-4-7' }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Phase A.6 — diff-and-confirm flow + free-form draft.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute a small unified-diff-style summary between two markdown bodies.
+ * NOT a full LCS diff — just line-by-line counts + a sample of changed lines
+ * so the chat can render a 3-5 line "X added, Y removed" preview without
+ * exploding token budget. The full new markdown is also returned so the
+ * apply step can write it verbatim without re-running the model.
+ */
+export function summarizeMarkdownDiff(before: string, after: string): {
+  addedLines: number
+  removedLines: number
+  unchangedLines: number
+  sample: { added: string[]; removed: string[] }
+} {
+  const beforeLines = before.split('\n')
+  const afterLines = after.split('\n')
+  const beforeSet = new Map<string, number>()
+  for (const l of beforeLines) beforeSet.set(l, (beforeSet.get(l) ?? 0) + 1)
+  const afterSet = new Map<string, number>()
+  for (const l of afterLines) afterSet.set(l, (afterSet.get(l) ?? 0) + 1)
+
+  let added = 0
+  let removed = 0
+  let unchanged = 0
+  const addedSample: string[] = []
+  const removedSample: string[] = []
+
+  for (const line of afterLines) {
+    const beforeCount = beforeSet.get(line) ?? 0
+    if (beforeCount > 0) {
+      unchanged++
+      beforeSet.set(line, beforeCount - 1)
+    } else {
+      added++
+      if (addedSample.length < 8 && line.trim().length > 0) addedSample.push(line.slice(0, 200))
+    }
+  }
+  for (const [line, count] of beforeSet.entries()) {
+    if (count <= 0) continue
+    removed += count
+    if (removedSample.length < 8 && line.trim().length > 0) {
+      for (let i = 0; i < count && removedSample.length < 8; i++) {
+        removedSample.push(line.slice(0, 200))
+      }
+    }
+  }
+
+  return {
+    addedLines: added,
+    removedLines: removed,
+    unchangedLines: unchanged,
+    sample: { added: addedSample, removed: removedSample },
+  }
+}
+
+/**
+ * Diff-only variant of amendPlanWithClaude: runs the same prompt but does NOT
+ * write to disk. Returns the proposed full markdown + a diff summary the chat
+ * can render. Caller then sends the markdown back via applyPendingAmendment
+ * to actually write it.
+ */
+export async function draftPlanAmendment(
+  instruction: string,
+  anthropic: AmendClient,
+): Promise<{ proposedMarkdown: string; currentMarkdown: string; diff: ReturnType<typeof summarizeMarkdownDiff>; reasoning: string }> {
+  const before = await readPlanMarkdown()
+  const { markdown: after, reasoning } = await amendPlanWithClaude(instruction, anthropic)
+  const diff = summarizeMarkdownDiff(before, after)
+  return {
+    proposedMarkdown: after,
+    currentMarkdown: before,
+    diff,
+    reasoning,
+  }
+}
+
+/**
+ * Apply a previously-drafted plan amendment. Caller hands us the markdown
+ * that came out of draftPlanAmendment. We commit + push it.
+ */
+export async function applyPendingPlanAmendment(
+  proposedMarkdown: string,
+  amendmentSummary: string,
+  actorPhone?: string,
+): Promise<{ sha: string; pushed: boolean }> {
+  return writePlanMarkdown(
+    proposedMarkdown,
+    `atlas: amend plan — ${amendmentSummary.slice(0, 80)}`,
+    'amend',
+    actorPhone,
+    amendmentSummary,
+  )
+}
+
+/**
+ * Free-form "draft a new plan from this prompt" — generates a fresh master
+ * plan markdown structure based on the user's freeform goals. Used by the
+ * "clean rebuild" / "draft me a plan from scratch" chat flow.
+ *
+ * Does NOT apply — returns the proposed markdown + diff against current plan.
+ * User reviews + applies via applyPendingPlanAmendment.
+ *
+ * Caller can pass contextRefs (file paths under .agent/ or docs/) that get
+ * read and inlined into the prompt as "draw from these documents". Common
+ * uses: docs/v3-step2-v1-audit.md, docs/v3-step3-v2-audit.md,
+ * docs/MAXONS_Workflow_v1.md.
+ */
+export async function draftNewPlan(
+  freeformPrompt: string,
+  contextRefs: string[],
+  anthropic: AmendClient,
+): Promise<{ proposedMarkdown: string; currentMarkdown: string; diff: ReturnType<typeof summarizeMarkdownDiff>; reasoning: string }> {
+  const before = await readPlanMarkdown().catch(() => '')
+
+  const contextBlocks: string[] = []
+  for (const ref of contextRefs) {
+    try {
+      const path = resolve(REPO_ROOT, ref)
+      const content = await readFile(path, 'utf-8')
+      // Cap each context doc at 12KB so we don't blow Claude's context budget.
+      contextBlocks.push(`### Context from ${ref}\n\n${content.slice(0, 12_000)}`)
+    } catch {
+      contextBlocks.push(`### Context from ${ref}\n\n(file not found — skipping)`)
+    }
+  }
+
+  const prompt = [
+    `You are drafting a fresh master plan for CropsIntel V3.`,
+    ``,
+    `User's freeform brief:`,
+    freeformPrompt,
+    ``,
+    contextBlocks.length > 0 ? `Reference documents to draw from (DO NOT copy verbatim — distill into a new plan):\n\n${contextBlocks.join('\n\n---\n\n')}` : '',
+    ``,
+    `Current master plan (for reference; you may replace it entirely or evolve it — follow the user's intent):`,
+    ``,
+    before.slice(0, 16_000),
+    ``,
+    `Return ONLY the new full master-plan markdown file content. Use H1 + H2 headings for top-level phases. Each leaf node should be a concrete deliverable. Preserve any structural elements (frontmatter, navigation lines) only if they were already present.`,
+  ].filter(Boolean).join('\n')
+
+  const response = await anthropic.messages.create({
+    model: 'claude-opus-4-7',
+    max_tokens: 16000,
+    system: 'You are a senior product architect drafting a master plan. The output must be a complete, actionable, structured markdown document — phases as H1/H2, leaves as concrete deliverables. Return ONLY the markdown file content; no preamble, no fences.',
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const text = response.content
+    .filter(b => b.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text!)
+    .join('\n')
+    .trim()
+  const after = text.replace(/^```(?:markdown|md)?\n/, '').replace(/\n```\s*$/, '')
+
+  const diff = summarizeMarkdownDiff(before, after)
+  return {
+    proposedMarkdown: after,
+    currentMarkdown: before,
+    diff,
+    reasoning: `drafted via claude-opus-4-7 with ${contextRefs.length} context refs`,
+  }
+}

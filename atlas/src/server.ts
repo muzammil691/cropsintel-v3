@@ -100,6 +100,9 @@ import {
   resolveDiscussionItem,
   findRelatedSpecs,
   amendPlanWithClaude,
+  draftPlanAmendment,
+  applyPendingPlanAmendment,
+  draftNewPlan,
   queueSpecFromPlanNode,
 } from './lib/plan-server'
 import { getWorkflowGraph, clearWorkflowCache } from './lib/workflow-parser'
@@ -2991,6 +2994,100 @@ export async function startServer(): Promise<void> {
           payload.instruction,
         )
         json(res, 200, { ok: true, sha: result.sha, pushed: result.pushed })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/draft-amendment — runs the amend prompt without writing.
+    // Returns proposed markdown + diff so chat can render an Apply/Reject card.
+    if (url === '/atlas/plan/draft-amendment' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { instruction?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.instruction || typeof payload.instruction !== 'string') {
+        json(res, 400, { error: 'instruction required' })
+        return
+      }
+      try {
+        const result = await draftPlanAmendment(payload.instruction, anthropic)
+        json(res, 200, {
+          ok: true,
+          proposed_markdown: result.proposedMarkdown,
+          current_markdown: result.currentMarkdown,
+          diff: result.diff,
+          reasoning: result.reasoning,
+        })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/apply-amendment — write a previously-drafted markdown
+    // verbatim. Caller passes proposed_markdown from draft-amendment / draft-new.
+    if (url === '/atlas/plan/apply-amendment' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { proposed_markdown?: string; summary?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.proposed_markdown || typeof payload.proposed_markdown !== 'string' || payload.proposed_markdown.length < 100) {
+        json(res, 400, { error: 'proposed_markdown required (min 100 chars)' })
+        return
+      }
+      const summary = typeof payload.summary === 'string' && payload.summary.trim().length > 0
+        ? payload.summary.trim()
+        : 'chat-applied amendment'
+      try {
+        const result = await applyPendingPlanAmendment(payload.proposed_markdown, summary, principal.phone)
+        json(res, 200, { ok: true, sha: result.sha, pushed: result.pushed })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/draft-new — drafts a brand-new master plan from a
+    // free-form prompt. Optional context_refs are file paths inlined as
+    // reference docs (capped at 12KB each). Same return shape as draft-amendment.
+    if (url === '/atlas/plan/draft-new' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { prompt?: string; context_refs?: unknown }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.prompt || typeof payload.prompt !== 'string') {
+        json(res, 400, { error: 'prompt required' })
+        return
+      }
+      const contextRefs: string[] = Array.isArray(payload.context_refs)
+        ? payload.context_refs.filter((s): s is string => typeof s === 'string')
+        : []
+      try {
+        const result = await draftNewPlan(payload.prompt, contextRefs, anthropic)
+        json(res, 200, {
+          ok: true,
+          proposed_markdown: result.proposedMarkdown,
+          current_markdown: result.currentMarkdown,
+          diff: result.diff,
+          reasoning: result.reasoning,
+        })
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }
