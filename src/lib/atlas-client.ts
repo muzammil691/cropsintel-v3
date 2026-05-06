@@ -1336,6 +1336,8 @@ export interface BuilderQueueSpec {
   depends_on: string[]
   blocked: boolean
   blocked_by: string[]
+  /** Pillar B.2: Builder skips this spec until it's resumed. */
+  paused?: boolean
 }
 
 export interface BuilderInFlightSpec {
@@ -1376,6 +1378,39 @@ export async function setBuilderPriority(
 export async function cancelBuilderTask(taskId: string): Promise<{ ok: true }> {
   return fetchJson<{ ok: true }>(
     `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/cancel`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+// ─── Pillar B (Queue tab Xbox-style) ────────────────────────────────────────
+
+/** Move a queued spec one position up or down (swaps priority with neighbor). */
+export async function moveBuilderPosition(
+  taskId: string,
+  direction: 'up' | 'down',
+): Promise<{ ok: boolean; moved: boolean; reason?: string }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/move`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction }),
+    },
+  )
+}
+
+/** Pause a queued spec — Builder skips it until resumed. */
+export async function pauseBuilderTask(taskId: string): Promise<{ ok: true; updated: boolean }> {
+  return fetchJson<{ ok: true; updated: boolean }>(
+    `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/pause`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+/** Resume a previously-paused queued spec. */
+export async function resumeBuilderTask(taskId: string): Promise<{ ok: true; updated: boolean }> {
+  return fetchJson<{ ok: true; updated: boolean }>(
+    `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/resume`,
     { method: 'POST', headers: authHeaders() },
   )
 }

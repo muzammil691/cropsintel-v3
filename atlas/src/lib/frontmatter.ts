@@ -15,6 +15,12 @@ export interface SpecFrontmatter {
    * Codex sibling Builder exists).
    */
   primaryDomain?: 'frontend' | 'analytical' | 'research' | 'mixed'
+  /**
+   * Pillar B (Queue tab Xbox-style) — when true, agent-loop's pick_next_task
+   * skips this spec entirely. Distinct from cancel: paused stays in queued/
+   * and can be resumed; cancel moves the spec to cancelled/.
+   */
+  paused?: boolean
   // Pass-through for any other scalar fields we don't model explicitly.
   extra?: Record<string, string>
 }
@@ -111,6 +117,8 @@ function parseFrontmatterLines(lines: string[]): SpecFrontmatter {
           stripped === 'research' || stripped === 'mixed') {
         fm.primaryDomain = stripped
       }
+    } else if (key === 'paused') {
+      fm.paused = stripped === 'true' || stripped === 'yes' || stripped === '1'
     } else {
       fm.extra = fm.extra ?? {}
       fm.extra[key] = stripped
@@ -162,6 +170,10 @@ export function serializeFrontmatter(fm: SpecFrontmatter): string {
   }
   if (fm.primaryDomain !== undefined) {
     lines.push(`primary-domain: ${fm.primaryDomain}`)
+  }
+  if (fm.paused === true) {
+    // Only serialize when truthy; absence is the implicit "not paused" default.
+    lines.push('paused: true')
   }
   if (fm.extra) {
     for (const [k, v] of Object.entries(fm.extra)) {

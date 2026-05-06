@@ -176,9 +176,10 @@ bootstrap() {
 #     - phase-X-foo
 # Algorithm:
 #   1. Read all queued specs' frontmatter.
-#   2. Filter out specs whose `depends-on` ids are NOT all present in done/.
-#   3. Sort by (priority ASC, filename ASC). Lower priority number ships first.
-#   4. Return head.
+#   2. Filter out specs that are paused (`paused: true`).
+#   3. Filter out specs whose `depends-on` ids are NOT all present in done/.
+#   4. Sort by (priority ASC, filename ASC). Lower priority number ships first.
+#   5. Return head.
 # When no spec declares frontmatter, behavior is identical to alphabetical sort
 # (priority defaults to 5 for every spec) — preserves the 1.10n-w shipping order.
 pick_next_task() {
@@ -204,6 +205,16 @@ pick_next_task() {
       p=$(echo "$fm" | awk -F: '/^priority:[[:space:]]*[0-9]+/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}')
       if [ -n "$p" ]; then
         priority="$p"
+      fi
+    fi
+
+    # paused: scalar bool. Pillar B.2 — Atlas can pause/resume specs.
+    # Builder skips paused specs entirely; resume puts them back in pickup order.
+    if [ -n "$fm" ]; then
+      local pflag
+      pflag=$(echo "$fm" | awk -F: '/^paused:[[:space:]]*true/ {print "1"; exit}')
+      if [ "$pflag" = "1" ]; then
+        continue
       fi
     fi
 

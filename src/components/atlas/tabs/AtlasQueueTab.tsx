@@ -13,8 +13,10 @@ import {
 } from '@/components/ui/dialog'
 import {
   fetchBuilderQueue,
-  setBuilderPriority,
   cancelBuilderTask,
+  moveBuilderPosition,
+  pauseBuilderTask,
+  resumeBuilderTask,
   fetchAtlasMe,
   forcePickBuilder,
   type BuilderQueueResponse,
@@ -67,18 +69,46 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     window.setTimeout(() => setToastMsg(null), 3000)
   }
 
-  const handlePriority = async (taskId: string, delta: -1 | 1) => {
-    const spec = data.queued.find(s => s.id === taskId)
-    if (!spec) return
-    const next = Math.min(10, Math.max(1, spec.priority + delta))
-    if (next === spec.priority) return
+  // Pillar B.1: positional move (replaces the old priority +/- buttons).
+  const handleMove = async (taskId: string, direction: 'up' | 'down') => {
     setBusyTaskId(taskId)
     try {
-      await setBuilderPriority(taskId, next)
+      const r = await moveBuilderPosition(taskId, direction)
       await refresh()
-      showToast(`priority(${taskId}) → ${next}`)
+      if (r.moved) {
+        showToast(`moved ${taskId} ${direction}`)
+      } else {
+        showToast(r.reason ?? `${taskId} stayed put`)
+      }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'set_priority failed')
+      showToast(err instanceof Error ? err.message : 'move failed')
+    } finally {
+      setBusyTaskId(null)
+    }
+  }
+
+  // Pillar B.2: pause / resume.
+  const handlePause = async (taskId: string) => {
+    setBusyTaskId(taskId)
+    try {
+      await pauseBuilderTask(taskId)
+      await refresh()
+      showToast(`paused ${taskId}`)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'pause failed')
+    } finally {
+      setBusyTaskId(null)
+    }
+  }
+
+  const handleResume = async (taskId: string) => {
+    setBusyTaskId(taskId)
+    try {
+      await resumeBuilderTask(taskId)
+      await refresh()
+      showToast(`resumed ${taskId}`)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'resume failed')
     } finally {
       setBusyTaskId(null)
     }
@@ -221,24 +251,39 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
               canManage={false}
             />
           )}
-          {data.queued.map((spec, i) => (
-            <QueueRow
-              key={spec.id}
-              taskId={spec.id}
-              filename={spec.filename}
-              state="queued"
-              position={i + 1}
-              priority={spec.priority}
-              blocked={spec.blocked}
-              blockedBy={spec.blocked_by}
-              canManage={canManage}
-              busy={busyTaskId === spec.id}
-              onPriorityUp={() => void handlePriority(spec.id, -1)}
-              onPriorityDown={() => void handlePriority(spec.id, 1)}
-              onEdit={() => handleEdit(spec.id)}
-              onCancel={() => void handleCancel(spec.id)}
-            />
-          ))}
+          {(() => {
+            // Pillar B.1: compute the first/last index of the *active* queue
+            // (not paused, not blocked) so the move buttons disable at the edges.
+            const activeIdxs = data.queued
+              .map((s, i) => ({ i, ok: !s.paused && !s.blocked }))
+              .filter(x => x.ok)
+              .map(x => x.i)
+            const firstActive = activeIdxs[0]
+            const lastActive = activeIdxs[activeIdxs.length - 1]
+            return data.queued.map((spec, i) => (
+              <QueueRow
+                key={spec.id}
+                taskId={spec.id}
+                filename={spec.filename}
+                state="queued"
+                position={i + 1}
+                priority={spec.priority}
+                blocked={spec.blocked}
+                blockedBy={spec.blocked_by}
+                paused={spec.paused}
+                isFirstActive={i === firstActive}
+                isLastActive={i === lastActive}
+                canManage={canManage}
+                busy={busyTaskId === spec.id}
+                onMoveUp={() => void handleMove(spec.id, 'up')}
+                onMoveDown={() => void handleMove(spec.id, 'down')}
+                onEdit={() => handleEdit(spec.id)}
+                onCancel={() => void handleCancel(spec.id)}
+                onPause={() => void handlePause(spec.id)}
+                onResume={() => void handleResume(spec.id)}
+              />
+            ))
+          })()}
         </ul>
       )}
 

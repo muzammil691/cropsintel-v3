@@ -5,7 +5,7 @@ import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, verifierAudit, designerAuditCommit } from './lib/tools'
+import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, builderMovePosition, builderPauseTask, builderResumeTask, verifierAudit, designerAuditCommit } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import {
@@ -3489,6 +3489,7 @@ export async function startServer(): Promise<void> {
           depends_on: s.depends_on,
           blocked: s.blocked,
           blocked_by: s.blocked_by,
+          paused: s.paused,
         }))
         // List in-flight specs by reading .agent/tasks/in-progress/.
         const inProgressDir = `${process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'}/.agent/tasks/in-progress`
@@ -3557,6 +3558,75 @@ export async function startServer(): Promise<void> {
         try {
           await builderCancelTask(taskId)
           json(res, 200, { ok: true })
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // Pillar B.1: positional move (swap priorities with adjacent neighbor).
+    {
+      const moveMatch = url.match(/^\/atlas\/builder\/queue\/([^/]+)\/move$/)
+      if (moveMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const taskId = decodeURIComponent(moveMatch[1])
+        const body = await readBody(req)
+        let payload: { direction?: 'up' | 'down' }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        if (payload.direction !== 'up' && payload.direction !== 'down') {
+          json(res, 400, { error: "direction must be 'up' or 'down'" })
+          return
+        }
+        try {
+          const result = await builderMovePosition(taskId, payload.direction)
+          json(res, 200, result)
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // Pillar B.2: pause / resume.
+    {
+      const pauseMatch = url.match(/^\/atlas\/builder\/queue\/([^/]+)\/pause$/)
+      if (pauseMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const taskId = decodeURIComponent(pauseMatch[1])
+        try {
+          const result = await builderPauseTask(taskId)
+          json(res, 200, { ok: true, updated: result.updated, sha: result.sha })
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    {
+      const resumeMatch = url.match(/^\/atlas\/builder\/queue\/([^/]+)\/resume$/)
+      if (resumeMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const taskId = decodeURIComponent(resumeMatch[1])
+        try {
+          const result = await builderResumeTask(taskId)
+          json(res, 200, { ok: true, updated: result.updated, sha: result.sha })
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) })
         }

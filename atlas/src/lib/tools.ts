@@ -255,7 +255,7 @@ async function wouldCreateCycle(taskId: string, newDeps: string[]): Promise<bool
   return false
 }
 
-export async function builderQueueOrder(): Promise<{ order: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[] }> }> {
+export async function builderQueueOrder(): Promise<{ order: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[]; paused: boolean }> }> {
   // Refresh local view of queued/ + done/ first so order reflects HEAD.
   await withGitLock('queue-order:fetch+reset', async () => {
     try {
@@ -274,29 +274,133 @@ export async function builderQueueOrder(): Promise<{ order: Array<{ id: string; 
       .filter(f => f.endsWith('.md'))
       .map(f => f.replace(/\.md$/, '')),
   )
-  const rows: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[]; filename: string }> = []
+  const rows: Array<{ id: string; priority: number; depends_on: string[]; blocked: boolean; blocked_by: string[]; paused: boolean; filename: string }> = []
   for (const f of queuedFiles) {
     const id = f.replace(/\.md$/, '')
     let priority = 5
     let dependsOn: string[] = []
+    let paused = false
     try {
       const content = await readFile(resolve(queuedDir, f), 'utf-8')
       const parsed = parseSpec(content)
       if (typeof parsed.frontmatter.priority === 'number') priority = parsed.frontmatter.priority
       dependsOn = parsed.frontmatter.dependsOn ?? []
+      paused = parsed.frontmatter.paused === true
     } catch { /* unreadable — treat as default */ }
     const blockedBy = dependsOn.filter(d => !doneIds.has(d))
-    rows.push({ id, priority, depends_on: dependsOn, blocked: blockedBy.length > 0, blocked_by: blockedBy, filename: f })
+    rows.push({ id, priority, depends_on: dependsOn, blocked: blockedBy.length > 0, blocked_by: blockedBy, paused, filename: f })
   }
-  // Same sort as Builder: priority asc, filename asc. Blocked specs sort to the end so the head is "what Builder will pick next".
+  // Sort: ready < blocked-but-not-paused < paused-but-not-blocked < both. Within
+  // each bucket, priority asc, filename asc. Builder picks the head (always a
+  // ready, unpaused, unblocked spec).
   rows.sort((a, b) => {
-    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1
+    const aRank = (a.paused ? 2 : 0) + (a.blocked ? 1 : 0)
+    const bRank = (b.paused ? 2 : 0) + (b.blocked ? 1 : 0)
+    if (aRank !== bRank) return aRank - bRank
     if (a.priority !== b.priority) return a.priority - b.priority
     return a.filename.localeCompare(b.filename)
   })
   return {
-    order: rows.map(r => ({ id: r.id, priority: r.priority, depends_on: r.depends_on, blocked: r.blocked, blocked_by: r.blocked_by })),
+    order: rows.map(r => ({ id: r.id, priority: r.priority, depends_on: r.depends_on, blocked: r.blocked, blocked_by: r.blocked_by, paused: r.paused })),
   }
+}
+
+// ─── Pillar B.1: positional move (swap priorities with adjacent neighbor) ──
+//
+// Replaces the priority +/- buttons in the Queue tab with Xbox-style up/down
+// row motion. Algorithm: find the moved spec's position in the current queue
+// order (excluding paused/blocked rows), find its neighbor in the requested
+// direction, and either swap their priorities or nudge to break a tie.
+//
+// Two writes worst-case (when swap is needed); withGitLock serializes them so
+// the concurrent index.lock collision is avoided.
+
+export async function builderMovePosition(
+  taskId: string,
+  direction: 'up' | 'down',
+): Promise<{ ok: boolean; moved: boolean; reason?: string; sha?: string }> {
+  if (direction !== 'up' && direction !== 'down') {
+    throw new Error("builder.move_position: direction must be 'up' or 'down'")
+  }
+  const { order } = await builderQueueOrder()
+  // Move only among the active head — paused/blocked rows are at the tail and
+  // moving them changes nothing user-visible until they're resumed/unblocked.
+  const active = order.filter(r => !r.paused && !r.blocked)
+  const i = active.findIndex(r => r.id === taskId)
+  if (i < 0) {
+    return { ok: false, moved: false, reason: 'task not in active queue (paused / blocked / not-queued)' }
+  }
+  const ni = direction === 'up' ? i - 1 : i + 1
+  if (ni < 0 || ni >= active.length) {
+    return { ok: true, moved: false, reason: 'already at edge' }
+  }
+  const moved = active[i]
+  const neighbor = active[ni]
+  const movedRow = order.find(r => r.id === moved.id)!
+  const neighborRow = order.find(r => r.id === neighbor.id)!
+
+  // Different priorities → simple swap.
+  if (movedRow.priority !== neighborRow.priority) {
+    await builderSetPriority(moved.id, neighborRow.priority)
+    const r = await builderSetPriority(neighbor.id, movedRow.priority)
+    return { ok: true, moved: true, sha: r.sha }
+  }
+  // Equal priorities → nudge into the priority gap. If the gap is a wall
+  // (priority 1 going up, priority 10 going down), nudge the neighbor instead.
+  const target = direction === 'up'
+    ? Math.max(1, neighborRow.priority - 1)
+    : Math.min(10, neighborRow.priority + 1)
+  if (target !== neighborRow.priority) {
+    const r = await builderSetPriority(moved.id, target)
+    return { ok: true, moved: true, sha: r.sha }
+  }
+  // Wall on moved's side — nudge neighbor in the opposite direction.
+  const neighborTarget = direction === 'up'
+    ? Math.min(10, neighborRow.priority + 1)
+    : Math.max(1, neighborRow.priority - 1)
+  if (neighborTarget === neighborRow.priority) {
+    return { ok: true, moved: false, reason: 'priorities at boundary on both sides' }
+  }
+  const r = await builderSetPriority(neighbor.id, neighborTarget)
+  return { ok: true, moved: true, sha: r.sha }
+}
+
+// ─── Pillar B.2: pause / resume per task ────────────────────────────────────
+//
+// Sets `paused: true` (or removes it) in the spec's frontmatter and pushes.
+// Builder's pick_next_task skips paused specs (agent-loop.sh updated alongside).
+
+export async function builderPauseTask(taskId: string): Promise<{ updated: boolean; sha: string; pushed: boolean }> {
+  const relPath = `.agent/tasks/queued/${taskId}.md`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  let content: string
+  try {
+    content = await readFile(fullPath, 'utf-8')
+  } catch {
+    throw new Error(`builder.pause_task: spec not found in queued/: ${taskId}.md`)
+  }
+  const next = setFrontmatterField(content, 'paused', true)
+  if (next === content) return { updated: false, sha: 'no-changes', pushed: false }
+  await writeFile(fullPath, next, 'utf-8')
+  const result = await gitCommitAndPush(`atlas: pause ${taskId}`, [relPath])
+  return { updated: true, sha: result.sha, pushed: result.pushed }
+}
+
+export async function builderResumeTask(taskId: string): Promise<{ updated: boolean; sha: string; pushed: boolean }> {
+  const relPath = `.agent/tasks/queued/${taskId}.md`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  let content: string
+  try {
+    content = await readFile(fullPath, 'utf-8')
+  } catch {
+    throw new Error(`builder.resume_task: spec not found in queued/: ${taskId}.md`)
+  }
+  // setFrontmatterField on a falsy paused removes the line (serializer skips it).
+  const next = setFrontmatterField(content, 'paused', false)
+  if (next === content) return { updated: false, sha: 'no-changes', pushed: false }
+  await writeFile(fullPath, next, 'utf-8')
+  const result = await gitCommitAndPush(`atlas: resume ${taskId}`, [relPath])
+  return { updated: true, sha: result.sha, pushed: result.pushed }
 }
 
 // ─── Verifier ───────────────────────────────────────────────────────────────
@@ -806,7 +910,10 @@ export const TOOLS = {
   'builder.cancel_task':  { fn: builderCancelTask,  description: 'Cancel a queued task by moving it to cancelled/.' },
   'builder.set_priority': { fn: builderSetPriority, description: 'Set a queued spec\'s priority (1=urgent .. 10=lowest). Mutates frontmatter and commits+pushes so Builder picks the new order on next loop. args=(taskId, priority).' },
   'builder.set_dependencies': { fn: builderSetDependencies, description: 'Set a queued spec\'s depends-on list. Each dep must exist somewhere in .agent/tasks/. Cycles are rejected. Commits+pushes. args=(taskId, dependsOn[]).' },
-  'builder.queue_order':  { fn: builderQueueOrder,  description: 'Compute the current queue pickup order Builder will use (priority + dependency aware). Read-only. Returns array of {id, priority, depends_on, blocked, blocked_by}.' },
+  'builder.queue_order':  { fn: builderQueueOrder,  description: 'Compute the current queue pickup order Builder will use (priority + dependency + paused aware). Read-only. Returns array of {id, priority, depends_on, blocked, blocked_by, paused}.' },
+  'builder.move_position':{ fn: builderMovePosition,description: 'Move a queued spec one position up or down — Xbox-style. Internally swaps priorities with the adjacent neighbor (or nudges to break a tie). args=(taskId, direction). direction: "up" | "down".' },
+  'builder.pause_task':   { fn: builderPauseTask,   description: 'Pause a queued spec — Builder will skip it on pickup. Distinct from cancel: paused stays in queued/ and is reversible via builder.resume_task. args=(taskId).' },
+  'builder.resume_task':  { fn: builderResumeTask,  description: 'Resume a previously-paused queued spec — Builder picks it up again on next loop. args=(taskId).' },
   'verifier.audit':       { fn: verifierAudit,      description: 'Trigger Verifier to audit a task by ID and HEAD range. Returns verdict + gaps.' },
   'verifier.recent_runs': { fn: verifierRecentRuns, description: 'List recent verifier audit runs.' },
   'council.write_spec':   { fn: councilWriteSpec,   description: 'Ask Council to decompose a phase into a task spec.' },

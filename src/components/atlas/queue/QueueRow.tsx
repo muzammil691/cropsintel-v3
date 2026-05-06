@@ -1,4 +1,4 @@
-import { ChevronUp, ChevronDown, Pencil, Trash2, FileText, Clock, ExternalLink } from 'lucide-react'
+import { ChevronUp, ChevronDown, Pencil, Trash2, FileText, Clock, ExternalLink, Pause, Play } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface QueueRowProps {
@@ -9,13 +9,22 @@ interface QueueRowProps {
   priority?: number
   blocked?: boolean
   blockedBy?: string[]
+  /** Pillar B.2: this spec is paused — Builder will skip it. */
+  paused?: boolean
+  /** Pillar B.1: edge flags so the Move buttons disable when there's no neighbor. */
+  isFirstActive?: boolean
+  isLastActive?: boolean
   startedAt?: string | null
   canManage: boolean
   busy?: boolean
-  onPriorityUp?: () => void
-  onPriorityDown?: () => void
+  /** Pillar B.1: positional move (replaces the old priority +/- buttons). */
+  onMoveUp?: () => void
+  onMoveDown?: () => void
   onEdit?: () => void
   onCancel?: () => void
+  /** Pillar B.2 */
+  onPause?: () => void
+  onResume?: () => void
 }
 
 export function QueueRow({
@@ -26,13 +35,18 @@ export function QueueRow({
   priority,
   blocked,
   blockedBy,
+  paused,
+  isFirstActive,
+  isLastActive,
   startedAt,
   canManage,
   busy,
-  onPriorityUp,
-  onPriorityDown,
+  onMoveUp,
+  onMoveDown,
   onEdit,
   onCancel,
+  onPause,
+  onResume,
 }: QueueRowProps) {
   const isInFlight = state === 'in-progress'
   return (
@@ -41,6 +55,8 @@ export function QueueRow({
         'rounded-md border p-3',
         isInFlight
           ? 'border-emerald-300 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/30'
+          : paused
+          ? 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 opacity-75'
           : blocked
           ? 'border-amber-200 dark:border-amber-900 bg-amber-50/30 dark:bg-amber-950/20'
           : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950',
@@ -48,13 +64,17 @@ export function QueueRow({
     >
       <div className="flex items-baseline gap-2">
         <span aria-hidden className="text-sm shrink-0">
-          {isInFlight ? '⏳' : circleNumber(position ?? 0)}
+          {isInFlight ? '⏳' : paused ? '⏸' : circleNumber(position ?? 0)}
         </span>
         <code className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
           {taskId}
         </code>
         <span className="ml-auto text-[10px] uppercase tracking-wider text-slate-500 tabular-nums whitespace-nowrap">
-          {isInFlight ? 'IN-PROGRESS' : `prio ${priority ?? 5}`}
+          {isInFlight
+            ? 'IN-PROGRESS'
+            : paused
+            ? 'PAUSED'
+            : `prio ${priority ?? 5}`}
         </span>
       </div>
 
@@ -68,6 +88,10 @@ export function QueueRow({
             <span>·</span>
             <span>Builder</span>
           </>
+        ) : paused ? (
+          <span className="text-slate-600 dark:text-slate-300">
+            paused — Builder will skip until resumed
+          </span>
         ) : (
           <>
             {blocked ? (
@@ -94,12 +118,34 @@ export function QueueRow({
         )}
         {!isInFlight && canManage && (
           <>
-            <SmallButton onClick={onPriorityUp} disabled={busy} title="Increase priority (lower number)" aria-label="Increase priority">
+            {/* Pillar B.1: positional move. Disabled when paused (paused rows
+                live at the tail of the order and aren't part of the active queue). */}
+            <SmallButton
+              onClick={onMoveUp}
+              disabled={busy || paused || isFirstActive}
+              title="Move up one position"
+              aria-label="Move up one position"
+            >
               <ChevronUp className="size-3" aria-hidden />
             </SmallButton>
-            <SmallButton onClick={onPriorityDown} disabled={busy} title="Decrease priority (higher number)" aria-label="Decrease priority">
+            <SmallButton
+              onClick={onMoveDown}
+              disabled={busy || paused || isLastActive}
+              title="Move down one position"
+              aria-label="Move down one position"
+            >
               <ChevronDown className="size-3" aria-hidden />
             </SmallButton>
+            {/* Pillar B.2: pause / resume */}
+            {paused ? (
+              <SmallButton onClick={onResume} disabled={busy} title="Resume — Builder picks this up again" aria-label="Resume task">
+                <Play className="size-3" aria-hidden /> resume
+              </SmallButton>
+            ) : (
+              <SmallButton onClick={onPause} disabled={busy} title="Pause — Builder will skip until resumed" aria-label="Pause task">
+                <Pause className="size-3" aria-hidden /> pause
+              </SmallButton>
+            )}
             <SmallButton onClick={onEdit} disabled={busy}>
               <Pencil className="size-3" aria-hidden /> edit
             </SmallButton>
