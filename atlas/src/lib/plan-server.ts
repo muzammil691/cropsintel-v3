@@ -12,6 +12,7 @@ import { promisify } from 'util'
 import { withGitLock } from './git-mutex'
 import { parsePlan, serializePlan, moveNode, type PlanTree } from './plan-parser'
 import { getSupabaseClient } from './supabase'
+import { parseSpec, serializeFrontmatter } from './frontmatter'
 
 const execFileP = promisify(execFile)
 
@@ -177,6 +178,109 @@ export function buildDuplicateSpecError(filename: string, bucket: SpecBucket): s
     ? 'Builder is already running this spec — wait for it to land before queueing a re-draft.'
     : 'A queued spec with this filename already exists. Cancel it first if you want to replace, or pick a different filename.'
   return `${filename} already exists in .agent/tasks/${bucket}/. ${guidance}`
+}
+
+// ─── Band 3: requeue-with-gaps helper for Verifier-failed specs ──────────
+//
+// When Verifier returns passed=false, the conductor calls this to inject the
+// gaps into a remediation spec, queue it, and let Builder + Verifier loop
+// converge. Without this, failed specs sit in .agent/tasks/failed/ requiring
+// manual intervention — exactly what Atlas flagged in its self-report
+// ("Auto-requeue missing — specs die in limbo").
+//
+// Filename pattern: ${taskId}-rem.md for the first remediation, ${taskId}-rem2.md
+// for the second, etc. Frontmatter carries `remediation: true` + the attempt
+// number so the conductor's 3-attempt cap can read it.
+
+export interface VerifierGap {
+  check?: string
+  severity?: string
+  expected?: string
+  actual?: string
+  remediation?: string
+  description?: string
+}
+
+export async function requeueWithGaps(args: {
+  taskId: string
+  gaps: VerifierGap[]
+  attempt?: number  // defaults to 1; conductor passes incremented value for chained remediations
+}): Promise<{
+  ok: boolean
+  filename?: string
+  sha?: string
+  pushed?: boolean
+  reason?: string
+}> {
+  const attempt = args.attempt ?? 1
+  if (attempt > 3) {
+    return { ok: false, reason: '3-attempt cap exceeded — escalate via WhatsApp instead of looping' }
+  }
+  // Find the failed spec — prefer failed/, fall back to done/ (some legacy
+  // builder runs land in done/ with passed=false).
+  const failedPath = resolve(REPO_ROOT, '.agent/tasks/failed', `${args.taskId}.md`)
+  const donePath = resolve(REPO_ROOT, '.agent/tasks/done', `${args.taskId}.md`)
+  let originalContent: string | null = null
+  for (const p of [failedPath, donePath]) {
+    try {
+      originalContent = await readFile(p, 'utf-8')
+      break
+    } catch { /* try next */ }
+  }
+  if (!originalContent) {
+    return { ok: false, reason: `original spec not found in failed/ or done/ for ${args.taskId}` }
+  }
+
+  // Compute remediation filename. Skip if already queued/in-progress (idempotent).
+  const remSuffix = attempt === 1 ? '-rem' : `-rem${attempt}`
+  const remFilename = `${args.taskId}${remSuffix}.md`
+  const existing = await findExistingSpecBucket(remFilename)
+  if (existing === 'queued' || existing === 'in-progress') {
+    return { ok: true, filename: remFilename, reason: `already ${existing} (idempotent no-op)` }
+  }
+  if (existing === 'done') {
+    // Try the next attempt number.
+    return requeueWithGaps({ ...args, attempt: attempt + 1 })
+  }
+
+  // Parse the original spec, mutate frontmatter, append gaps section.
+  const parsed = parseSpec(originalContent)
+  const newFrontmatter = {
+    ...parsed.frontmatter,
+    priority: 1, // remediation is always urgent
+    remediation: true,
+    remediationAttempt: attempt,
+    dependsOn: undefined, // clear inherited deps — this is a fresh attempt
+  }
+  const fmText = serializeFrontmatter(newFrontmatter)
+  const gapsSection = buildGapsSection(args.gaps, args.taskId, attempt)
+  const body = (parsed.body ?? '').replace(/\s+$/, '')
+  const newContent = `---\n${fmText}\n---\n${body}\n\n${gapsSection}\n`
+
+  const relPath = `.agent/tasks/queued/${remFilename}`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  await writeFile(fullPath, newContent, 'utf-8')
+  const result = await gitCommitAndPush(
+    `atlas: requeue with gaps — ${args.taskId} (attempt ${attempt})`,
+    [relPath],
+  )
+  return { ok: true, filename: remFilename, sha: result.sha, pushed: result.pushed }
+}
+
+function buildGapsSection(gaps: VerifierGap[], taskId: string, attempt: number): string {
+  const header = `## Prior failure — gaps to address (attempt ${attempt})\n\nThe previous run of \`${taskId}\` failed Verifier review. Address every gap below before considering this remediation complete. The auto-requeue loop tracks attempts; after 3 failures, the conductor escalates via WhatsApp instead of queueing again.\n`
+  if (!Array.isArray(gaps) || gaps.length === 0) {
+    return `${header}\n_No structured gap detail returned by Verifier — investigate the verifier_runs row for ${taskId} directly._\n`
+  }
+  const items = gaps.slice(0, 20).map((g, i) => {
+    const lines: string[] = [`### Gap ${i + 1}: ${g.check ?? g.description ?? 'unspecified check'}`]
+    if (g.severity) lines.push(`- Severity: \`${g.severity}\``)
+    if (g.expected) lines.push(`- Expected: ${g.expected}`)
+    if (g.actual) lines.push(`- Actual: ${g.actual}`)
+    if (g.remediation) lines.push(`- Remediation: ${g.remediation}`)
+    return lines.join('\n')
+  })
+  return `${header}\n${items.join('\n\n')}\n`
 }
 
 export async function queueSpecFromPlanNode(

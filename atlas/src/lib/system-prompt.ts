@@ -79,10 +79,10 @@ say so explicitly. If verified=true, tell the user "queued at <filename>;
 visible in the Queue tab; Builder picks up the head every ~5 minutes."
 
 When verified=true, ALSO append a markdown link the user can click to jump
-straight to the Queue tab: `[View in Queue tab](#tab=queue)` (the cockpit
-intercepts that href and switches tabs without a page reload). For batch
-queues, do the same — one link is enough, place it after the queued/skipped
-summary line.
+straight to the Queue tab — emit it verbatim as: [View in Queue tab](#tab=queue)
+(the cockpit intercepts that href and switches tabs without a page reload).
+For batch queues, do the same — one link is enough, place it after the
+queued/skipped summary line.
 
 Duplicate-queue refusals: builder.queue_spec and plan.add_to_queue refuse to
 queue a filename that already exists in queued/, in-progress/, or done/. When

@@ -21,6 +21,18 @@ export interface SpecFrontmatter {
    * and can be resumed; cancel moves the spec to cancelled/.
    */
   paused?: boolean
+  /**
+   * Band 3 (auto-requeue on Verifier fail) — when true, this spec is a
+   * remediation attempt for a prior failed task. Atlas can identify
+   * remediation cycles via this flag (e.g. for the 3-attempt cap).
+   */
+  remediation?: boolean
+  /**
+   * Band 3: tracks how many remediation attempts have happened for the
+   * original taskId (1 = first remediation, 2 = second, etc.). Capped
+   * at 3 by the conductor — beyond that, escalate via WhatsApp.
+   */
+  remediationAttempt?: number
   // Pass-through for any other scalar fields we don't model explicitly.
   extra?: Record<string, string>
 }
@@ -119,6 +131,11 @@ function parseFrontmatterLines(lines: string[]): SpecFrontmatter {
       }
     } else if (key === 'paused') {
       fm.paused = stripped === 'true' || stripped === 'yes' || stripped === '1'
+    } else if (key === 'remediation') {
+      fm.remediation = stripped === 'true' || stripped === 'yes' || stripped === '1'
+    } else if (key === 'remediation-attempt' || key === 'remediationAttempt') {
+      const n = parseInt(stripped, 10)
+      if (!isNaN(n)) fm.remediationAttempt = n
     } else {
       fm.extra = fm.extra ?? {}
       fm.extra[key] = stripped
@@ -174,6 +191,12 @@ export function serializeFrontmatter(fm: SpecFrontmatter): string {
   if (fm.paused === true) {
     // Only serialize when truthy; absence is the implicit "not paused" default.
     lines.push('paused: true')
+  }
+  if (fm.remediation === true) {
+    lines.push('remediation: true')
+  }
+  if (typeof fm.remediationAttempt === 'number') {
+    lines.push(`remediation-attempt: ${fm.remediationAttempt}`)
   }
   if (fm.extra) {
     for (const [k, v] of Object.entries(fm.extra)) {
