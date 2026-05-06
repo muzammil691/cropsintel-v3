@@ -91,10 +91,11 @@ export async function askGPT4oSecondJudge(
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
     console.warn('[verifier] OPENAI_API_KEY not set — second judge fallback unavailable')
+    // Phase 1.00f: missing API key treated as hard FAIL
     return {
-      passed: true,
+      passed: false,
       gaps: [],
-      notes: 'GPT-4o second judge skipped — OPENAI_API_KEY not configured',
+      notes: 'GPT-4o second judge skipped — OPENAI_API_KEY not configured (treated as hard FAIL per phase-1.00f)',
       confidence: 0,
     }
   }
@@ -114,6 +115,22 @@ export async function askGPT4oSecondJudge(
     if (!content) throw new Error('Empty response from GPT-4o second judge')
 
     const parsed = parseResponse(content)
+    // Phase 1.00f: null/undefined passed values are hard FAIL
+    if (parsed.passed === null || parsed.passed === undefined) {
+      console.warn('[verifier] GPT-4o second judge returned null/undefined verdict — normalizing to hard FAIL')
+      return {
+        passed: false,
+        gaps: parsed.gaps.length > 0 ? parsed.gaps : [{
+          check: 'gpt-4o-second-judgment',
+          severity: 'fail',
+          expected: 'Judge returns non-null verdict',
+          actual: 'GPT-4o second judge returned null/undefined for passed field',
+          remediation: 'Manual review required — judge returned no verdict',
+        }],
+        notes: `[GPT-4o fallback] Returned null/undefined verdict (treated as FAIL). Original notes: ${parsed.notes}`,
+        confidence: parsed.confidence,
+      }
+    }
     return {
       passed: parsed.passed,
       gaps: parsed.gaps,
@@ -123,11 +140,12 @@ export async function askGPT4oSecondJudge(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[verifier] GPT-4o second-judge failed:', msg)
+    // Phase 1.00f: judge failures are hard FAIL
     return {
       passed: false,
       gaps: [{
         check: 'second-judge-fallback',
-        severity: 'warn',
+        severity: 'fail',
         expected: 'Second-opinion judge completes successfully',
         actual: `Both Gemini AND GPT-4o failed. GPT-4o error: ${msg}`,
         remediation: 'Manual review needed — automated second-opinion unavailable.',

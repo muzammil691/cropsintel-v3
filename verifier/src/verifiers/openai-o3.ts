@@ -77,7 +77,8 @@ export async function askO3Judgment(
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
     console.warn('[verifier] OPENAI_API_KEY not set — skipping o3 judgment')
-    return { passed: true, gaps: [], notes: 'o3 judgment skipped — OPENAI_API_KEY not configured', confidence: 0 }
+    // Phase 1.00f: missing API key treated as hard FAIL, not pass
+    return { passed: false, gaps: [], notes: 'o3 judgment skipped — OPENAI_API_KEY not configured (treated as hard FAIL per phase-1.00f)', confidence: 0 }
   }
 
   const client = new OpenAI({ apiKey })
@@ -93,15 +94,32 @@ export async function askO3Judgment(
     if (!content) throw new Error('Empty response from o3')
 
     const parsed = parseResponse(content)
+    // Phase 1.00f: null/undefined passed values are hard FAIL, never inconclusive
+    if (parsed.passed === null || parsed.passed === undefined) {
+      console.warn('[verifier] o3 returned null/undefined verdict — normalizing to hard FAIL')
+      return {
+        passed: false,
+        gaps: parsed.gaps.length > 0 ? parsed.gaps : [{
+          check: 'o3-judgment',
+          severity: 'fail',
+          expected: 'o3 judge returns non-null verdict',
+          actual: 'o3 returned null/undefined for passed field',
+          remediation: 'Manual review required — judge returned no verdict',
+        }],
+        notes: `o3 returned null/undefined verdict (treated as FAIL). Original notes: ${parsed.notes}`,
+        confidence: parsed.confidence,
+      }
+    }
     return { passed: parsed.passed, gaps: parsed.gaps, notes: parsed.notes, confidence: parsed.confidence }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[verifier] o3 judgment failed:', msg)
+    // Phase 1.00f: judge failures are hard FAIL, not warn
     return {
       passed: false,
       gaps: [{
         check: 'o3-judgment',
-        severity: 'warn',
+        severity: 'fail',
         expected: 'o3 judgment completes successfully',
         actual: `o3 API call failed: ${msg}`,
         remediation: 'Check OPENAI_API_KEY and network connectivity',
