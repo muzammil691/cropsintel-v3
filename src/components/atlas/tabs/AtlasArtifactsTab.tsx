@@ -12,6 +12,7 @@ import {
   diagnoseBatch,
   fetchAtlasMe,
   fetchTeamPortalReports,
+  queueAllPendingSpecs,
   triageTeamReport,
   type AtlasMe,
   type BatchDiagnoseItem,
@@ -20,6 +21,8 @@ import {
   type DesignAuditGap,
   type TeamReport,
 } from '@/lib/atlas-client'
+import { Button } from '@/components/ui/button'
+import { Loader2, FileCheck2 } from 'lucide-react'
 import { BatchDiagnoseToolbar } from '../diagnose/BatchDiagnoseToolbar'
 import { CombinedDiagnosisCard } from '../diagnose/CombinedDiagnosisCard'
 
@@ -80,10 +83,37 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
     openForks,
     loading,
     error,
+    refresh,
     resolveFork,
     dismissSpec,
     dismissAudit,
   } = artifacts
+
+  // D.2: bulk-queue all pending specs in one git push.
+  const [queueAllBusy, setQueueAllBusy] = useState(false)
+  const handleQueueAll = useCallback(async () => {
+    if (queueAllBusy || pendingSpecs.length === 0) return
+    setQueueAllBusy(true)
+    try {
+      const r = await queueAllPendingSpecs()
+      const queuedN = r.queued.length
+      const failedN = r.failed.length
+      if (queuedN > 0 && failedN === 0) {
+        showToast(`Queued ${queuedN} spec${queuedN === 1 ? '' : 's'} · commit ${r.sha.slice(0, 7)}`)
+      } else if (queuedN > 0 && failedN > 0) {
+        showToast(`Queued ${queuedN} · ${failedN} skipped (${r.failed[0].error.slice(0, 40)}…)`)
+      } else if (queuedN === 0 && failedN > 0) {
+        showToast(`No specs queued — ${failedN} skipped (${r.failed[0].error.slice(0, 60)}…)`)
+      } else {
+        showToast('No pending specs to queue')
+      }
+      refresh()
+    } catch (err) {
+      showToast(`Queue all failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setQueueAllBusy(false)
+    }
+  }, [queueAllBusy, pendingSpecs.length, refresh])
   const { traces } = useWorkflowTraces(30000, 5)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -430,7 +460,24 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
 
       <div className="space-y-4">
         {pendingSpecs.length > 0 && (
-          <ArtifactGroup title="Pending specs" count={pendingSpecs.length}>
+          <ArtifactGroup
+            title="Pending specs"
+            count={pendingSpecs.length}
+            headerAction={
+              <Button
+                size="sm"
+                onClick={() => void handleQueueAll()}
+                disabled={queueAllBusy || pendingSpecs.length === 0}
+                className="h-7 text-xs px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                {queueAllBusy ? (
+                  <><Loader2 className="size-3 mr-1 animate-spin" /> Queueing…</>
+                ) : (
+                  <><FileCheck2 className="size-3 mr-1" /> Queue all ({pendingSpecs.length})</>
+                )}
+              </Button>
+            }
+          >
             <ul className="space-y-2">
               {pendingSpecs.map((spec) => {
                 const id = `spec:${spec.id}`
@@ -616,17 +663,22 @@ export default function AtlasArtifactsTab({ artifacts }: AtlasArtifactsTabProps)
 function ArtifactGroup({
   title,
   count,
+  headerAction,
   children,
 }: {
   title: string
   count: number
+  headerAction?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-        {title} <span className="tabular-nums">({count})</span>
-      </h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          {title} <span className="tabular-nums">({count})</span>
+        </h3>
+        {headerAction}
+      </div>
       {children}
     </section>
   )

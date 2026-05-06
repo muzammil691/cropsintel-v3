@@ -5,7 +5,7 @@ import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, builderMovePosition, builderPauseTask, builderResumeTask, verifierAudit, designerAuditCommit } from './lib/tools'
+import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, builderMovePosition, builderPauseTask, builderResumeTask, builderQueueSpecsBatch, verifierAudit, designerAuditCommit } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import {
@@ -2385,6 +2385,58 @@ export async function startServer(): Promise<void> {
         .limit(20)
       if (error) { json(res, 500, { error: error.message }); return }
       json(res, 200, { specs: data ?? [] })
+      return
+    }
+
+    // D.2: batch queue-all. Reads ALL unresolved pending specs for the
+    // principal, queues them in ONE git push via builderQueueSpecsBatch,
+    // marks all newly-queued rows resolved. The user's failure mode (8 specs
+    // queued individually + iteration cap) collapses to one tool call.
+    if (url === '/atlas/artifacts/pending-specs/queue-all' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      let pendingQuery = sb
+        .from('atlas_pending_specs')
+        .select('id, spec_markdown, filename')
+        .is('resolved_at', null)
+      if (principal.projectId) pendingQuery = pendingQuery.eq('project_id', principal.projectId)
+      const { data: rows, error: fetchErr } = await pendingQuery
+        .order('drafted_at', { ascending: true })  // oldest first so the queue order matches draft order
+        .limit(50)
+      if (fetchErr) { json(res, 500, { error: `pending_spec_lookup_failed: ${fetchErr.message}` }); return }
+      const pendingRows = (rows ?? []) as Array<{ id: string; spec_markdown: string; filename: string }>
+      if (pendingRows.length === 0) {
+        json(res, 200, { ok: true, queued: [], failed: [], sha: 'no-changes', pushed: false })
+        return
+      }
+      try {
+        const result = await builderQueueSpecsBatch(
+          pendingRows.map(r => ({ filename: r.filename, body: r.spec_markdown })),
+        )
+        // Mark every row whose filename succeeded as resolved=queued. Failures stay open.
+        const queuedFilenames = new Set(result.queued.map(q => q.filename))
+        const queuedIds = pendingRows.filter(r => queuedFilenames.has(r.filename)).map(r => r.id)
+        if (queuedIds.length > 0) {
+          await sb.from('atlas_pending_specs')
+            .update({ resolved_at: new Date().toISOString(), resolution: 'queued' })
+            .in('id', queuedIds)
+        }
+        json(res, 200, {
+          ok: true,
+          queued: result.queued,
+          failed: result.failed,
+          sha: result.sha,
+          pushed: result.pushed,
+        })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
       return
     }
 

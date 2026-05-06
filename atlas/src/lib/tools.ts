@@ -132,6 +132,71 @@ export async function builderQueueSpec(
   return { path: fullPath, sha: result.sha, pushed: result.pushed }
 }
 
+// D.2: Batch-queue N specs in ONE git push. The chat path that prompted
+// Pillar D — "user said 'approve all', Atlas tried 8x builder.queue_spec
+// sequentially, ran out of room" — is fixed by funneling the multi-spec
+// case through this single tool/route instead of N tool calls.
+//
+// Validates + dedupes per-spec; writes all valid specs to disk; commits+pushes
+// once. Returns successes + failures separately so the caller can surface
+// dedupe collisions ("phase-X already shipped — skipped") inline.
+export async function builderQueueSpecsBatch(
+  specs: Array<{ filename: string; body: string; buildAttemptId?: string }>,
+): Promise<{
+  queued: Array<{ filename: string; path: string }>
+  failed: Array<{ filename: string; error: string }>
+  sha: string
+  pushed: boolean
+}> {
+  const queued: Array<{ filename: string; path: string }> = []
+  const failed: Array<{ filename: string; error: string }> = []
+  const filesToCommit: string[] = []
+
+  for (const s of specs) {
+    if (!s.filename.endsWith('.md')) {
+      failed.push({ filename: s.filename, error: 'filename must end in .md' })
+      continue
+    }
+    if (!s.filename.startsWith('phase-')) {
+      failed.push({ filename: s.filename, error: 'filename must start with "phase-"' })
+      continue
+    }
+    try {
+      const existing = await findExistingSpecBucket(s.filename)
+      if (existing) {
+        failed.push({ filename: s.filename, error: buildDuplicateSpecError(s.filename, existing) })
+        continue
+      }
+      const relPath = `.agent/tasks/queued/${s.filename}`
+      const fullPath = resolve(REPO_ROOT, relPath)
+      await writeFile(fullPath, s.body, 'utf-8')
+      queued.push({ filename: s.filename, path: fullPath })
+      filesToCommit.push(relPath)
+    } catch (err) {
+      failed.push({ filename: s.filename, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  if (filesToCommit.length === 0) {
+    // Nothing valid to commit — return empty result so caller can report failures.
+    return { queued: [], failed, sha: 'no-changes', pushed: false }
+  }
+
+  const commitMsg = filesToCommit.length === 1
+    ? `atlas: queue ${queued[0].filename.replace(/\.md$/, '')}`
+    : `atlas: queue ${filesToCommit.length} specs (${queued.slice(0, 3).map(q => q.filename.replace(/\.md$/, '')).join(', ')}${queued.length > 3 ? ', …' : ''})`
+  const result = await gitCommitAndPush(commitMsg, filesToCommit)
+
+  // Best-effort: flip atlas_build_attempts rows for any specs that carried buildAttemptId.
+  for (const s of specs) {
+    if (s.buildAttemptId && queued.some(q => q.filename === s.filename)) {
+      await markBuildAttemptStatus(s.buildAttemptId, 'queued').catch(() => { /* non-fatal */ })
+    }
+  }
+
+  return { queued, failed, sha: result.sha, pushed: result.pushed }
+}
+
 export async function builderListQueue(): Promise<{ specs: string[] }> {
   // Refresh to see latest — serialized via git-mutex to avoid index.lock collisions.
   await withGitLock('list-queue:fetch+reset', async () => {

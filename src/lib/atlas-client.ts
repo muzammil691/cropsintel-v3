@@ -318,6 +318,22 @@ export async function queuePendingSpec(specId: string): Promise<{ ok: true; file
   )
 }
 
+/** D.2: Queue ALL of the user's unresolved pending specs in one git push.
+ *  Returns per-spec success/failure so the UI can surface dedupe collisions
+ *  inline (e.g. "phase-X already shipped — skipped"). */
+export async function queueAllPendingSpecs(): Promise<{
+  ok: true
+  queued: Array<{ filename: string; path: string }>
+  failed: Array<{ filename: string; error: string }>
+  sha: string
+  pushed: boolean
+}> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/artifacts/pending-specs/queue-all`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
 export async function fetchPendingSpecs(): Promise<PendingSpec[]> {
   const data = await fetchJson<{ specs?: PendingSpec[] }>(
     `${ATLAS_URL}/atlas/artifacts/pending-specs`,
