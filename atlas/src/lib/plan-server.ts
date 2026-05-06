@@ -144,6 +144,41 @@ function slugFromTitle(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
 }
 
+export type SpecBucket = 'queued' | 'in-progress' | 'done'
+
+/**
+ * Pillar B follow-up — dedupe-against-tree.
+ * Refuse to queue a spec whose filename already exists in queued/, in-progress/,
+ * or done/. Without this guard, Atlas re-drafting the same phase ID gets
+ * silently accepted, Builder runs it, finds the work already in the tree, and
+ * ships a 0-file commit (looks like the queue silently failed — exactly the
+ * symptom the user hit on phase-1.00f-verifier-crash-pipeline-hardening).
+ *
+ * cancelled/ and failed/ are intentionally NOT checked — re-queueing those
+ * is legit retry.
+ */
+export async function findExistingSpecBucket(filename: string): Promise<SpecBucket | null> {
+  const buckets: SpecBucket[] = ['queued', 'in-progress', 'done']
+  for (const bucket of buckets) {
+    try {
+      await readFile(resolve(REPO_ROOT, `.agent/tasks/${bucket}`, filename), 'utf-8')
+      return bucket
+    } catch { /* not in this bucket */ }
+  }
+  return null
+}
+
+/** Build the standard refuse-to-queue error message — exported so callers
+ *  (chat tools, HTTP routes) can compose consistent messaging. */
+export function buildDuplicateSpecError(filename: string, bucket: SpecBucket): string {
+  const guidance = bucket === 'done'
+    ? 'This phase has already shipped — re-queueing would have Builder run with nothing to do and produce an empty commit. Pick a different phase id, or if you want to revert + redo, file an undeploy spec.'
+    : bucket === 'in-progress'
+    ? 'Builder is already running this spec — wait for it to land before queueing a re-draft.'
+    : 'A queued spec with this filename already exists. Cancel it first if you want to replace, or pick a different filename.'
+  return `${filename} already exists in .agent/tasks/${bucket}/. ${guidance}`
+}
+
 export async function queueSpecFromPlanNode(
   nodeTitle: string,
   nodeBody: string,
@@ -152,6 +187,11 @@ export async function queueSpecFromPlanNode(
   const slug = slugFromTitle(nodeTitle) || 'plan-node'
   const phaseSlug = slugFromTitle(phaseHint) || 'plan'
   const filename = `phase-${phaseSlug}-${slug}.md`
+  // Refuse before write if the filename already exists somewhere in the tree.
+  const existing = await findExistingSpecBucket(filename)
+  if (existing) {
+    throw new Error(`queue_spec_from_plan_node: ${buildDuplicateSpecError(filename, existing)}`)
+  }
   const relPath = `.agent/tasks/queued/${filename}`
   const fullPath = resolve(REPO_ROOT, relPath)
   const body = `---\npriority: 3\nsource: atlas-plan-tree\n---\n\n# Task: ${nodeTitle}\n\n${nodeBody}\n\n## Source plan node\n\n- Phase hint: ${phaseHint}\n- Generated: ${new Date().toISOString()}\n`

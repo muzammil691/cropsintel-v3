@@ -15,6 +15,8 @@ import {
   applyPendingPlanAmendment as planApplyAmendment,
   draftNewPlan as planDraftNew,
   queueSpecFromPlanNode,
+  findExistingSpecBucket,
+  buildDuplicateSpecError,
 } from './plan-server'
 import {
   setPlanNodeState,
@@ -105,6 +107,14 @@ export async function builderQueueSpec(
 ): Promise<{ path: string; sha: string; pushed: boolean }> {
   if (!filename.endsWith('.md')) throw new Error('builder.queue_spec: filename must end in .md')
   if (!filename.startsWith('phase-')) throw new Error('builder.queue_spec: filename must start with "phase-"')
+  // Dedupe against the live tree. The user hit this on phase-1.00f: Atlas
+  // re-drafted an already-shipped spec, Builder picked it up, found nothing
+  // to do, shipped 0 files (looked like a silent queue failure). Refuse
+  // explicitly so the LLM can tell the user instead of wasting a build cycle.
+  const existing = await findExistingSpecBucket(filename)
+  if (existing) {
+    throw new Error(`builder.queue_spec: ${buildDuplicateSpecError(filename, existing)}`)
+  }
   const relPath = `.agent/tasks/queued/${filename}`
   const fullPath = resolve(REPO_ROOT, relPath)
   await writeFile(fullPath, body, 'utf-8')
