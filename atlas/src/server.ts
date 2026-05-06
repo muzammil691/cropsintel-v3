@@ -2388,6 +2388,48 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // D.1: real Queue button on PendingSpecCard. Reads the staged spec from
+    // atlas_pending_specs, calls builderQueueSpec (which refuses duplicates
+    // per b88ba04), and marks the row resolved=queued. Closes the UX trap
+    // where the old Queue button just dismissed the card without queueing.
+    {
+      const m = url.match(/^\/atlas\/artifacts\/pending-specs\/([^/]+)\/queue$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const specId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        // Fetch the staged spec — verify ownership + not-already-resolved.
+        let pendingQuery = sb
+          .from('atlas_pending_specs')
+          .select('id, thread_id, spec_markdown, filename, project_id, resolved_at')
+          .eq('id', specId)
+          .limit(1)
+        if (principal.projectId) pendingQuery = pendingQuery.eq('project_id', principal.projectId)
+        const { data: rows, error: fetchErr } = await pendingQuery
+        if (fetchErr) { json(res, 500, { error: `pending_spec_lookup_failed: ${fetchErr.message}` }); return }
+        const pending = (rows ?? [])[0] as { id: string; spec_markdown: string; filename: string; resolved_at: string | null } | undefined
+        if (!pending) { json(res, 404, { error: 'pending_spec_not_found' }); return }
+        if (pending.resolved_at) { json(res, 409, { error: 'pending_spec_already_resolved' }); return }
+        // Call the real queue path. builderQueueSpec throws on duplicate-against-tree.
+        try {
+          const result = await builderQueueSpec(pending.filename, pending.spec_markdown)
+          await sb.from('atlas_pending_specs')
+            .update({ resolved_at: new Date().toISOString(), resolution: 'queued' })
+            .eq('id', specId)
+          json(res, 200, { ok: true, filename: pending.filename, sha: result.sha, pushed: result.pushed })
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
     if (url === '/atlas/artifacts/design-audits' && method === 'GET') {
       if (!(await requireAuth(req, res))) return
       const sb = getSupabaseClient()

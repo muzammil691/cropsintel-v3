@@ -308,6 +308,16 @@ export interface OpenFork {
   chosen_option: string | null
 }
 
+/** D.1: Queue a staged pending spec for real (writes to .agent/tasks/queued/
+ *  via builderQueueSpec, marks atlas_pending_specs row resolved). Replaces the
+ *  fake "Queue" button that previously only dismissed the card. */
+export async function queuePendingSpec(specId: string): Promise<{ ok: true; filename: string; sha: string; pushed: boolean }> {
+  return fetchJson<{ ok: true; filename: string; sha: string; pushed: boolean }>(
+    `${ATLAS_URL}/atlas/artifacts/pending-specs/${encodeURIComponent(specId)}/queue`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
 export async function fetchPendingSpecs(): Promise<PendingSpec[]> {
   const data = await fetchJson<{ specs?: PendingSpec[] }>(
     `${ATLAS_URL}/atlas/artifacts/pending-specs`,
