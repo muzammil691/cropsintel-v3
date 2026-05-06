@@ -643,8 +643,16 @@ export async function runChatTurn(params: {
   let totalCostUsd = 0
   let assistantText = ''
   let iteration = 0
+  // D.4: track tool calls + their verified evidence so we can synthesize a
+  // closing message if the LLM hits the iteration cap without a text block.
+  // Without this, batch flows like "queue 8 specs" silently truncate — the
+  // user sees streaming text from earlier iterations but no final summary.
+  const toolCallsSummary: Array<{ tool: string; status: string; verified?: boolean | null; filename?: string | null; error?: string | null }> = []
+  // D.4: iteration cap raised from 8 → 12 so batch flows have headroom for
+  // their drafting + multi-tool-call cycles.
+  const MAX_ITERATIONS = 12
 
-  while (iteration < 8) {
+  while (iteration < MAX_ITERATIONS) {
     iteration++
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
@@ -758,10 +766,50 @@ export async function runChatTurn(params: {
         tool_use_id: toolUse.id,
         content: JSON.stringify(llmPayload),
       })
+
+      // D.4: capture per-tool summary so we can fall back to a synthetic
+      // closing message if the loop runs out of iterations.
+      const toolResultObj = (dispatchResult.result ?? null) as { filename?: string; queued?: Array<{ filename: string }> } | null
+      const filename = toolResultObj?.filename
+        ?? (toolResultObj?.queued && toolResultObj.queued.length > 0 ? `${toolResultObj.queued.length} specs` : null)
+      toolCallsSummary.push({
+        tool: toolName,
+        status: dispatchResult.status,
+        verified: dispatchResult.verified ? dispatchResult.verified.verified : null,
+        filename: filename ?? null,
+        error: dispatchResult.error ?? null,
+      })
     }
 
     messages.push({ role: 'assistant', content: response.content as unknown })
     messages.push({ role: 'user', content: toolResults as unknown })
+  }
+
+  // D.4: if the loop exited (cap hit OR toolUseBlocks=0 in last iteration)
+  // but the LLM never produced a text block, synthesize one from the tool
+  // call evidence so the user gets a closing summary instead of silence.
+  // This is the failure mode Atlas confessed to: "I called the tools but
+  // can't confirm any completed before you sent the next message."
+  if (!assistantText && toolCallsSummary.length > 0) {
+    const lines = toolCallsSummary.map(t => {
+      const status = t.status === 'success' && t.verified === true
+        ? '✓'
+        : t.status === 'success' && t.verified === false
+        ? '⚠ unverified'
+        : t.status === 'success' && t.verified === null
+        ? '✓ (no verifier)'
+        : `✗ ${t.status}${t.error ? `: ${t.error.slice(0, 80)}` : ''}`
+      return `- ${t.tool}${t.filename ? ` → ${t.filename}` : ''} ${status}`
+    })
+    const reason = iteration >= MAX_ITERATIONS
+      ? `(hit ${MAX_ITERATIONS}-iteration cap)`
+      : '(no closing text from model)'
+    assistantText = [
+      `I called ${toolCallsSummary.length} tool${toolCallsSummary.length === 1 ? '' : 's'} across ${iteration} iteration${iteration === 1 ? '' : 's'} ${reason} but didn't produce a closing summary. Here's what I confirmed:`,
+      '',
+      ...lines,
+    ].join('\n')
+    onEvent?.('message', { role: 'atlas', content: assistantText })
   }
 
   if (assistantText && sb) {
