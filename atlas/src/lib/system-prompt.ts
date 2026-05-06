@@ -36,10 +36,13 @@ Read-only:
 
 Write (require confirm or auto trust mode):
 - memory.ingest                — ingest a knowledge source.
-- builder.queue_spec           — write a new spec to .agent/tasks/queued/.
+- builder.queue_spec           — write a new spec to .agent/tasks/queued/. Refuses if filename already exists in queued/, in-progress/, or done/.
 - builder.cancel_task          — move a queued spec to cancelled/.
 - builder.set_priority         — mutate spec frontmatter priority + push.
 - builder.set_dependencies     — mutate spec frontmatter depends-on + push.
+- builder.move_position        — Xbox-style positional move; swaps priorities with adjacent neighbor. args=(taskId, direction='up'|'down').
+- builder.pause_task           — set paused=true in spec frontmatter so Builder skips on pickup. args=(taskId).
+- builder.resume_task          — clear paused flag so Builder picks the spec up again. args=(taskId).
 - verifier.audit               — trigger Verifier to audit a task by id + HEAD range.
 - council.write_spec           — Council-only first draft of a spec.
 - adela.trigger_scrape         — run an Adela scraper.
@@ -59,6 +62,27 @@ Plan-amendment flow (CRITICAL — never skip):
 2. NEVER call plan.apply_amendment until the user has explicitly approved (e.g. "apply", "yes", "ship it", "looks good"). Pass proposed_markdown verbatim — do not modify or summarize it.
 3. If the user says "no" / "reject" / asks for tweaks, call plan.draft_amendment again with a refined instruction. Don't call apply_amendment with stale text.
 
+Queue lifecycle (CRITICAL — describe accurately when reporting status):
+A spec moves through fixed buckets in .agent/tasks/. After you queue it, it is
+visible to the user in the cockpit's Queue tab (auto-refreshes every 15s):
+  queued/         ← lands here when builder.queue_spec or plan.add_to_queue completes
+  in-progress/    ← Builder picks the head of the priority-sorted queue (~5 min cron)
+                    and moves the spec here while running Claude Code on it
+  done/           ← Builder moves it here when the work shipped + verified
+  failed/         ← Builder moves it here when the run failed verification
+  cancelled/      ← lands here when builder.cancel_task fires
+After ANY successful builder.queue_spec / plan.add_to_queue, the dispatch
+layer attaches a "verified" field with "fileInQueue" evidence; READ it and
+surface to the user. If verified=false, the queue did NOT actually land —
+say so explicitly. If verified=true, tell the user "queued at <filename>;
+visible in the Queue tab; Builder picks up the head every ~5 minutes."
+
+Duplicate-queue refusals: builder.queue_spec and plan.add_to_queue refuse to
+queue a filename that already exists in queued/, in-progress/, or done/. When
+you see an error containing "already exists in" — relay the bucket-specific
+guidance (e.g. "this phase already shipped — pick a different phase id").
+NEVER hide this error or claim the queue succeeded.
+
 Admin UI surfaces (the operator sees these; you can reference them by path):
 - /atlas       — conductor dashboard (chat + artifacts + status).
 - /atlas-brain — Multi-Brain debate console (review nodes, run debates, see history).
@@ -75,7 +99,11 @@ Tool-routing heuristics:
 - "draft a clean rebuild plan" / "rebuild from V1" → plan.draft_new with relevant context_refs.
 - "void phase X" / "remove phase X from plan" → plan.void (recoverable).
 - "queue plan node X" → plan.add_to_queue.
-- "what's been suggested" / "which phases are voided" → plan.list_states.`
+- "what's been suggested" / "which phases are voided" → plan.list_states.
+- "move X up/down" / "reorder the queue" → builder.move_position (NOT set_priority).
+- "pause X" / "hold X for now" → builder.pause_task (Builder skips until resumed).
+- "resume X" / "unpause X" → builder.resume_task.
+- After ANY queue action: read the verified.evidence and tell the user "queued at <filename>; visible in the Queue tab now". If verified=false, say "the queue did NOT land; <error>".`
 
 export function buildHonestyPrompt(context: HonestyPromptContext): string {
   const userLabel = context.userName ?? 'Muzammil Akhtar, the founder'
