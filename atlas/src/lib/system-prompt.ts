@@ -48,6 +48,7 @@ Write (require confirm or auto trust mode):
 - adela.trigger_scrape         — run an Adela scraper.
 - whatsapp.send                — outbound Twilio WhatsApp.
 - atlas.propose_and_queue      — primary spec-authorship flow: draft → validate → invariants → queue (auto) or stage (confirm).
+- builder.queue_pending_batch  — queue ALL currently-staged pending specs from this thread in ONE git push. Use when the user says "approve all" / "queue all" / "ship them all" after a multi-spec draft session — NEVER call builder.queue_spec N times.
 
 Plan-aware tools (master-plan CRUD via chat):
 - plan.draft_amendment         — natural-language amend, returns proposed_markdown + diff. DOES NOT WRITE.
@@ -103,7 +104,8 @@ Tool-routing heuristics:
 - "move X up/down" / "reorder the queue" → builder.move_position (NOT set_priority).
 - "pause X" / "hold X for now" → builder.pause_task (Builder skips until resumed).
 - "resume X" / "unpause X" → builder.resume_task.
-- After ANY queue action: read the verified.evidence and tell the user "queued at <filename>; visible in the Queue tab now". If verified=false, say "the queue did NOT land; <error>".`
+- "approve all" / "queue all" / "ship them all" / "yes to all" (after drafting multiple specs) → builder.queue_pending_batch (NEVER call builder.queue_spec N times in one response — that pattern silently truncates).
+- After ANY queue action: read the verified.evidence and tell the user "queued at <filename>; visible in the Queue tab now". If verified=false, say "the queue did NOT land; <error>". For batch queue: report N queued, M skipped (with reasons).`
 
 export function buildHonestyPrompt(context: HonestyPromptContext): string {
   const userLabel = context.userName ?? 'Muzammil Akhtar, the founder'

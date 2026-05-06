@@ -132,6 +132,64 @@ export async function builderQueueSpec(
   return { path: fullPath, sha: result.sha, pushed: result.pushed }
 }
 
+// D.3: Chat-tool wrapper around builderQueueSpecsBatch. When the user says
+// "approve all" / "queue all" / "ship them all" after a multi-spec draft
+// session, Atlas calls this ONCE instead of N×builder.queue_spec — fixes
+// the "approve 8 specs and pray the LLM emits 8 tool calls" failure mode.
+//
+// The chat handler injects thread_id from the request context so the query
+// scopes to specs drafted in THIS conversation. Returns a richer shape than
+// builder.queue_spec so Atlas can tell the user N queued / M skipped (with
+// reasons) verbatim.
+export async function builderQueuePendingBatch(threadId?: string): Promise<{
+  queued: Array<{ filename: string; spec_id: string }>
+  failed: Array<{ filename: string; spec_id: string; error: string }>
+  sha: string
+  pushed: boolean
+  count: number
+}> {
+  const sb = getSupabaseClient()
+  if (!sb) throw new Error('builder.queue_pending_batch: Supabase client not configured')
+
+  let q = sb
+    .from('atlas_pending_specs')
+    .select('id, filename, spec_markdown')
+    .is('resolved_at', null)
+  if (threadId) q = q.eq('thread_id', threadId)
+  const { data, error } = await q.order('drafted_at', { ascending: true }).limit(50)
+  if (error) throw new Error(`pending_spec_lookup_failed: ${error.message}`)
+
+  const pending = (data ?? []) as Array<{ id: string; filename: string; spec_markdown: string }>
+  if (pending.length === 0) {
+    return { queued: [], failed: [], sha: 'no-changes', pushed: false, count: 0 }
+  }
+
+  const result = await builderQueueSpecsBatch(
+    pending.map(p => ({ filename: p.filename, body: p.spec_markdown })),
+  )
+
+  // Map filenames back to spec ids so the chat can update the right rows.
+  const idByFilename = new Map(pending.map(p => [p.filename, p.id]))
+  const queued = result.queued.map(r => ({ filename: r.filename, spec_id: idByFilename.get(r.filename) ?? '' }))
+  const failed = result.failed.map(r => ({ filename: r.filename, spec_id: idByFilename.get(r.filename) ?? '', error: r.error }))
+
+  // Mark queued rows as resolved.
+  const queuedIds = queued.map(q => q.spec_id).filter(Boolean)
+  if (queuedIds.length > 0) {
+    await sb.from('atlas_pending_specs')
+      .update({ resolved_at: new Date().toISOString(), resolution: 'queued' })
+      .in('id', queuedIds)
+  }
+
+  return {
+    queued,
+    failed,
+    sha: result.sha,
+    pushed: result.pushed,
+    count: queued.length,
+  }
+}
+
 // D.2: Batch-queue N specs in ONE git push. The chat path that prompted
 // Pillar D — "user said 'approve all', Atlas tried 8x builder.queue_spec
 // sequentially, ran out of room" — is fixed by funneling the multi-spec
@@ -987,6 +1045,7 @@ export const TOOLS = {
   'builder.set_dependencies': { fn: builderSetDependencies, description: 'Set a queued spec\'s depends-on list. Each dep must exist somewhere in .agent/tasks/. Cycles are rejected. Commits+pushes. args=(taskId, dependsOn[]).' },
   'builder.queue_order':  { fn: builderQueueOrder,  description: 'Compute the current queue pickup order Builder will use (priority + dependency + paused aware). Read-only. Returns array of {id, priority, depends_on, blocked, blocked_by, paused}.' },
   'builder.move_position':{ fn: builderMovePosition,description: 'Move a queued spec one position up or down — Xbox-style. Internally swaps priorities with the adjacent neighbor (or nudges to break a tie). args=(taskId, direction). direction: "up" | "down".' },
+  'builder.queue_pending_batch': { fn: builderQueuePendingBatch, description: 'Queue ALL of the user\'s currently-staged pending specs (drafted by atlas.propose_and_queue in confirm mode but not yet queued) in a SINGLE git push. Use this — NOT N×builder.queue_spec — whenever the user says "approve all" / "queue all" / "ship them all" / "yes to all" after a multi-spec draft session. Returns {queued: [{filename, spec_id}], failed: [{filename, spec_id, error}], sha, pushed, count}. thread_id is auto-injected by the chat handler. args=().' },
   'builder.pause_task':   { fn: builderPauseTask,   description: 'Pause a queued spec — Builder will skip it on pickup. Distinct from cancel: paused stays in queued/ and is reversible via builder.resume_task. args=(taskId).' },
   'builder.resume_task':  { fn: builderResumeTask,  description: 'Resume a previously-paused queued spec — Builder picks it up again on next loop. args=(taskId).' },
   'verifier.audit':       { fn: verifierAudit,      description: 'Trigger Verifier to audit a task by ID and HEAD range. Returns verdict + gaps.' },

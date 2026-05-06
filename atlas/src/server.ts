@@ -681,6 +681,11 @@ export async function runChatTurn(params: {
       if (toolName === 'atlas.propose_and_queue' && !('thread_id' in toolArgs)) {
         toolArgs = { ...toolArgs, thread_id: threadId }
       }
+      // D.3: builder.queue_pending_batch needs the thread_id so it scopes to
+      // specs drafted in THIS conversation, not anything pending in other threads.
+      if (toolName === 'builder.queue_pending_batch' && !('thread_id' in toolArgs)) {
+        toolArgs = { ...toolArgs, thread_id: threadId }
+      }
 
       const dispatchResult = await dispatch({
         tool: toolName,

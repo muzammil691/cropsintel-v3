@@ -240,6 +240,51 @@ async function verifyResumeTask(ctx: VerifyContext): Promise<VerificationOutcome
   })
 }
 
+async function verifyQueuePendingBatch(ctx: VerifyContext): Promise<VerificationOutcome> {
+  return withRetry(async () => {
+    const result = ctx.result as {
+      queued?: Array<{ filename: string }>
+      failed?: Array<{ filename: string; error: string }>
+      sha?: string
+      pushed?: boolean
+      count?: number
+    } | null
+    if (!result) return { verified: false, evidence: {}, error: 'no tool result' }
+    const queued = Array.isArray(result.queued) ? result.queued : []
+    const failed = Array.isArray(result.failed) ? result.failed : []
+    if (queued.length === 0) {
+      // No-op (0 pending) or all-failed both verify cleanly — nothing to confirm in queued/.
+      return {
+        verified: true,
+        evidence: { queued: 0, failed: failed.length, reason: 'nothing to verify in queued/' },
+      }
+    }
+    const queuedDir = resolve(REPO_ROOT, '.agent/tasks/queued')
+    const files = await readdir(queuedDir)
+    const fileSet = new Set(files)
+    const missing = queued.filter(q => !fileSet.has(q.filename)).map(q => q.filename)
+    let actualHead = ''
+    try {
+      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT })
+      actualHead = stdout.trim()
+    } catch { /* non-fatal — partial verification still useful */ }
+    const shaMatches = !!result.sha && (result.sha === actualHead || result.sha === 'no-changes')
+    const verified = missing.length === 0 && (result.pushed === false || shaMatches)
+    return {
+      verified,
+      evidence: {
+        queuedCount: queued.length,
+        failedCount: failed.length,
+        missing,
+        reportedSha: result.sha ?? null,
+        actualHead,
+        shaMatches,
+      },
+      error: verified ? undefined : `missing=${missing.length}, shaMatches=${shaMatches}`,
+    }
+  })
+}
+
 async function verifyPlanAddToQueue(ctx: VerifyContext): Promise<VerificationOutcome> {
   return withRetry(async () => {
     const result = ctx.result as { ok?: boolean; filename?: string; sha?: string; pushed?: boolean } | null
@@ -268,6 +313,7 @@ const VERIFIERS: Partial<Record<ToolName, (ctx: VerifyContext) => Promise<Verifi
   'builder.move_position': verifyMovePosition,
   'builder.pause_task':    verifyPauseTask,
   'builder.resume_task':   verifyResumeTask,
+  'builder.queue_pending_batch': verifyQueuePendingBatch,
   'memory.ingest':         verifyMemoryIngest,
   'adela.trigger_scrape':  verifyAdelaTriggerScrape,
   'whatsapp.send':         verifyWhatsappSend,
