@@ -113,6 +113,20 @@ export function AtlasCockpit() {
     [setActiveTab],
   )
 
+  // E.2: chat-rendered markdown links like `[View in Queue tab](#tab=queue)`
+  // dispatch this CustomEvent. Listening here so the tab switch happens
+  // without a full-page reload (anchor-default would lose chat state).
+  useEffect(() => {
+    function handler(e: Event) {
+      const detail = (e as CustomEvent<string>).detail
+      if (typeof detail === 'string' && (VALID_TABS as ReadonlyArray<string>).includes(detail)) {
+        setActiveTab(detail as AtlasTabKey)
+      }
+    }
+    window.addEventListener('atlas:tab-navigate', handler as EventListener)
+    return () => window.removeEventListener('atlas:tab-navigate', handler as EventListener)
+  }, [setActiveTab])
+
   // Handler for the header's agent-dot click → open Agents tab.
   const openAgentsTab = useCallback(() => setActiveTab('agents'), [setActiveTab])
   // Phase 1.10as — Preview tab's "Inspect commit" jumps to the Audit tab.

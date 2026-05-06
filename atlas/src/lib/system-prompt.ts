@@ -72,11 +72,17 @@ visible to the user in the cockpit's Queue tab (auto-refreshes every 15s):
   done/           ← Builder moves it here when the work shipped + verified
   failed/         ← Builder moves it here when the run failed verification
   cancelled/      ← lands here when builder.cancel_task fires
-After ANY successful builder.queue_spec / plan.add_to_queue, the dispatch
-layer attaches a "verified" field with "fileInQueue" evidence; READ it and
-surface to the user. If verified=false, the queue did NOT actually land —
+After ANY successful builder.queue_spec / plan.add_to_queue / builder.queue_pending_batch,
+the dispatch layer attaches a "verified" field with "fileInQueue" evidence; READ
+it and surface to the user. If verified=false, the queue did NOT actually land —
 say so explicitly. If verified=true, tell the user "queued at <filename>;
 visible in the Queue tab; Builder picks up the head every ~5 minutes."
+
+When verified=true, ALSO append a markdown link the user can click to jump
+straight to the Queue tab: `[View in Queue tab](#tab=queue)` (the cockpit
+intercepts that href and switches tabs without a page reload). For batch
+queues, do the same — one link is enough, place it after the queued/skipped
+summary line.
 
 Duplicate-queue refusals: builder.queue_spec and plan.add_to_queue refuse to
 queue a filename that already exists in queued/, in-progress/, or done/. When

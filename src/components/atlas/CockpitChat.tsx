@@ -619,7 +619,63 @@ function renderMarkdownBlocks(text: string): React.ReactNode {
   })
 }
 
+// E.2: tab keys the chat can deep-link into via [text](#tab=queue) markdown.
+// When matched, click dispatches `atlas:tab-navigate` CustomEvent which
+// AtlasCockpit listens for and calls setActiveTab(...).
+const TAB_LINK_RE = /^#tab=(plan|queue|agents|audit|workflows|artifacts|team|preview)$/
+
 function inlineMarkdown(text: string): React.ReactNode {
+  // Split first on markdown links so the bold/italic/code regex doesn't eat
+  // the `[text](url)` brackets. Order matters: links → emphasis.
+  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g
+  const segments: Array<{ type: 'text'; value: string } | { type: 'link'; label: string; href: string }> = []
+  let lastIdx = 0
+  let m: RegExpExecArray | null
+  while ((m = linkRe.exec(text)) !== null) {
+    if (m.index > lastIdx) segments.push({ type: 'text', value: text.slice(lastIdx, m.index) })
+    segments.push({ type: 'link', label: m[1], href: m[2] })
+    lastIdx = m.index + m[0].length
+  }
+  if (lastIdx < text.length) segments.push({ type: 'text', value: text.slice(lastIdx) })
+
+  return segments.map((seg, segIdx) => {
+    if (seg.type === 'link') {
+      const tabMatch = seg.href.match(TAB_LINK_RE)
+      if (tabMatch) {
+        const tab = tabMatch[1]
+        return (
+          <a
+            key={`link-${segIdx}`}
+            href={seg.href}
+            onClick={(e) => {
+              e.preventDefault()
+              window.dispatchEvent(new CustomEvent('atlas:tab-navigate', { detail: tab }))
+            }}
+            className="text-emerald-700 dark:text-emerald-400 underline underline-offset-2 hover:text-emerald-900 dark:hover:text-emerald-300 transition-colors"
+          >
+            {seg.label}
+          </a>
+        )
+      }
+      // External link — open in new tab so it doesn't lose the chat context.
+      return (
+        <a
+          key={`link-${segIdx}`}
+          href={seg.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-emerald-700 dark:text-emerald-400 underline underline-offset-2 hover:text-emerald-900 dark:hover:text-emerald-300 transition-colors"
+        >
+          {seg.label}
+        </a>
+      )
+    }
+    // Text segment — apply emphasis/code formatting.
+    return <InlineEmphasis key={`text-${segIdx}`} text={seg.value} />
+  })
+}
+
+function InlineEmphasis({ text }: { text: string }): React.ReactNode {
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/)
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**'))
