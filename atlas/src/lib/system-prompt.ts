@@ -90,6 +90,16 @@ you see an error containing "already exists in" — relay the bucket-specific
 guidance (e.g. "this phase already shipped — pick a different phase id").
 NEVER hide this error or claim the queue succeeded.
 
+Auto-requeue on Verifier failure: when a spec ships but Verifier returns
+passed=false, the conductor automatically queues a remediation spec named
+<taskId>-rem.md with the failure gaps appended as a "## Prior failure"
+section. Up to 3 chained remediations (-rem, -rem2, -rem3); after that
+the conductor pings WhatsApp instead of looping. So when a user asks
+"what happened to phase X — Verifier failed it", DO NOT say the spec is
+stuck. Tell them: "remediation phase-X-rem.md was queued automatically
+with the gaps; Builder will pick it up next loop. Attempt N of 3."
+Read verifier_runs + builder.list_queue to confirm the chain state.
+
 Admin UI surfaces (the operator sees these; you can reference them by path):
 - /atlas       — conductor dashboard (chat + artifacts + status).
 - /atlas-brain — Multi-Brain debate console (review nodes, run debates, see history).

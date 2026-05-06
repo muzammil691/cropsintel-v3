@@ -12,6 +12,7 @@ import { simple, debate, DebateResult } from '../lib/multi-brain'
 import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
+import { requeueWithGaps, type VerifierGap } from '../lib/plan-server'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
@@ -40,6 +41,9 @@ const RAILWAY_ENVIRONMENT_ID = process.env.RAILWAY_ENVIRONMENT_ID
 const seenSpecs = new Set<string>()
 // Tracks commits we've already designer-audited so we don't re-audit on every heartbeat.
 const auditedCommits = new Set<string>()
+// G.2: tracks (taskId, ranAt) pairs we've already auto-requeued so the loop
+// doesn't keep re-firing requeueWithGaps for the same failure on every cron tick.
+const autoRequeuedFailures = new Set<string>()
 
 interface Diagnosis {
   signals: Signal[]
@@ -102,6 +106,10 @@ async function runHeartbeat(): Promise<void> {
     await memoryIngestAfterShips(trustMode)
     await verifierAuditAfterShips(trustMode)
     await markVerifiedBuildAttempts(trustMode)
+    // G.2: auto-requeue specs that failed Verifier with the gaps injected,
+    // so Builder + Verifier can converge instead of leaving specs in limbo.
+    // 3-attempt cap; beyond that, escalate via WhatsApp.
+    await autoRequeueOnVerifierFail(trustMode)
     // Phase 1.10aw-rem: opt-in WhatsApp ping when a task ships. Sibling pass
     // (does not modify the audit/ingest behavior); no-op unless
     // WHATSAPP_NOTIFY_NUMBER is set.
@@ -1357,6 +1365,94 @@ async function verifierAuditAfterShips(trustMode: TrustMode): Promise<void> {
       console.log(`[atlas-conductor] verifier.audit(${taskId} @ ${sha.slice(0, 8)}) fired post-ship — superseding stale fail`)
     } catch (err) {
       console.warn(`[atlas-conductor] post-ship verifier audit for ${taskId} failed:`, err instanceof Error ? err.message : err)
+    }
+  }
+}
+
+// G.2: Auto-requeue passes — when verifier_runs has a recent passed=false
+// row, inject the gaps back into a remediation spec and queue it. Reads
+// the failed task's lineage from the task_id (-rem<N> suffix) to chain
+// remediations safely. Caps at 3 attempts, then pings WhatsApp to escalate.
+//
+// Idempotency: requeueWithGaps already refuses to re-queue when the target
+// remediation filename is already in queued/in-progress. The conductor
+// also tracks autoRequeuedFailures to avoid log spam for failures it has
+// already processed within the same cron lifecycle.
+async function autoRequeueOnVerifierFail(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto' && trustMode !== 'confirm') return
+
+  const sb = getSupabaseClient()
+  if (!sb) return
+
+  const oneHourAgo = new Date(Date.now() - 3600_000).toISOString()
+  const { data, error } = await sb
+    .from('verifier_runs')
+    .select('task_id, gaps, ran_at, commit_sha')
+    .eq('passed', false)
+    .gt('ran_at', oneHourAgo)
+    .order('ran_at', { ascending: false })
+    .limit(50)
+  if (error) {
+    console.warn('[atlas-conductor] auto-requeue verifier_runs query failed:', error.message)
+    return
+  }
+  if (!data || data.length === 0) return
+
+  // Dedup by task_id — keep only the most recent failure per task. Skip
+  // failures we've already processed in this cron lifecycle.
+  const latestByTask = new Map<string, { task_id: string; gaps: unknown; ran_at: string }>()
+  for (const row of data as Array<{ task_id: string; gaps: unknown; ran_at: string }>) {
+    if (!latestByTask.has(row.task_id)) latestByTask.set(row.task_id, row)
+  }
+
+  for (const row of latestByTask.values()) {
+    const taskId = row.task_id
+    const dedupeKey = `${taskId}@${row.ran_at}`
+    if (autoRequeuedFailures.has(dedupeKey)) continue
+
+    // Parse remediation lineage from task_id. ${X}-rem  → X, attempt 1.
+    // ${X}-rem<N> → X, attempt N. Otherwise → X, attempt 0 (original).
+    const remMatch = taskId.match(/^(.+)-rem(\d*)$/)
+    const rootTaskId = remMatch ? remMatch[1] : taskId
+    const currentAttempt = remMatch ? (parseInt(remMatch[2] || '1', 10) || 1) : 0
+    const nextAttempt = currentAttempt + 1
+
+    autoRequeuedFailures.add(dedupeKey)
+    if (autoRequeuedFailures.size > 200) {
+      const first = autoRequeuedFailures.values().next().value
+      if (first !== undefined) autoRequeuedFailures.delete(first)
+    }
+
+    if (nextAttempt > 3) {
+      console.warn(`[atlas-conductor] auto-requeue cap (3) exceeded for ${rootTaskId} — escalating via WhatsApp`)
+      try {
+        await sendWhatsAppReply(
+          MUZAMMIL_WHATSAPP,
+          `Atlas: ${rootTaskId} has failed 3 remediation attempts. Verifier still says fail. Manual review required.`,
+        )
+      } catch (err) {
+        console.warn('[atlas-conductor] auto-requeue escalation WhatsApp failed:', err)
+      }
+      continue
+    }
+
+    try {
+      const result = await requeueWithGaps({
+        taskId: rootTaskId,
+        gaps: (Array.isArray(row.gaps) ? row.gaps : []) as VerifierGap[],
+        attempt: nextAttempt,
+      })
+      if (result.ok && result.filename) {
+        if (result.reason && result.reason.includes('idempotent')) {
+          // Already queued — fine, no log spam.
+        } else {
+          console.log(`[atlas-conductor] auto-requeued ${rootTaskId} as ${result.filename} (attempt ${nextAttempt}, sha ${result.sha?.slice(0, 8) ?? '—'})`)
+        }
+      } else if (!result.ok) {
+        console.warn(`[atlas-conductor] auto-requeue refused for ${rootTaskId}: ${result.reason}`)
+      }
+    } catch (err) {
+      console.warn(`[atlas-conductor] auto-requeue threw for ${rootTaskId}:`, err instanceof Error ? err.message : err)
     }
   }
 }
