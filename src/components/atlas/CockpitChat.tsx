@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Send, Sparkles, ChevronRight, ChevronDown } from 'lucide-react'
+import { Send, Sparkles, ChevronRight, ChevronDown, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { MicButton } from './MicButton'
+import { ContinuousVoiceBubble } from './ContinuousVoiceBubble'
 import { useStt } from '@/hooks/useStt'
 import { useAtlasChat } from '@/hooks/useAtlasChat'
 import type { UseTtsResult } from '@/hooks/useTts'
@@ -69,6 +70,18 @@ export function CockpitChat({
   const bottomRef = useRef<HTMLDivElement>(null)
   const messagesScrollRef = useRef<HTMLDivElement>(null)
   const stt = useStt()
+  // Pillar C.1: continuous-listen mode. Persists in localStorage so the
+  // bubble stays active across reloads if the user wanted it on.
+  const [voiceContinuous, setVoiceContinuous] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try { return window.localStorage.getItem('atlas-voice-continuous') === 'true' } catch { return false }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('atlas-voice-continuous', voiceContinuous ? 'true' : 'false') } catch { /* ignore */ }
+  }, [voiceContinuous])
+  // Pillar C.3: plan-node chip. Set when a Plan tab "Discuss" event arrives
+  // with a {planNode} payload. Cleared on send or on user dismiss.
+  const [planChip, setPlanChip] = useState<{ id: string; title: string } | null>(null)
 
   // Slash + mention menu state — driven by what's at the start of the input.
   const slashState = computeSlashState(input)
@@ -123,15 +136,31 @@ export function CockpitChat({
   // button dispatches `atlas:chat-prefill` with a focused question for the
   // chat to pick up). Decoupled via CustomEvent so we don't have to lift
   // chat state to AtlasCockpit.
+  //
+  // Pillar C.3: detail can be either a plain string (legacy) or an object
+  // shape `{ seed, planNode? }`. When `planNode` is present we render a
+  // small chip above the textarea so the user sees which node they're
+  // discussing — and so Atlas's chat tools have an explicit anchor.
   useEffect(() => {
     function handler(e: Event) {
-      const detail = (e as CustomEvent<string>).detail
-      if (typeof detail === 'string' && detail.length > 0) {
-        setInput(detail)
+      const detail = (e as CustomEvent<unknown>).detail
+      let seed = ''
+      let planNode: { id: string; title: string } | null = null
+      if (typeof detail === 'string') {
+        seed = detail
+      } else if (detail && typeof detail === 'object') {
+        const d = detail as { seed?: unknown; planNode?: { id?: unknown; title?: unknown } }
+        if (typeof d.seed === 'string') seed = d.seed
+        if (d.planNode && typeof d.planNode.id === 'string' && typeof d.planNode.title === 'string') {
+          planNode = { id: d.planNode.id, title: d.planNode.title }
+        }
+      }
+      if (seed.length > 0) {
+        setInput(seed)
         textareaRef.current?.focus()
-        // Scroll the chat into view if it's collapsed (mobile bottom sheet)
         textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
+      if (planNode) setPlanChip(planNode)
     }
     window.addEventListener('atlas:chat-prefill', handler as EventListener)
     return () => window.removeEventListener('atlas:chat-prefill', handler as EventListener)
@@ -181,8 +210,8 @@ export function CockpitChat({
     }
   }, [])
 
-  function handleSend() {
-    const text = input.trim()
+  function handleSend(rawText?: string) {
+    const text = (rawText ?? input).trim()
     if (!text || isStreaming) return
 
     // @builder restart and similar destructive mentions require a confirm.
@@ -198,8 +227,15 @@ export function CockpitChat({
     // for navigation/help — those are handled in pickSlashCommand and never
     // reach handleSend.
     const replay = consumeReplayContext()
-    send(text, undefined, replay ? { replayContext: replay } : undefined)
+    // Pillar C.3: when a plan-chip is set, prepend an unobtrusive context
+    // line so the LLM knows which node the user is discussing. The chip
+    // disappears after sending; the user can re-prefill from the Plan tab.
+    const composed = planChip
+      ? `[discussing plan node ${planChip.id} — "${planChip.title}"]\n${text}`
+      : text
+    send(composed, undefined, replay ? { replayContext: replay } : undefined)
     setInput('')
+    setPlanChip(null)
   }
 
   function confirmAndSend() {
@@ -337,6 +373,22 @@ export function CockpitChat({
           </div>
         )}
 
+        {/* Pillar C.3: plan-node chip — set by Plan-tab "Discuss" buttons. */}
+        {planChip && (
+          <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 text-[11px] text-indigo-800 dark:text-indigo-200">
+            <span className="font-mono opacity-70">plan</span>
+            <span className="truncate max-w-50">{planChip.title}</span>
+            <button
+              type="button"
+              aria-label="Remove plan-node context"
+              onClick={() => setPlanChip(null)}
+              className="ml-0.5 inline-flex items-center justify-center size-3.5 rounded-full hover:bg-indigo-200/70 dark:hover:bg-indigo-900/70"
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+        )}
+
         <div className="relative flex items-end gap-1.5">
           <SlashCommandMenu
             query={slashState.query}
@@ -370,10 +422,22 @@ export function CockpitChat({
             style={{ fieldSizing: 'content' } as React.CSSProperties}
             disabled={isStreaming}
           />
-          <MicButton stt={stt} onTranscript={handleTranscript} disabled={isStreaming} />
+          <MicButton stt={stt} onTranscript={handleTranscript} disabled={isStreaming || voiceContinuous} />
+          {/* Pillar C.1: continuous-listen voice bubble. Hold-to-talk MicButton
+              stays alongside for users who don't want full hands-free. */}
+          {tts && (
+            <ContinuousVoiceBubble
+              active={voiceContinuous}
+              onActiveChange={setVoiceContinuous}
+              stt={stt}
+              tts={tts}
+              isStreaming={isStreaming}
+              onUserTurn={(text) => handleSend(text)}
+            />
+          )}
           <Button
             size="icon"
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={isStreaming || !input.trim()}
             className="shrink-0 mb-0.5 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           >

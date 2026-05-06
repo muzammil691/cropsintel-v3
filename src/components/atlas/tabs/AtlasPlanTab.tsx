@@ -330,6 +330,10 @@ export default function AtlasPlanTab() {
     // Seed the cockpit chat with the node title + body excerpt so Atlas can
     // discuss this specific phase. CockpitChat listens for this event and
     // pre-fills the input. Existing pattern used by AuditTab.
+    //
+    // Pillar C.3: include the planNode anchor so the chat renders a small
+    // chip above the textarea ("plan: <title>"). New {seed, planNode} payload
+    // shape; CockpitChat still accepts the legacy plain-string detail.
     const bodyExcerpt = (node.body ?? '').replace(/\s+/g, ' ').slice(0, 600)
     const seed = [
       `Discuss plan node "${node.title}" with me.`,
@@ -338,7 +342,9 @@ export default function AtlasPlanTab() {
       '',
       'Should we deploy it as-is, narrow the scope, or block on a dependency? Recommend.',
     ].join('\n')
-    window.dispatchEvent(new CustomEvent('atlas:chat-prefill', { detail: seed }))
+    window.dispatchEvent(new CustomEvent('atlas:chat-prefill', {
+      detail: { seed, planNode: { id: node.id, title: node.title } },
+    }))
   }
 
   return (

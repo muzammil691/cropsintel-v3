@@ -31,6 +31,9 @@ export interface UseTtsResult {
   stopAll: () => void
   budgetBlocked: boolean
   lastError: string | null
+  /** Pillar C.1: true while audio is actively playing — used by the
+   * continuous-listen voice bubble to know when to re-arm STT. */
+  speaking: boolean
 }
 
 export function useTts(): UseTtsResult {
@@ -41,6 +44,7 @@ export function useTts(): UseTtsResult {
   const [voicesError, setVoicesError] = useState<string | null>(null)
   const [budgetBlocked, setBudgetBlocked] = useState(false)
   const [lastError, setLastError] = useState<string | null>(null)
+  const [speaking, setSpeaking] = useState(false)
   const activeAudioRef = useRef<HTMLAudioElement | null>(null)
   const activeUrlRef = useRef<string | null>(null)
 
@@ -87,6 +91,7 @@ export function useTts(): UseTtsResult {
       URL.revokeObjectURL(activeUrlRef.current)
       activeUrlRef.current = null
     }
+    setSpeaking(false)
   }, [])
 
   const speak = useCallback(async (text: string) => {
@@ -114,15 +119,28 @@ export function useTts(): UseTtsResult {
     activeUrlRef.current = url
     const audio = new Audio(url)
     activeAudioRef.current = audio
-    audio.addEventListener('ended', () => {
+    const clearSpeaking = () => {
+      // Only clear if THIS audio is still the active one — guards against
+      // stopAll() racing with ended on a stale audio element.
+      if (activeAudioRef.current === audio) setSpeaking(false)
       if (activeUrlRef.current === url) {
         URL.revokeObjectURL(url)
         activeUrlRef.current = null
       }
+    }
+    audio.addEventListener('ended', clearSpeaking)
+    audio.addEventListener('error', clearSpeaking)
+    audio.addEventListener('pause', () => {
+      // Pause without ended (e.g. user navigates away) also drops speaking.
+      if (activeAudioRef.current === audio && audio.currentTime > 0 && !audio.ended) {
+        setSpeaking(false)
+      }
     })
     try {
+      setSpeaking(true)
       await audio.play()
     } catch (err) {
+      setSpeaking(false)
       // Autoplay blocked — user can use AudioPlayer to play manually.
       setLastError(err instanceof Error ? err.message : 'Audio play failed')
     }
@@ -140,5 +158,6 @@ export function useTts(): UseTtsResult {
     speak, stopAll,
     budgetBlocked,
     lastError,
+    speaking,
   }
 }
