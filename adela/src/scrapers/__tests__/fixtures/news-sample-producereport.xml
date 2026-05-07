@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>The ProduceReport - Almonds</title>
+    <link>https://www.theproducereport.com</link>
+    <description>Almond industry coverage from The ProduceReport</description>
+    <item>
+      <title>Freight costs impact almond export margins</title>
+      <link>https://www.theproducereport.com/freight-costs-almond-exports-2026</link>
+      <pubDate>Tue, 04 Feb 2026 13:00:00 GMT</pubDate>
+      <description>Rising container shipping rates from California to Asia are squeezing profit margins for almond exporters, industry sources report.</description>
+    </item>
+    <item>
+      <title>Organic almond acreage expands in California Central Valley</title>
+      <link>https://www.theproducereport.com/organic-almond-expansion-2026</link>
+      <pubDate>Sun, 01 Feb 2026 10:30:00 GMT</pubDate>
+      <description>California growers are converting more acreage to organic almond production in response to premium pricing and consumer demand.</description>
+    </item>
+  </channel>
+</rss>

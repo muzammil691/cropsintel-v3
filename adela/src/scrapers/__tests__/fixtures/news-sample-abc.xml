@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Almond Board of California News</title>
+    <link>https://www.almonds.com</link>
+    <description>Latest news from the Almond Board of California</description>
+    <item>
+      <title>California Almond Bloom Report Shows Strong Early Progress</title>
+      <link>https://www.almonds.com/news/california-almond-bloom-2026</link>
+      <pubDate>Mon, 03 Feb 2026 10:00:00 GMT</pubDate>
+      <description>The 2026 California almond bloom is off to a strong start with favorable weather conditions supporting pollination across major growing regions.</description>
+    </item>
+    <item>
+      <title>New Export Markets Open for California Almonds</title>
+      <link>https://www.almonds.com/news/export-markets-expansion-2026</link>
+      <pubDate>Fri, 31 Jan 2026 14:30:00 GMT</pubDate>
+      <description>Trade agreements with Southeast Asian countries create new opportunities for California almond growers and exporters.</description>
+    </item>
+    <item>
+      <title>Sustainability Report Highlights Water Conservation Efforts</title>
+      <link>https://www.almonds.com/news/sustainability-water-2026</link>
+      <pubDate>Wed, 29 Jan 2026 09:15:00 GMT</pubDate>
+      <description>California almond growers have reduced water usage by 15% over the past five years through innovative irrigation technologies.</description>
+    </item>
+  </channel>
+</rss>
