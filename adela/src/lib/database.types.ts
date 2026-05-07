@@ -50,10 +50,115 @@ export interface Database {
           completed_at?: string | null
         }
       }
-      [key: string]: {
-        Row: Record<string, unknown>
-        Insert: Record<string, unknown>
-        Update: Record<string, unknown>
+      position_reports: {
+        Row: {
+          id: string
+          commodity: string
+          position_lbs: number
+          report_date: string
+          report_week: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          commodity: string
+          position_lbs: number
+          report_date: string
+          report_week: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          commodity?: string
+          position_lbs?: number
+          report_date?: string
+          report_week?: string
+          created_at?: string
+        }
+      }
+      ai_analyses: {
+        Row: {
+          id: string
+          analysis_date: string
+          model_used: string
+          input_data: Json
+          signals: Json
+          brief: string
+          confidence_score: number
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          analysis_date: string
+          model_used: string
+          input_data?: Json
+          signals: Json
+          brief: string
+          confidence_score: number
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          analysis_date?: string
+          model_used?: string
+          input_data?: Json
+          signals?: Json
+          brief?: string
+          confidence_score?: number
+          created_at?: string
+        }
+      }
+      atlas_dispatches: {
+        Row: {
+          id: string
+          event: string
+          payload: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          event: string
+          payload: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          event?: string
+          payload?: Json
+          created_at?: string
+        }
+      }
+      atlas_cost_log: {
+        Row: {
+          id: string
+          agent_name: string
+          model_id: string
+          tokens_in: number
+          tokens_out: number
+          cost_usd: number
+          context: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          agent_name: string
+          model_id: string
+          tokens_in: number
+          tokens_out: number
+          cost_usd: number
+          context?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          agent_name?: string
+          model_id?: string
+          tokens_in?: number
+          tokens_out?: number
+          cost_usd?: number
+          context?: string | null
+          created_at?: string
+        }
       }
     }
     Views: {
