@@ -33,6 +33,7 @@ const AtlasInviteAccept = lazy(() => import("./pages/atlas/AtlasInviteAccept"))
 const AtlasPlan = lazy(() => import("./pages/atlas/AtlasPlan"))
 const AtlasWorkflow = lazy(() => import("./pages/atlas/AtlasWorkflow"))
 const AtlasTeamPortal = lazy(() => import("./pages/atlas/AtlasTeamPortal"))
+const PositionReports = lazy(() => import("./pages/PositionReports"))
 const NotFound = lazy(() => import("./pages/NotFound"))
 const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
@@ -111,6 +112,14 @@ export default function App() {
             element={
               <AuthGuard requiredTier="registered">
                 <Upgrade />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/position-reports"
+            element={
+              <AuthGuard requiredTier="registered">
+                <PositionReports />
               </AuthGuard>
             }
           />
