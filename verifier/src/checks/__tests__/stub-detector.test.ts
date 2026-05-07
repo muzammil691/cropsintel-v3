@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { checkStubDetector, isNotImplementedWhitelisted } from './stub-detector'
-import { TaskSpec } from '../types'
+import { checkStubDetector, isNotImplementedWhitelisted } from '../stub-detector'
+import { TaskSpec } from '../../types'
 
 let tmpDir: string
 const ORIGINAL_REPO_ROOT = process.env.REPO_ROOT

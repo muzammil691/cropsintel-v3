@@ -15,6 +15,20 @@ const STUB_INDICATORS: RegExp[] = [
   /throw new Error\(['"](not implemented|TODO)['"]\)/i,
 ]
 
+// Files that legitimately contain stub-pattern *literals* (regex sources, test
+// fixtures). Scanning them would flag self-reference matches that aren't real
+// stubs. Mirrors the SCAN_EXCLUSIONS in stub-detector.ts.
+const SCAN_EXCLUSIONS: RegExp[] = [
+  /^verifier\/src\/checks\/stub-detector\.ts$/,
+  /^verifier\/src\/checks\/components-implemented\.ts$/,
+  /^verifier\/src\/__tests__\//,
+  /^verifier\/src\/checks\/__tests__\//,
+]
+
+function isScanExcluded(filePath: string): boolean {
+  return SCAN_EXCLUSIONS.some(re => re.test(filePath))
+}
+
 const MIN_IMPL_LINES = 5
 
 export function checkComponentsImplemented(spec: TaskSpec): Gap[] {
@@ -26,6 +40,7 @@ export function checkComponentsImplemented(spec: TaskSpec): Gap[] {
   )
 
   for (const filePath of componentFiles) {
+    if (isScanExcluded(filePath)) continue // skip files that define stub patterns as literals
     const fullPath = join(root, filePath)
     if (!existsSync(fullPath)) continue // files-exist handles missing files
 

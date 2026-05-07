@@ -10,7 +10,9 @@ function getRepoRoot(): string {
 // literals, so the patterns will trivially match themselves.
 const SCAN_EXCLUSIONS: RegExp[] = [
   /^verifier\/src\/checks\/stub-detector\.ts$/,
+  /^verifier\/src\/checks\/components-implemented\.ts$/,
   /^verifier\/src\/__tests__\//,
+  /^verifier\/src\/checks\/__tests__\//,
   /^memory\/src\/embed\.ts$/,
 ]
 
