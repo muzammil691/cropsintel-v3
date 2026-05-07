@@ -1,8 +1,8 @@
 # Atlas Schema Reference
 
-**Migration:** `20260507085227_atlas_schema_complete.sql`  
+**Migration:** `20260507120000_atlas_schema_complete.sql`  
 **Phase:** 1.10b2  
-**Created:** 2026-05-07 08:52:27 UTC
+**Created:** 2026-05-07 12:00:00 UTC
 
 This document describes the complete Atlas database schema for the CropsIntel V3 autonomous agent system.
 
@@ -202,5 +202,5 @@ Safe to run multiple times against the same database.
 ## See Also
 
 - **Master plan:** `docs/master-plan/atlas-orchestrator-track.md`
-- **Migration:** `supabase/migrations/20260507085227_atlas_schema_complete.sql`
-- **Tests:** `supabase/migrations/20260507085227_atlas_schema_complete.sql.test.sql`
+- **Migration:** `supabase/migrations/20260507120000_atlas_schema_complete.sql`
+- **Tests:** `supabase/migrations/20260507120000_atlas_schema_complete.sql.test.sql`
