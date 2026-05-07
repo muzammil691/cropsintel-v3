@@ -8,11 +8,22 @@ import {
   Minus,
   ExternalLink,
   AlertCircle,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Database } from '@/lib/database.types'
 import { computeYoY } from '@/lib/position-report-analytics'
 import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 
 type PositionReport = Database['public']['Tables']['position_reports']['Row']
 
@@ -22,6 +33,9 @@ interface GroupedReports {
 
 type SortKey = 'report_date' | 'total_shipments_lbs' | 'total_inventory_lbs'
 type SortOrder = 'asc' | 'desc'
+
+const filterInputClass =
+  'w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 sm:py-1.5 text-sm transition-colors duration-200 placeholder:text-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:border-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed'
 
 export default function PositionReports() {
   const [reports, setReports] = useState<PositionReport[]>([])
@@ -48,7 +62,7 @@ export default function PositionReports() {
         setLoading(true)
         setError(null)
 
-        let query = supabase
+        const query = supabase
           .from('position_reports')
           .select('*')
           .order('report_date', { ascending: false })
@@ -82,7 +96,6 @@ export default function PositionReports() {
   const filteredAndSortedReports = useMemo(() => {
     let filtered = [...reports]
 
-    // Apply date range filter
     if (dateFrom) {
       filtered = filtered.filter((r) => r.report_date >= dateFrom)
     }
@@ -90,7 +103,6 @@ export default function PositionReports() {
       filtered = filtered.filter((r) => r.report_date <= dateTo)
     }
 
-    // Apply market filter
     if (marketFilter) {
       const lowerFilter = marketFilter.toLowerCase()
       filtered = filtered.filter((r) =>
@@ -98,7 +110,6 @@ export default function PositionReports() {
       )
     }
 
-    // Sort
     filtered.sort((a, b) => {
       const aVal = a[sortKey]
       const bVal = b[sortKey]
@@ -114,7 +125,6 @@ export default function PositionReports() {
     return filtered
   }, [reports, dateFrom, dateTo, marketFilter, sortKey, sortOrder])
 
-  // Group by market (source)
   const groupedReports = useMemo(() => {
     const grouped: GroupedReports = {}
     for (const report of filteredAndSortedReports) {
@@ -142,7 +152,7 @@ export default function PositionReports() {
         <Helmet>
           <title>Position Reports — CropsIntel</title>
         </Helmet>
-        <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-8">
+        <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
           <div className="mx-auto max-w-7xl">
             <PositionReportsSkeleton />
           </div>
@@ -157,7 +167,7 @@ export default function PositionReports() {
         <Helmet>
           <title>Position Reports — CropsIntel</title>
         </Helmet>
-        <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-8">
+        <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
           <div className="mx-auto max-w-7xl">
             <ErrorState message={error} />
           </div>
@@ -172,7 +182,7 @@ export default function PositionReports() {
         <Helmet>
           <title>Position Reports — CropsIntel</title>
         </Helmet>
-        <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-8">
+        <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
           <div className="mx-auto max-w-7xl">
             <EmptyState />
           </div>
@@ -186,16 +196,16 @@ export default function PositionReports() {
       <Helmet>
         <title>Position Reports — CropsIntel</title>
       </Helmet>
-      <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mx-auto max-w-7xl space-y-6">
+      <main className="min-h-screen bg-white dark:bg-slate-950 px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <div className="mx-auto max-w-7xl space-y-4 sm:space-y-6">
           <header className="space-y-2">
             <div className="flex items-center gap-2">
               <FileText className="size-5 text-emerald-600 dark:text-emerald-400" />
-              <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+              <h1 className="text-xl sm:text-2xl lg:text-3xl font-semibold tracking-tight">
                 Position Reports
               </h1>
             </div>
-            <p className="text-sm text-slate-600 dark:text-slate-300">
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
               Monthly market position reports showing shipments, inventory, and YoY trends
             </p>
           </header>
@@ -203,15 +213,18 @@ export default function PositionReports() {
           {/* Filters */}
           <section
             aria-label="Filters"
-            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-4"
+            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 p-3 sm:p-4"
           >
             <div className="flex items-center gap-2 mb-3">
               <Filter className="size-4 text-slate-500" />
               <span className="text-sm font-medium">Filters</span>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <label htmlFor="date-from" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                <label
+                  htmlFor="date-from"
+                  className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1"
+                >
                   From Date
                 </label>
                 <input
@@ -219,11 +232,14 @@ export default function PositionReports() {
                   id="date-from"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600/50"
+                  className={filterInputClass}
                 />
               </div>
               <div>
-                <label htmlFor="date-to" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                <label
+                  htmlFor="date-to"
+                  className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1"
+                >
                   To Date
                 </label>
                 <input
@@ -231,11 +247,14 @@ export default function PositionReports() {
                   id="date-to"
                   value={dateTo}
                   onChange={(e) => setDateTo(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600/50"
+                  className={filterInputClass}
                 />
               </div>
-              <div>
-                <label htmlFor="market" className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+              <div className="sm:col-span-2 lg:col-span-1">
+                <label
+                  htmlFor="market"
+                  className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1"
+                >
                   Market
                 </label>
                 <input
@@ -244,35 +263,92 @@ export default function PositionReports() {
                   placeholder="Search markets..."
                   value={marketFilter}
                   onChange={(e) => setMarketFilter(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600/50"
+                  className={filterInputClass}
                 />
               </div>
             </div>
           </section>
 
           {/* Results count */}
-          <div className="text-sm text-slate-600 dark:text-slate-400">
-            Showing {filteredAndSortedReports.length} report{filteredAndSortedReports.length !== 1 ? 's' : ''} across {Object.keys(groupedReports).length} market{Object.keys(groupedReports).length !== 1 ? 's' : ''}
+          <div className="text-xs sm:text-sm text-slate-600 dark:text-slate-400" aria-live="polite">
+            Showing {filteredAndSortedReports.length} report
+            {filteredAndSortedReports.length !== 1 ? 's' : ''} across{' '}
+            {Object.keys(groupedReports).length} market
+            {Object.keys(groupedReports).length !== 1 ? 's' : ''}
           </div>
 
           {/* Grouped tables */}
           {Object.keys(groupedReports).length === 0 ? (
-            <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 p-8 text-center">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 p-6 sm:p-8 text-center">
               <p className="text-sm text-slate-600 dark:text-slate-400">
                 No reports match your filters
               </p>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-4 sm:space-y-6">
               {Object.entries(groupedReports).map(([market, marketReports]) => (
                 <section key={market} className="space-y-3">
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
-                    {market}
+                  <h2 className="text-base sm:text-lg font-semibold flex items-center gap-2 flex-wrap">
+                    <span>{market}</span>
                     <span className="text-xs font-normal text-slate-500">
                       ({marketReports.length} report{marketReports.length !== 1 ? 's' : ''})
                     </span>
                   </h2>
-                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+
+                  {/* Mobile: card list */}
+                  <ul className="space-y-2 sm:hidden" aria-label={`${market} reports`}>
+                    {marketReports.map((report, idx) => {
+                      const priorReport =
+                        idx < marketReports.length - 1 ? marketReports[idx + 1] : null
+                      const yoyResult =
+                        priorReport &&
+                        report.total_shipments_lbs &&
+                        priorReport.total_shipments_lbs
+                          ? computeYoY(report.total_shipments_lbs, priorReport.total_shipments_lbs)
+                          : null
+                      return (
+                        <li key={report.id}>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedReport(report)}
+                            className="w-full text-left rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 px-4 py-3 transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-900/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                                  {new Date(report.report_date).toLocaleDateString('en-US', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric',
+                                  })}
+                                </p>
+                                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                                  <dt className="text-slate-500 dark:text-slate-400">Shipments</dt>
+                                  <dd className="text-right tabular-nums text-slate-900 dark:text-slate-100">
+                                    {report.total_shipments_lbs?.toLocaleString() ?? '—'}
+                                  </dd>
+                                  <dt className="text-slate-500 dark:text-slate-400">Inventory</dt>
+                                  <dd className="text-right tabular-nums text-slate-900 dark:text-slate-100">
+                                    {report.total_inventory_lbs?.toLocaleString() ?? '—'}
+                                  </dd>
+                                </dl>
+                              </div>
+                              <div className="shrink-0">
+                                {yoyResult ? (
+                                  <YoYBadge result={yoyResult} />
+                                ) : (
+                                  <span className="text-xs text-slate-400">—</span>
+                                )}
+                              </div>
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+
+                  {/* Tablet/desktop: table */}
+                  <div className="hidden sm:block rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-800">
@@ -298,23 +374,39 @@ export default function PositionReports() {
                               sortOrder={sortOrder}
                               onSort={toggleSort}
                             />
-                            <th className="px-4 py-3 text-left text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-left text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider"
+                            >
                               YoY Δ
                             </th>
-                            <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                            <th
+                              scope="col"
+                              className="px-4 py-3 text-right text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider"
+                            >
                               Actions
                             </th>
                           </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-slate-950 divide-y divide-slate-100 dark:divide-slate-900">
                           {marketReports.map((report, idx) => {
-                            const priorReport = idx < marketReports.length - 1 ? marketReports[idx + 1] : null
-                            const yoyResult = priorReport && report.total_shipments_lbs && priorReport.total_shipments_lbs
-                              ? computeYoY(report.total_shipments_lbs, priorReport.total_shipments_lbs)
-                              : null
+                            const priorReport =
+                              idx < marketReports.length - 1 ? marketReports[idx + 1] : null
+                            const yoyResult =
+                              priorReport &&
+                              report.total_shipments_lbs &&
+                              priorReport.total_shipments_lbs
+                                ? computeYoY(
+                                    report.total_shipments_lbs,
+                                    priorReport.total_shipments_lbs
+                                  )
+                                : null
 
                             return (
-                              <tr key={report.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/30 transition-colors">
+                              <tr
+                                key={report.id}
+                                className="transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-900/30"
+                              >
                                 <td className="px-4 py-3 font-medium">
                                   {new Date(report.report_date).toLocaleDateString('en-US', {
                                     year: 'numeric',
@@ -329,15 +421,27 @@ export default function PositionReports() {
                                   {report.total_inventory_lbs?.toLocaleString() ?? '—'}
                                 </td>
                                 <td className="px-4 py-3">
-                                  {yoyResult ? <YoYBadge result={yoyResult} /> : <span className="text-slate-400">—</span>}
+                                  {yoyResult ? (
+                                    <YoYBadge result={yoyResult} />
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <button
+                                    type="button"
                                     onClick={() => setSelectedReport(report)}
-                                    className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 hover:underline text-xs"
+                                    aria-label={`View details for report on ${new Date(
+                                      report.report_date
+                                    ).toLocaleDateString('en-US', {
+                                      year: 'numeric',
+                                      month: 'long',
+                                      day: 'numeric',
+                                    })}`}
+                                    className="inline-flex items-center gap-1 rounded-md text-xs text-emerald-600 dark:text-emerald-400 transition-colors duration-200 hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 px-1 py-0.5"
                                   >
                                     Details
-                                    <ExternalLink className="size-3" />
+                                    <ExternalLink className="size-3" aria-hidden="true" />
                                   </button>
                                 </td>
                               </tr>
@@ -354,13 +458,17 @@ export default function PositionReports() {
         </div>
       </main>
 
-      {/* Detail Drawer */}
-      {selectedReport && (
-        <DetailDrawer
-          report={selectedReport}
-          onClose={() => setSelectedReport(null)}
-        />
-      )}
+      {/* Detail Drawer — shadcn Sheet (Radix Dialog) gives focus trap, Escape, aria-modal */}
+      <Sheet
+        open={selectedReport !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedReport(null)
+        }}
+      >
+        <SheetContent side="right">
+          {selectedReport && <DetailDrawerBody report={selectedReport} />}
+        </SheetContent>
+      </Sheet>
     </>
   )
 }
@@ -379,25 +487,52 @@ function SortableHeader({
   onSort: (key: SortKey) => void
 }) {
   const isActive = currentSortKey === sortKey
+  const ariaSort: 'ascending' | 'descending' | 'none' = isActive
+    ? sortOrder === 'asc'
+      ? 'ascending'
+      : 'descending'
+    : 'none'
+
+  const directionLabel = isActive
+    ? sortOrder === 'asc'
+      ? 'sorted ascending, click to sort descending'
+      : 'sorted descending, click to sort ascending'
+    : 'not sorted, click to sort descending'
+
+  const SortIcon = isActive ? (sortOrder === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown
 
   return (
-    <th className="px-4 py-3 text-left text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+    <th
+      scope="col"
+      aria-sort={ariaSort}
+      className="px-4 py-3 text-left text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider"
+    >
       <button
+        type="button"
         onClick={() => onSort(sortKey)}
-        className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-200 transition-colors"
+        aria-label={`${label}, ${directionLabel}`}
+        className="inline-flex items-center gap-1 rounded-md transition-colors duration-200 hover:text-slate-900 dark:hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 px-1 py-0.5"
       >
         {label}
-        {isActive && (
-          <span className="text-emerald-600 dark:text-emerald-400">
-            {sortOrder === 'asc' ? '↑' : '↓'}
-          </span>
-        )}
+        <SortIcon
+          className={cn(
+            'size-3 shrink-0',
+            isActive
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-slate-400 dark:text-slate-500'
+          )}
+          aria-hidden="true"
+        />
       </button>
     </th>
   )
 }
 
-function YoYBadge({ result }: { result: { value: number; trend: 'up' | 'down' | 'flat'; confidence: number } }) {
+function YoYBadge({
+  result,
+}: {
+  result: { value: number; trend: 'up' | 'down' | 'flat'; confidence: number }
+}) {
   const { value, trend } = result
   const Icon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus
 
@@ -408,100 +543,105 @@ function YoYBadge({ result }: { result: { value: number; trend: 'up' | 'down' | 
   }
 
   return (
-    <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium', toneClasses[trend])}>
-      <Icon className="size-3" />
-      {value > 0 ? '+' : ''}{value.toFixed(1)}%
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium',
+        toneClasses[trend]
+      )}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+      {value > 0 ? '+' : ''}
+      {value.toFixed(1)}%
     </span>
   )
 }
 
-function DetailDrawer({ report, onClose }: { report: PositionReport; onClose: () => void }) {
+function DetailDrawerBody({ report }: { report: PositionReport }) {
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden" role="dialog" aria-modal="true">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/30 dark:bg-black/60 transition-opacity"
-        onClick={onClose}
-      />
+    <>
+      <SheetHeader>
+        <SheetTitle>Position Report Details</SheetTitle>
+        <SheetDescription>
+          {report.source} —{' '}
+          {new Date(report.report_date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })}
+        </SheetDescription>
+      </SheetHeader>
 
-      {/* Drawer */}
-      <div className="fixed inset-y-0 right-0 flex max-w-full pl-10">
-        <div className="w-screen max-w-md">
-          <div className="flex h-full flex-col bg-white dark:bg-slate-950 shadow-xl">
-            <div className="border-b border-slate-200 dark:border-slate-800 px-4 py-5">
-              <div className="flex items-start justify-between">
-                <h2 className="text-lg font-semibold">Position Report Details</h2>
-                <button
-                  onClick={onClose}
-                  className="rounded-md text-slate-400 hover:text-slate-500 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600/50"
-                >
-                  <span className="sr-only">Close panel</span>
-                  <span aria-hidden>×</span>
-                </button>
-              </div>
-            </div>
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5 space-y-4">
+        <DetailField label="Source" value={report.source} />
+        <DetailField
+          label="Report Date"
+          value={new Date(report.report_date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })}
+        />
+        <DetailField
+          label="Total Shipments"
+          value={
+            report.total_shipments_lbs
+              ? `${report.total_shipments_lbs.toLocaleString()} lbs`
+              : '—'
+          }
+        />
+        <DetailField
+          label="Total Inventory"
+          value={
+            report.total_inventory_lbs
+              ? `${report.total_inventory_lbs.toLocaleString()} lbs`
+              : '—'
+          }
+        />
+        <DetailField
+          label="Domestic Shipments"
+          value={
+            report.domestic_shipments_lbs
+              ? `${report.domestic_shipments_lbs.toLocaleString()} lbs`
+              : '—'
+          }
+        />
+        <DetailField
+          label="Export Shipments"
+          value={
+            report.export_shipments_lbs
+              ? `${report.export_shipments_lbs.toLocaleString()} lbs`
+              : '—'
+          }
+        />
+        <DetailField label="Ingested At" value={new Date(report.ingested_at).toLocaleString()} />
+        <DetailField label="Ingested By" value={report.ingested_by} />
 
-            <div className="flex-1 overflow-y-auto px-4 py-5 space-y-4">
-              <DetailField label="Source" value={report.source} />
-              <DetailField
-                label="Report Date"
-                value={new Date(report.report_date).toLocaleDateString('en-US', {
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                })}
-              />
-              <DetailField
-                label="Total Shipments"
-                value={report.total_shipments_lbs ? `${report.total_shipments_lbs.toLocaleString()} lbs` : '—'}
-              />
-              <DetailField
-                label="Total Inventory"
-                value={report.total_inventory_lbs ? `${report.total_inventory_lbs.toLocaleString()} lbs` : '—'}
-              />
-              <DetailField
-                label="Domestic Shipments"
-                value={report.domestic_shipments_lbs ? `${report.domestic_shipments_lbs.toLocaleString()} lbs` : '—'}
-              />
-              <DetailField
-                label="Export Shipments"
-                value={report.export_shipments_lbs ? `${report.export_shipments_lbs.toLocaleString()} lbs` : '—'}
-              />
-              <DetailField
-                label="Ingested At"
-                value={new Date(report.ingested_at).toLocaleString()}
-              />
-              <DetailField label="Ingested By" value={report.ingested_by} />
-
-              {report.report_url && (
-                <div>
-                  <a
-                    href={report.report_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sm text-emerald-600 dark:text-emerald-400 hover:underline"
-                  >
-                    View Source Report
-                    <ExternalLink className="size-3" />
-                  </a>
-                </div>
-              )}
-
-              {report.extracted && Object.keys(report.extracted).length > 0 && (
-                <div>
-                  <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                    Extracted Data
-                  </h3>
-                  <pre className="text-xs bg-slate-50 dark:bg-slate-900 rounded-md p-3 overflow-x-auto border border-slate-200 dark:border-slate-800">
-                    {JSON.stringify(report.extracted, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
+        {report.report_url && (
+          <div>
+            <a
+              href={report.report_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md text-sm text-emerald-600 dark:text-emerald-400 transition-colors duration-200 hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 px-1 py-0.5"
+            >
+              View Source Report
+              <ExternalLink className="size-3" aria-hidden="true" />
+            </a>
           </div>
-        </div>
+        )}
+
+        {report.extracted && Object.keys(report.extracted).length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              Extracted Data
+            </h3>
+            <pre className="text-xs bg-slate-50 dark:bg-slate-900 rounded-md p-3 overflow-x-auto border border-slate-200 dark:border-slate-800">
+              {JSON.stringify(report.extracted, null, 2)}
+            </pre>
+          </div>
+        )}
       </div>
-    </div>
+    </>
   )
 }
 
@@ -511,41 +651,68 @@ function DetailField({ label, value }: { label: string; value: string }) {
       <dt className="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wider">
         {label}
       </dt>
-      <dd className="mt-1 text-sm text-slate-900 dark:text-slate-100">{value}</dd>
+      <dd className="mt-1 text-sm text-slate-900 dark:text-slate-100 break-words">{value}</dd>
     </div>
   )
 }
 
 function PositionReportsSkeleton() {
   return (
-    <div className="space-y-6 animate-pulse">
+    <div className="space-y-4 sm:space-y-6" aria-label="Loading position reports" aria-busy="true">
       <div className="space-y-2">
-        <div className="h-8 w-64 bg-slate-200 dark:bg-slate-800 rounded" />
-        <div className="h-4 w-96 bg-slate-200 dark:bg-slate-800 rounded" />
+        <Skeleton className="h-7 sm:h-8 w-48 sm:w-64" />
+        <Skeleton className="h-4 w-full max-w-md" />
       </div>
-      <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-lg" />
-      <div className="h-64 bg-slate-200 dark:bg-slate-800 rounded-lg" />
+      {/* Filter card skeleton */}
+      <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 sm:p-4 space-y-3">
+        <Skeleton className="h-4 w-20" />
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+          <Skeleton className="h-9" />
+          <Skeleton className="h-9" />
+          <Skeleton className="h-9" />
+        </div>
+      </div>
+      {/* Group skeleton */}
+      <div className="space-y-3">
+        <Skeleton className="h-5 w-40" />
+        <div className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="space-y-px">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 w-full rounded-none" />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div className="rounded-lg border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 p-8 text-center">
-      <AlertCircle className="size-10 text-red-600 dark:text-red-400 mx-auto mb-3" />
-      <h2 className="text-lg font-semibold text-red-900 dark:text-red-200 mb-2">
+    <div
+      role="alert"
+      className="rounded-lg border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 p-6 sm:p-8 text-center"
+    >
+      <AlertCircle
+        className="size-8 sm:size-10 text-red-600 dark:text-red-400 mx-auto mb-3"
+        aria-hidden="true"
+      />
+      <h2 className="text-base sm:text-lg font-semibold text-red-900 dark:text-red-200 mb-2">
         Failed to Load Position Reports
       </h2>
-      <p className="text-sm text-red-700 dark:text-red-300">{message}</p>
+      <p className="text-sm text-red-700 dark:text-red-300 break-words">{message}</p>
     </div>
   )
 }
 
 function EmptyState() {
   return (
-    <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 p-12 text-center">
-      <FileText className="size-12 text-slate-400 dark:text-slate-600 mx-auto mb-3" />
-      <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
+    <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 p-8 sm:p-12 text-center">
+      <FileText
+        className="size-10 sm:size-12 text-slate-400 dark:text-slate-600 mx-auto mb-3"
+        aria-hidden="true"
+      />
+      <h2 className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 mb-2">
         No Position Reports Yet
       </h2>
       <p className="text-sm text-slate-600 dark:text-slate-400">

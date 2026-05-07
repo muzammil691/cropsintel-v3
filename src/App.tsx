@@ -42,17 +42,23 @@ function MigrationBanner() {
   const { migrationNotice, clearMigrationNotice } = useAuth()
   if (!migrationNotice) return null
   return (
-    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md px-4">
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-[calc(100%-1rem)] sm:max-w-md px-2 sm:px-4 pb-[env(safe-area-inset-bottom)]"
+    >
       <Alert className="flex items-center justify-between gap-2 shadow-md border-green-500 bg-green-50 text-green-900">
-        <AlertDescription className="flex-1">{migrationNotice}</AlertDescription>
+        <AlertDescription className="flex-1 text-sm sm:text-base">
+          {migrationNotice}
+        </AlertDescription>
         <Button
           variant="ghost"
           size="sm"
           onClick={clearMigrationNotice}
-          aria-label="Dismiss"
-          className="shrink-0 h-7 w-7 p-0 text-green-700 hover:text-green-900 hover:bg-green-100 transition-colors duration-200"
+          aria-label="Dismiss notification"
+          className="shrink-0 min-h-[44px] min-w-[44px] h-11 w-11 p-0 text-green-700 hover:text-green-900 hover:bg-green-100 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-green-600/50"
         >
-          ✕
+          <span aria-hidden="true">✕</span>
         </Button>
       </Alert>
     </div>
