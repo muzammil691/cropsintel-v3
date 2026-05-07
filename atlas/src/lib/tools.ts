@@ -304,6 +304,45 @@ export async function builderCancelTask(taskId: string): Promise<{ moved_to: str
   return { moved_to: toPath, sha: result.sha, pushed: result.pushed }
 }
 
+// H.1: Force-cancel — works on both queued/ AND in-progress/. The vanilla
+// builder.cancel_task only handles queued specs; in-progress zombies (Builder
+// crashed mid-run, lifecycle move never landed, file stuck in in-progress/
+// blocking nothing functionally but accumulating noise) need this. Atlas
+// surfaces it via builder.force_cancel chat tool; the Queue tab shows it
+// as a "Force cancel" button on in-progress rows.
+//
+// Behavior:
+//   - If the spec is in queued/: same as builderCancelTask.
+//   - If in-progress/: move to cancelled/. (Builder's running claude code
+//     keeps running until done; on the next agent-loop iteration it'll find
+//     the file gone and skip the lifecycle move. The 0-file or partial commit
+//     it produces will be ignored — no harm done.)
+//   - If neither: throw — caller probably meant force_cancel a stuck spec
+//     that already moved (e.g. to done/). Don't fabricate.
+export async function builderForceCancelTask(taskId: string): Promise<{ moved_to: string; sha: string; pushed: boolean; from_bucket: 'queued' | 'in-progress' }> {
+  const candidates: Array<{ bucket: 'queued' | 'in-progress'; relPath: string }> = [
+    { bucket: 'queued', relPath: `.agent/tasks/queued/${taskId}.md` },
+    { bucket: 'in-progress', relPath: `.agent/tasks/in-progress/${taskId}.md` },
+  ]
+  for (const c of candidates) {
+    const fromPath = resolve(REPO_ROOT, c.relPath)
+    try {
+      await readFile(fromPath, 'utf-8')
+    } catch {
+      continue
+    }
+    const toRel = `.agent/tasks/cancelled/${taskId}.md`
+    const toPath = resolve(REPO_ROOT, toRel)
+    await rename(fromPath, toPath)
+    const commitMsg = c.bucket === 'in-progress'
+      ? `atlas: force-cancel zombie ${taskId} (rescued from in-progress)`
+      : `atlas: cancel ${taskId}`
+    const result = await gitCommitAndPush(commitMsg, [c.relPath, toRel])
+    return { moved_to: toPath, sha: result.sha, pushed: result.pushed, from_bucket: c.bucket }
+  }
+  throw new Error(`builder.force_cancel: ${taskId}.md not found in queued/ or in-progress/. If it's already in done/, failed/, or cancelled/, it cannot be force-cancelled — the lifecycle has moved on.`)
+}
+
 // Atlas-driven queue management. These mutate frontmatter on a queued spec
 // (priority + depends-on) and commit+push so Builder picks them up next loop.
 export async function builderSetPriority(taskId: string, priority: number): Promise<{ updated: boolean; sha: string; pushed: boolean }> {
@@ -1040,7 +1079,8 @@ export const TOOLS = {
   'builder.queue_spec':   { fn: builderQueueSpec,   description: 'Queue a new task spec for Builder by writing a markdown file to .agent/tasks/queued/. filename must start with "phase-" and end ".md".' },
   'builder.list_queue':   { fn: builderListQueue,   description: 'List the current queue of tasks waiting for Builder.' },
   'builder.list_done':    { fn: builderListDone,    description: 'List task specs that have already shipped (in .agent/tasks/done/). Supports optional substring filter (e.g. filter="phase-1.3" returns only Phase 1.3 specs) and limit (default 100). Use this when the user asks "what shipped", "what\'s done", or asks about a specific phase\'s status — status.snapshot only gives counts, this gives names.' },
-  'builder.cancel_task':  { fn: builderCancelTask,  description: 'Cancel a queued task by moving it to cancelled/.' },
+  'builder.cancel_task':  { fn: builderCancelTask,  description: 'Cancel a queued task by moving it to cancelled/. ONLY works on queued/ specs. For in-progress zombies (Builder crashed mid-run), use builder.force_cancel.' },
+  'builder.force_cancel': { fn: builderForceCancelTask, description: 'Force-cancel a spec from EITHER queued/ OR in-progress/. Use when a spec has been stuck in in-progress/ for a long time (zombie — Builder crashed mid-run and the lifecycle move never landed) — moves it to cancelled/ so the queue tab stops showing it. args=(taskId).' },
   'builder.set_priority': { fn: builderSetPriority, description: 'Set a queued spec\'s priority (1=urgent .. 10=lowest). Mutates frontmatter and commits+pushes so Builder picks the new order on next loop. args=(taskId, priority).' },
   'builder.set_dependencies': { fn: builderSetDependencies, description: 'Set a queued spec\'s depends-on list. Each dep must exist somewhere in .agent/tasks/. Cycles are rejected. Commits+pushes. args=(taskId, dependsOn[]).' },
   'builder.queue_order':  { fn: builderQueueOrder,  description: 'Compute the current queue pickup order Builder will use (priority + dependency + paused aware). Read-only. Returns array of {id, priority, depends_on, blocked, blocked_by, paused}.' },

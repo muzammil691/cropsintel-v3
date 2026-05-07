@@ -14,6 +14,7 @@ import {
 import {
   fetchBuilderQueue,
   cancelBuilderTask,
+  forceCancelBuilderTask,
   moveBuilderPosition,
   pauseBuilderTask,
   resumeBuilderTask,
@@ -109,6 +110,26 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
       showToast(`resumed ${taskId}`)
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'resume failed')
+    } finally {
+      setBusyTaskId(null)
+    }
+  }
+
+  // H.1: force-cancel — works on in-progress zombies. Confirmation prompt
+  // because this interrupts a running Builder task.
+  const handleForceCancel = async (taskId: string) => {
+    if (!window.confirm(
+      `Force-cancel ${taskId}?\n\nThis moves the spec from in-progress/ to cancelled/. ` +
+      `Builder's running claude session will keep going for a bit but its commit will be ignored. ` +
+      `Use this only when a spec is genuinely stuck.`,
+    )) return
+    setBusyTaskId(taskId)
+    try {
+      const r = await forceCancelBuilderTask(taskId)
+      await refresh()
+      showToast(`force-cancelled ${taskId} (was in ${r.from_bucket}/)`)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'force-cancel failed')
     } finally {
       setBusyTaskId(null)
     }
@@ -248,7 +269,9 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
               filename={inFlight.filename}
               state="in-progress"
               startedAt={inFlight.started_at}
-              canManage={false}
+              canManage={canManage}
+              busy={busyTaskId === inFlight.id}
+              onForceCancel={canManage ? () => void handleForceCancel(inFlight.id) : undefined}
             />
           )}
           {(() => {

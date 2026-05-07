@@ -1408,6 +1408,15 @@ export async function cancelBuilderTask(taskId: string): Promise<{ ok: true }> {
   )
 }
 
+/** H.1: Force-cancel a spec from EITHER queued/ OR in-progress/. Used to
+ *  recover zombies stuck in in-progress/ when Builder crashed mid-run. */
+export async function forceCancelBuilderTask(taskId: string): Promise<{ ok: true; from_bucket: 'queued' | 'in-progress'; sha: string; pushed: boolean }> {
+  return fetchJson<{ ok: true; from_bucket: 'queued' | 'in-progress'; sha: string; pushed: boolean }>(
+    `${ATLAS_URL}/atlas/builder/queue/${encodeURIComponent(taskId)}/force-cancel`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
 // ─── Pillar B (Queue tab Xbox-style) ────────────────────────────────────────
 
 /** Move a queued spec one position up or down (swaps priority with neighbor). */

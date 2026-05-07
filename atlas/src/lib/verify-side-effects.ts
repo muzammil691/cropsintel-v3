@@ -103,6 +103,29 @@ async function verifyCancelTask(ctx: VerifyContext): Promise<VerificationOutcome
   })
 }
 
+// H.1: verify the force-cancel pulled the spec out of queued/ AND in-progress/
+// AND landed it in cancelled/. Stricter than verifyCancelTask because the
+// source bucket can be either.
+async function verifyForceCancelTask(ctx: VerifyContext): Promise<VerificationOutcome> {
+  return withRetry(async () => {
+    const taskId = ctx.arguments.taskId as string | undefined
+    if (!taskId) return { verified: false, evidence: {}, error: 'no taskId argument' }
+    const filename = `${taskId}.md`
+    const queuedFiles = await readdir(resolve(REPO_ROOT, '.agent/tasks/queued')).catch(() => [] as string[])
+    const inProgressFiles = await readdir(resolve(REPO_ROOT, '.agent/tasks/in-progress')).catch(() => [] as string[])
+    const cancelledFiles = await readdir(resolve(REPO_ROOT, '.agent/tasks/cancelled')).catch(() => [] as string[])
+    const notInQueued = !queuedFiles.includes(filename)
+    const notInInProgress = !inProgressFiles.includes(filename)
+    const inCancelled = cancelledFiles.includes(filename)
+    const verified = notInQueued && notInInProgress && inCancelled
+    return {
+      verified,
+      evidence: { taskId, notInQueued, notInInProgress, inCancelled },
+      error: verified ? undefined : `notInQueued=${notInQueued}, notInInProgress=${notInInProgress}, inCancelled=${inCancelled}`,
+    }
+  })
+}
+
 async function verifyMemoryIngest(ctx: VerifyContext): Promise<VerificationOutcome> {
   return withRetry(async () => {
     const sb = getSupabaseClient()
@@ -310,6 +333,7 @@ async function verifyPlanAddToQueue(ctx: VerifyContext): Promise<VerificationOut
 const VERIFIERS: Partial<Record<ToolName, (ctx: VerifyContext) => Promise<VerificationOutcome>>> = {
   'builder.queue_spec':    verifyQueueSpec,
   'builder.cancel_task':   verifyCancelTask,
+  'builder.force_cancel':  verifyForceCancelTask,
   'builder.move_position': verifyMovePosition,
   'builder.pause_task':    verifyPauseTask,
   'builder.resume_task':   verifyResumeTask,

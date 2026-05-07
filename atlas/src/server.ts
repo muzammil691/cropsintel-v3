@@ -5,7 +5,7 @@ import { validateEnv } from './lib/env'
 import { dispatch } from './lib/dispatch'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, builderMovePosition, builderPauseTask, builderResumeTask, builderQueueSpecsBatch, verifierAudit, designerAuditCommit } from './lib/tools'
+import { TOOLS, ToolName, builderQueueOrder, builderSetPriority, builderCancelTask, builderForceCancelTask, builderMovePosition, builderPauseTask, builderResumeTask, builderQueueSpecsBatch, verifierAudit, designerAuditCommit } from './lib/tools'
 import { getSupabaseClient } from './lib/supabase'
 import { getBurnRate } from './lib/cost-gate'
 import {
@@ -3705,6 +3705,29 @@ export async function startServer(): Promise<void> {
         try {
           await builderCancelTask(taskId)
           json(res, 200, { ok: true })
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // H.1: force-cancel — works on queued/ AND in-progress/ specs.
+    // Used to recover zombies (Builder crashed mid-run, file stuck in
+    // in-progress/ for hours). Requires admin role; same gate as cancel.
+    {
+      const forceCancelMatch = url.match(/^\/atlas\/builder\/queue\/([^/]+)\/force-cancel$/)
+      if (forceCancelMatch && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const taskId = decodeURIComponent(forceCancelMatch[1])
+        try {
+          const result = await builderForceCancelTask(taskId)
+          json(res, 200, { ok: true, from_bucket: result.from_bucket, sha: result.sha, pushed: result.pushed })
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) })
         }

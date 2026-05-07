@@ -1,4 +1,4 @@
-import { ChevronUp, ChevronDown, Pencil, Trash2, FileText, Clock, ExternalLink, Pause, Play } from 'lucide-react'
+import { ChevronUp, ChevronDown, Pencil, Trash2, FileText, Clock, ExternalLink, Pause, Play, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface QueueRowProps {
@@ -25,7 +25,16 @@ interface QueueRowProps {
   /** Pillar B.2 */
   onPause?: () => void
   onResume?: () => void
+  /** H.1: force-cancel — works on in-progress zombies. Distinct callback from
+   *  onCancel because the UI shows a different (warning-styled) button. */
+  onForceCancel?: () => void
 }
+
+// H.1: when an in-progress spec has been running for longer than this, the
+// row shows a "STUCK?" warning and the Force-cancel button gets a more
+// prominent (amber) styling. Builder runs longer than this are unusual but
+// possible (Phase 1.7 ports, big migrations) — the warning is advisory.
+const STUCK_THRESHOLD_MIN = 30
 
 export function QueueRow({
   taskId,
@@ -47,13 +56,21 @@ export function QueueRow({
   onCancel,
   onPause,
   onResume,
+  onForceCancel,
 }: QueueRowProps) {
   const isInFlight = state === 'in-progress'
+  // H.1: detect zombies / stuck-running specs by how long they've been in
+  // .agent/tasks/in-progress/. The startedAt prop comes from the file's
+  // mtime per server.ts:3504. >30 min = warn the user, surface force-cancel.
+  const stuckMinutes = isInFlight && startedAt ? minutesSinceISO(startedAt) : 0
+  const isStuck = isInFlight && stuckMinutes >= STUCK_THRESHOLD_MIN
   return (
     <li
       className={cn(
         'rounded-md border p-3',
-        isInFlight
+        isInFlight && isStuck
+          ? 'border-amber-400 dark:border-amber-700 bg-amber-50/60 dark:bg-amber-950/40'
+          : isInFlight
           ? 'border-emerald-300 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/30'
           : paused
           ? 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 opacity-75'
@@ -69,8 +86,13 @@ export function QueueRow({
         <code className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
           {taskId}
         </code>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-slate-500 tabular-nums whitespace-nowrap">
-          {isInFlight
+        <span className={cn(
+          'ml-auto text-[10px] uppercase tracking-wider tabular-nums whitespace-nowrap',
+          isStuck ? 'text-amber-700 dark:text-amber-300 font-semibold' : 'text-slate-500',
+        )}>
+          {isStuck
+            ? `STUCK? ${stuckMinutes}m`
+            : isInFlight
             ? 'IN-PROGRESS'
             : paused
             ? 'PAUSED'
@@ -114,6 +136,26 @@ export function QueueRow({
           <SmallButton onClick={() => openLog(taskId)}>
             view live log
             <ExternalLink className="size-2.5 ml-0.5" aria-hidden />
+          </SmallButton>
+        )}
+        {/* H.1: Force-cancel on in-progress rows. Visible only to admins.
+            Styled prominently when the row has been in-progress past the
+            STUCK_THRESHOLD so the user can rescue zombies fast. */}
+        {isInFlight && canManage && onForceCancel && (
+          <SmallButton
+            onClick={onForceCancel}
+            disabled={busy}
+            title={isStuck
+              ? `Force-cancel — Builder has been on this for ${stuckMinutes}m. Moves to cancelled/.`
+              : 'Force-cancel running spec — moves to cancelled/. Use only if the spec is stuck.'}
+            aria-label="Force-cancel running spec"
+            className={cn(
+              isStuck
+                ? 'border-amber-400 bg-amber-100 hover:border-red-400 hover:bg-red-100/60 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100'
+                : 'hover:border-red-400 hover:bg-red-50/40 dark:hover:bg-red-950/30',
+            )}
+          >
+            <AlertTriangle className="size-3" aria-hidden /> force-cancel
           </SmallButton>
         )}
         {!isInFlight && canManage && (
@@ -212,6 +254,13 @@ function openSpec(filename: string) {
 function openLog(taskId: string) {
   const url = `https://github.com/cropsintel/io/cropsintel-v3/tree/main/.agent/tasks/logs?q=${encodeURIComponent(taskId)}`
   try { window.open(url, '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
+}
+
+function minutesSinceISO(iso: string | null | undefined): number {
+  if (!iso) return 0
+  const ms = Date.now() - new Date(iso).getTime()
+  if (Number.isNaN(ms) || ms < 0) return 0
+  return Math.floor(ms / 60_000)
 }
 
 function formatRelativeDuration(iso: string | null | undefined): string {
