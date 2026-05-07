@@ -34,6 +34,15 @@ Diagnose the common root cause across these failures. Hypotheses to check:
 2. If a fix is in scope, ship it as a follow-up task spec (not in this investigation).
 3. If no fix is needed (false alarm), document why in the ADR and close.
 
+## Files
+
+The deliverable for this investigation is a single ADR. The path is declared
+explicitly so the Verifier's `spec-parser.ts` can populate `filesRequired` and
+the AI judges have a non-empty `shippedCode` summary to audit. This closes the
+attempt-1 `empty-diff-guard` gap at its root: the spec, not the build.
+
+- `docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-failure.md`
+
 ## Prior failure — gaps to address (attempt 2)
 
 The previous run of `phase-1-CLUSTER-investigation-1778146192564` failed Verifier review. Address every gap below before considering this remediation complete. The auto-requeue loop tracks attempts; after 3 failures, the conductor escalates via WhatsApp instead of queueing again.
