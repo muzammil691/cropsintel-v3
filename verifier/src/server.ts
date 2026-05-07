@@ -341,6 +341,13 @@ async function handleResearch(req: IncomingMessage, res: ServerResponse): Promis
 }
 
 export function startServer(): void {
+  // Bug G (1.10af §4) — boot-time retro-audit was firing for ~30 minutes on
+  // every container restart, blocking the on-demand /audit endpoint and burning
+  // $5-10 in AI calls per boot. Now opt-in via VERIFIER_RETRO_AUDIT_ON_BOOT;
+  // entrypoint.sh respects the same env var. Surface the choice in the boot log.
+  const retroAuditOnBoot = process.env.VERIFIER_RETRO_AUDIT_ON_BOOT === 'true'
+  console.log(`[verifier] retro-audit on boot: ${retroAuditOnBoot ? 'enabled' : 'disabled (default)'}`)
+
   const server = createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/audit') {
       handleAudit(req, res).catch(err => {
