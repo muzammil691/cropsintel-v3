@@ -8,6 +8,7 @@
     "dev": "ts-node src/scheduler.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
     "@google/generative-ai": "^0.24.0",
     "@supabase/supabase-js": "^2.39.0",
     "axios": "^1.6.0",
