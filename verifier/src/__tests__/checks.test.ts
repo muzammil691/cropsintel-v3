@@ -426,6 +426,16 @@ describe('parseTaskSpec — placeholder path filtering', () => {
     expect(spec.filesRequired).toHaveLength(0)
   })
 
+  it('does not include glob patterns referenced when describing a directory scan', () => {
+    const md = [
+      '## Dedupe gates',
+      '- scan `docs/atlas-decisions/ADR-*.md` for closed ADRs',
+      '- scan `.agent/tasks/queued/phase-1-CLUSTER-investigation-*.md` for trailing window',
+    ].join('\n')
+    const spec = parseTaskSpec(md, 'test')
+    expect(spec.filesRequired).toHaveLength(0)
+  })
+
   it('normalizes paths — strips leading ./ and / and cropsintel-v3/ prefix', () => {
     const md = [
       '## Files',
