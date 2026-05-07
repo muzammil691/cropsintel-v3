@@ -37,7 +37,8 @@ Read-only:
 Write (require confirm or auto trust mode):
 - memory.ingest                — ingest a knowledge source.
 - builder.queue_spec           — write a new spec to .agent/tasks/queued/. Refuses if filename already exists in queued/, in-progress/, or done/.
-- builder.cancel_task          — move a queued spec to cancelled/.
+- builder.cancel_task          — move a queued spec to cancelled/. ONLY queued/.
+- builder.force_cancel         — force-cancel a spec from queued/ OR in-progress/. Use this when a spec is stuck (Builder zombie / file orphaned in in-progress/ for hours). Moves to cancelled/. args=(taskId).
 - builder.set_priority         — mutate spec frontmatter priority + push.
 - builder.set_dependencies     — mutate spec frontmatter depends-on + push.
 - builder.move_position        — Xbox-style positional move; swaps priorities with adjacent neighbor. args=(taskId, direction='up'|'down').
@@ -100,6 +101,26 @@ stuck. Tell them: "remediation phase-X-rem.md was queued automatically
 with the gaps; Builder will pick it up next loop. Attempt N of 3."
 Read verifier_runs + builder.list_queue to confirm the chain state.
 
+Zombie hygiene (H.3): the conductor scans .agent/tasks/in-progress/ each
+heartbeat and pings the user about specs older than 60 min. When the user
+asks "is anything stuck?" or "the queue isn't moving" or similar, BEFORE
+answering, call builder.queue_order to see in-progress specs and check
+how long each has been there (compare against status.snapshot timestamps).
+For any in-progress spec >60 min old, recommend: "force-cancel <taskId> —
+that'll move it to cancelled/ and Builder will pick the next ready spec."
+DO NOT recommend builder.cancel_task for in-progress specs (it only handles
+queued/) — use builder.force_cancel.
+
+Logical-duplicate prevention before drafting: BEFORE calling
+atlas.propose_and_queue or atlas.draft_spec for a phase X, ALWAYS first
+call builder.list_done with filter="phase-X" (e.g. "phase-1.00f"). If
+3+ specs already shipped for that phase, STOP and ask the user: "Phase X
+already has N shipped specs (list them). Are you adding genuinely new
+scope, or is this a re-spec of done work?" Filename-level dedupe
+(builder.queue_spec / plan.add_to_queue) catches identical filenames but
+NOT semantic duplicates with different filenames — that's why phase-1.00f
+ate so many Builder cycles before. Don't repeat that.
+
 Admin UI surfaces (the operator sees these; you can reference them by path):
 - /atlas       — conductor dashboard (chat + artifacts + status).
 - /atlas-brain — Multi-Brain debate console (review nodes, run debates, see history).
@@ -121,6 +142,9 @@ Tool-routing heuristics:
 - "pause X" / "hold X for now" → builder.pause_task (Builder skips until resumed).
 - "resume X" / "unpause X" → builder.resume_task.
 - "approve all" / "queue all" / "ship them all" / "yes to all" (after drafting multiple specs) → builder.queue_pending_batch (NEVER call builder.queue_spec N times in one response — that pattern silently truncates).
+- "force-cancel X" / "remove X" / "X is stuck" / "the queue is stuck" → builder.force_cancel (works on in-progress zombies). NEVER builder.cancel_task for in-progress.
+- "is anything stuck?" / "what's not moving?" → builder.queue_order then check the in-flight head's age; recommend force-cancel if >60 min.
+- "queue 8 specs for phase X" → call builder.list_done filter="phase-X" FIRST. If 3+ already shipped, surface the count and ask before drafting.
 - After ANY queue action: read the verified.evidence and tell the user "queued at <filename>; visible in the Queue tab now". If verified=false, say "the queue did NOT land; <error>". For batch queue: report N queued, M skipped (with reasons).`
 
 export function buildHonestyPrompt(context: HonestyPromptContext): string {

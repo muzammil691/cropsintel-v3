@@ -17,7 +17,7 @@ import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type Workfl
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
 import { maybeSummarize } from '../lib/chat-summarizer'
-import { readFile, writeFile, rename, mkdir, readdir, access } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, readdir, access, stat } from 'fs/promises'
 import { resolve, dirname } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -44,6 +44,9 @@ const auditedCommits = new Set<string>()
 // G.2: tracks (taskId, ranAt) pairs we've already auto-requeued so the loop
 // doesn't keep re-firing requeueWithGaps for the same failure on every cron tick.
 const autoRequeuedFailures = new Set<string>()
+// H.3: tracks zombie task ids we've already pinged about so we don't WhatsApp-spam.
+// Cleared every 6h so genuinely-still-stuck specs eventually re-notify.
+const pingedZombies = new Map<string, number>()  // taskId → ping timestamp (ms)
 
 interface Diagnosis {
   signals: Signal[]
@@ -110,6 +113,10 @@ async function runHeartbeat(): Promise<void> {
     // so Builder + Verifier can converge instead of leaving specs in limbo.
     // 3-attempt cap; beyond that, escalate via WhatsApp.
     await autoRequeueOnVerifierFail(trustMode)
+    // H.3: per-spec zombie detector. Distinct from selfHealStuckBuilder
+    // (which handles Builder-totally-idle). This pass surfaces specs stuck
+    // in in-progress/ for >60 min so the user can force-cancel them.
+    await detectInProgressZombies(trustMode)
     // Phase 1.10aw-rem: opt-in WhatsApp ping when a task ships. Sibling pass
     // (does not modify the audit/ingest behavior); no-op unless
     // WHATSAPP_NOTIFY_NUMBER is set.
@@ -1367,6 +1374,89 @@ async function verifierAuditAfterShips(trustMode: TrustMode): Promise<void> {
       console.warn(`[atlas-conductor] post-ship verifier audit for ${taskId} failed:`, err instanceof Error ? err.message : err)
     }
   }
+}
+
+// H.3: per-spec zombie detector. selfHealStuckBuilder above handles "Builder
+// is completely idle" (queue full, in-flight=0). This pass handles the
+// orthogonal case: a SPECIFIC spec stuck in in-progress/ for >60 min while
+// Builder may still be making progress on other specs. The lifecycle move
+// (.agent/tasks/in-progress/X.md → done/ or failed/) sometimes doesn't fire
+// when Builder ships 0 files — the spec file orphans in in-progress/.
+//
+// Behavior:
+//   - Read .agent/tasks/in-progress/, stat each .md file.
+//   - If mtime is >ZOMBIE_THRESHOLD_MIN old, flag it as a zombie.
+//   - Dedup against pingedZombies Map (timestamp-keyed; re-pings after 6h
+//     for genuinely-still-stuck specs).
+//   - WhatsApp-ping the user with the list + force-cancel guidance.
+//
+// Action stays manual: the user uses the Queue tab's force-cancel button
+// (H.2) or tells Atlas "force-cancel <id>" (H.1's chat tool). We don't
+// auto-cancel because some specs LEGITIMATELY take >60 min (big migrations).
+const ZOMBIE_THRESHOLD_MIN = parseInt(process.env.ATLAS_ZOMBIE_THRESHOLD_MIN ?? '60', 10)
+const ZOMBIE_REPING_HOURS = 6
+
+async function detectInProgressZombies(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto' && trustMode !== 'confirm') return
+
+  const inProgressDir = resolve(REPO_ROOT, '.agent/tasks/in-progress')
+  const files = await readdir(inProgressDir).catch(() => [] as string[])
+  const candidates = files.filter(f => f.endsWith('.md') && f !== '_template.md')
+  if (candidates.length === 0) return
+
+  const now = Date.now()
+  const zombies: Array<{ taskId: string; ageMin: number }> = []
+  for (const file of candidates) {
+    try {
+      const s = await stat(resolve(inProgressDir, file))
+      const ageMin = Math.floor((now - s.mtime.getTime()) / 60_000)
+      if (ageMin >= ZOMBIE_THRESHOLD_MIN) {
+        zombies.push({ taskId: file.replace(/\.md$/, ''), ageMin })
+      }
+    } catch { /* skip unreadable files */ }
+  }
+  if (zombies.length === 0) return
+
+  // Filter against the dedup Map: skip taskIds we've pinged within the
+  // re-ping window. Refresh the timestamp on the others.
+  const repingMs = ZOMBIE_REPING_HOURS * 3600_000
+  const newZombies = zombies.filter(z => {
+    const last = pingedZombies.get(z.taskId)
+    return last === undefined || (now - last) > repingMs
+  })
+  if (newZombies.length === 0) return
+
+  for (const z of newZombies) pingedZombies.set(z.taskId, now)
+  // Cap the Map size so it doesn't grow unbounded across many days.
+  if (pingedZombies.size > 200) {
+    const oldest = [...pingedZombies.entries()].sort((a, b) => a[1] - b[1])[0]
+    if (oldest) pingedZombies.delete(oldest[0])
+  }
+
+  // Sort newest-first so the user sees the freshest zombies at top.
+  newZombies.sort((a, b) => b.ageMin - a.ageMin)
+  const lines = newZombies.slice(0, 10).map(z => `• ${z.taskId} (${z.ageMin}m)`)
+  const more = newZombies.length > 10 ? `\n…and ${newZombies.length - 10} more` : ''
+  const msg = [
+    `Atlas zombie alert — ${newZombies.length} spec${newZombies.length === 1 ? '' : 's'} stuck in in-progress/ for ≥${ZOMBIE_THRESHOLD_MIN} min:`,
+    ...lines,
+    more,
+    '',
+    'Recover via the Queue tab (force-cancel button on the row), or tell me in chat: "force-cancel <taskId>".',
+  ].filter(Boolean).join('\n')
+
+  try {
+    await sendWhatsAppReply(MUZAMMIL_WHATSAPP, msg)
+  } catch (err) {
+    console.warn('[atlas-conductor] zombie WhatsApp ping failed:', err)
+  }
+
+  await logDecision({
+    fork_question: `${newZombies.length} in-progress zombies detected`,
+    options_considered: { zombies: newZombies.map(z => `${z.taskId}(${z.ageMin}m)`) },
+    chosen_option: 'pinged-user',
+    rationale: `User-action required: force-cancel via Queue tab or chat`,
+  }).catch(() => { /* non-fatal */ })
 }
 
 // G.2: Auto-requeue passes — when verifier_runs has a recent passed=false
