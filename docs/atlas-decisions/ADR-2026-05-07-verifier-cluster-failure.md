@@ -93,3 +93,23 @@ Acceptance: verifier rejects deliberately-deleted spec with `verdict='unknown'` 
 ## Status
 
 **Closed.** Root cause documented; one fix queued; two adjacent issues handed off.
+
+## Postmortem — gap recorded on this ADR's own attempt 1 (added 2026-05-07)
+
+Attempt 1 of `phase-1-CLUSTER-investigation-1778146192564` was rejected by Verifier with a single `verifier-unhandled-exception` gap:
+
+> Unhandled exception: ENOENT: no such file or directory, open '/workspace/cropsintel-v3/.agent/tasks/queued/phase-1-CLUSTER-investigation-1778146192564.md'
+
+This is **the same Bug A this ADR diagnoses, observed on the ADR's own audit**. Concrete chain:
+
+1. The investigation commit `757fa92` placed the spec at `queued/phase-1-CLUSTER-investigation-1778146192564.md`.
+2. Agent loop later moved that file to `in-progress/` and pushed `531fa15` as `head_after`.
+3. The Verifier deployment in production was still running pre-fix `server.ts` (the fix `7a339ce` had not yet been redeployed). It called `findTaskSpec` first, resolving against the verifier clone's stale tree that still had the spec in `queued/`, then `syncRepoToHead` advanced HEAD to `531fa15` where the spec is in `in-progress/`. `readFileSync('queued/…')` then `ENOENT`'d.
+
+Resolution applied:
+
+- **Code**: fix is in main at commit `7a339ce` (and verified present in `verifier/src/server.ts:115-139` — `syncRepoToHead` runs before `findTaskSpec`).
+- **Tests**: regression tests added in `verifier/src/__tests__/server.test.ts` (commit `7a339ce`).
+- **Operational requirement**: Verifier service on Railway must redeploy from main for the fix to take effect at audit time. Until that redeploy, identical ENOENT crashes are expected on any task whose spec moves between `queued/` ↔ `in-progress/` ↔ `done/` between Builder push and Verifier audit. Tracked as a deployment-side concern, not a code defect.
+
+**Conclusion:** the gap on attempt 1 is fully explained by the diagnosis already captured above. No further code change is in scope for this investigation task. The follow-up `phase-1.00f1-verifier-spec-path-after-sync` (already shipped) is the canonical fix.
