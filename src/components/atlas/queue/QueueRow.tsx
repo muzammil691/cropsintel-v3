@@ -150,6 +150,7 @@ export function QueueRow({
               : 'Force-cancel running spec — moves to cancelled/. Use only if the spec is stuck.'}
             aria-label="Force-cancel running spec"
             className={cn(
+              'transition-colors duration-200',
               isStuck
                 ? 'border-amber-400 bg-amber-100 hover:border-red-400 hover:bg-red-100/60 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100'
                 : 'hover:border-red-400 hover:bg-red-50/40 dark:hover:bg-red-950/30',
@@ -194,7 +195,7 @@ export function QueueRow({
             <SmallButton
               onClick={onCancel}
               disabled={busy}
-              className="hover:border-red-400 hover:bg-red-50/40 dark:hover:bg-red-950/30"
+              className="transition-colors duration-200 hover:border-red-400 hover:bg-red-50/40 dark:hover:bg-red-950/30"
             >
               <Trash2 className="size-3" aria-hidden /> cancel
             </SmallButton>
@@ -230,7 +231,7 @@ function SmallButton({
       className={cn(
         'inline-flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 transition-colors duration-200',
         'hover:border-emerald-400 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
         'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-slate-200 disabled:hover:bg-white',
         className,
       )}

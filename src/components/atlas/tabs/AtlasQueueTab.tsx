@@ -40,6 +40,10 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
   const [forcePickOpen, setForcePickOpen] = useState(false)
   const [forcePickBusy, setForcePickBusy] = useState(false)
   const [forcePickError, setForcePickError] = useState<string | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    taskId: string
+    mode: 'cancel' | 'force-cancel'
+  } | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -115,35 +119,35 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     }
   }
 
-  // H.1: force-cancel — works on in-progress zombies. Confirmation prompt
-  // because this interrupts a running Builder task.
-  const handleForceCancel = async (taskId: string) => {
-    if (!window.confirm(
-      `Force-cancel ${taskId}?\n\nThis moves the spec from in-progress/ to cancelled/. ` +
-      `Builder's running claude session will keep going for a bit but its commit will be ignored. ` +
-      `Use this only when a spec is genuinely stuck.`,
-    )) return
-    setBusyTaskId(taskId)
-    try {
-      const r = await forceCancelBuilderTask(taskId)
-      await refresh()
-      showToast(`force-cancelled ${taskId} (was in ${r.from_bucket}/)`)
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'force-cancel failed')
-    } finally {
-      setBusyTaskId(null)
-    }
+  // H.1: force-cancel — works on in-progress zombies. Opens an accessible
+  // shadcn Dialog (replaces window.confirm) so the destructive action is
+  // styled and screen-reader friendly.
+  const handleForceCancel = (taskId: string) => {
+    setConfirmDialog({ taskId, mode: 'force-cancel' })
   }
 
-  const handleCancel = async (taskId: string) => {
-    if (!window.confirm(`Cancel ${taskId}? It will be moved to .agent/tasks/cancelled/.`)) return
+  const handleCancel = (taskId: string) => {
+    setConfirmDialog({ taskId, mode: 'cancel' })
+  }
+
+  const handleConfirmDialogAccept = async () => {
+    if (!confirmDialog) return
+    const { taskId, mode } = confirmDialog
+    setConfirmDialog(null)
     setBusyTaskId(taskId)
     try {
-      await cancelBuilderTask(taskId)
-      await refresh()
-      showToast(`cancelled ${taskId}`)
+      if (mode === 'force-cancel') {
+        const r = await forceCancelBuilderTask(taskId)
+        await refresh()
+        showToast(`force-cancelled ${taskId} (was in ${r.from_bucket}/)`)
+      } else {
+        await cancelBuilderTask(taskId)
+        await refresh()
+        showToast(`cancelled ${taskId}`)
+      }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'cancel failed')
+      const fallback = mode === 'force-cancel' ? 'force-cancel failed' : 'cancel failed'
+      showToast(err instanceof Error ? err.message : fallback)
     } finally {
       setBusyTaskId(null)
     }
@@ -319,6 +323,48 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
           {toastMsg}
         </div>
       )}
+
+      <Dialog
+        open={confirmDialog !== null}
+        onOpenChange={(o) => {
+          if (!o) setConfirmDialog(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="inline-flex items-center gap-2">
+              <AlertTriangle className="size-4 text-red-600" />
+              {confirmDialog?.mode === 'force-cancel'
+                ? 'Force-cancel running spec?'
+                : 'Cancel queued spec?'}
+            </DialogTitle>
+            <DialogDescription>
+              {confirmDialog?.mode === 'force-cancel' ? (
+                <>
+                  Force-cancel <code className="font-mono">{confirmDialog.taskId}</code>? This
+                  moves the spec from <code className="font-mono">in-progress/</code> to{' '}
+                  <code className="font-mono">cancelled/</code>. Builder&apos;s running Claude
+                  session will keep going for a bit but its commit will be ignored. Use this only
+                  when a spec is genuinely stuck.
+                </>
+              ) : confirmDialog ? (
+                <>
+                  Cancel <code className="font-mono">{confirmDialog.taskId}</code>? It will be
+                  moved to <code className="font-mono">.agent/tasks/cancelled/</code>.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDialog(null)}>
+              Keep spec
+            </Button>
+            <Button variant="destructive" onClick={() => void handleConfirmDialogAccept()}>
+              {confirmDialog?.mode === 'force-cancel' ? 'Force-cancel' : 'Cancel spec'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={forcePickOpen} onOpenChange={(o) => !forcePickBusy && setForcePickOpen(o)}>
         <DialogContent className="sm:max-w-sm">
