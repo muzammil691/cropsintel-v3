@@ -29,6 +29,10 @@ export interface VerificationResult {
   gaps: Gap[]
   durationMs: number
   judgmentCallNotes: string
+  // rem3 — total subject-matter-immune fail-keyword matches across both
+  // judges' notes. Surfaced for monitoring the post-fix false-positive rate
+  // on the verifier-cluster-* class of investigation tasks.
+  subjectMatterHits?: number
 }
 
 export interface AIJudgment {

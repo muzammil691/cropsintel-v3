@@ -30,6 +30,12 @@ export async function writeVerifierRun(
     gaps: result.gaps,
     remediation_task_id: remediationTaskId ?? null,
     duration_ms: result.durationMs,
+    // rem3 — count of fail-keyword matches the council parser flipped from
+    // failHits to subjectMatterHits (i.e. they sat inside backticks / fenced
+    // blocks / quoted strings / task-id tokens / paths / 40-word post-
+    // introducer windows). 0 on every code-only task; non-zero only on
+    // investigation/ADR specs whose subject is itself a failure cluster.
+    subject_matter_hits: result.subjectMatterHits ?? 0,
   })
 
   if (error) {

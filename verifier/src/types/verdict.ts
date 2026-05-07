@@ -38,4 +38,9 @@ export interface VerdictResolution {
   verdict: VerdictValue
   gaps: VerdictGap[]
   reason: string
+  // rem3 — count of fail-keyword matches the council parser bucketed as
+  // subject-matter rather than verdict (i.e. inside backticks / code blocks /
+  // short quotes / task-ids / paths / 40-word post-introducer windows).
+  // Surfaced so verifier_runs can monitor the false-positive rate post-fix.
+  subjectMatterHits: number
 }

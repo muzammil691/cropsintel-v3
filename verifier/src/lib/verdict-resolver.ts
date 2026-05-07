@@ -48,6 +48,8 @@ export function resolveVerdict(
 ): VerdictResolution {
   const o3Parsed = parseJudgmentText(o3.notes)
   const geminiParsed = parseJudgmentText(gemini.notes)
+  const subjectMatterHits =
+    o3Parsed.subjectMatterHits.length + geminiParsed.subjectMatterHits.length
 
   // ── Hard-fail rule: judgment text says fail ────────────────────────────────
   // If EITHER judgment text contains unnegated fail keywords, the verdict is
@@ -68,6 +70,7 @@ export function resolveVerdict(
         `Council parser detected fail in judgment text ` +
         `(o3=${o3Parsed.verdict}: ${o3Parsed.reason}; ` +
         `gemini=${geminiParsed.verdict}: ${geminiParsed.reason})`,
+      subjectMatterHits,
     }
   }
 
@@ -77,6 +80,7 @@ export function resolveVerdict(
       verdict: 'pass',
       gaps: [],
       reason: 'Both judges agree: pass',
+      subjectMatterHits,
     }
   }
 
@@ -90,6 +94,7 @@ export function resolveVerdict(
       verdict: 'fail',
       gaps,
       reason: 'Both judges agree: fail',
+      subjectMatterHits,
     }
   }
 
@@ -104,6 +109,7 @@ export function resolveVerdict(
       verdict: 'pass',
       gaps: [],
       reason: 'Boolean disagreement but both judgment texts read as pass with no fail keywords',
+      subjectMatterHits,
     }
   }
 
@@ -117,5 +123,6 @@ export function resolveVerdict(
     reason:
       `Inconclusive: o3.passed=${o3.passed}, gemini.passed=${gemini.passed}; ` +
       `parser o3=${o3Parsed.verdict}, gemini=${geminiParsed.verdict}`,
+    subjectMatterHits,
   }
 }

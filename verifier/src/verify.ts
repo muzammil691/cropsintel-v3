@@ -78,6 +78,7 @@ export async function verify(
     //   3. agreement-fail with gaps:[] producing verdict=pass
     let judgmentCallNotes = ''
     let aiVerdict: 'pass' | 'fail' | 'inconclusive' | null = null
+    let subjectMatterHits = 0
 
     if (!hasFail(gaps)) {
       const shippedCode = buildShippedCodeSummary(spec)
@@ -120,6 +121,7 @@ export async function verify(
         `Resolver: ${resolution.verdict.toUpperCase()} — ${resolution.reason}`
 
       aiVerdict = resolution.verdict
+      subjectMatterHits = resolution.subjectMatterHits
       if (resolution.verdict !== 'pass') {
         gaps.push(...resolution.gaps)
       }
@@ -147,6 +149,7 @@ export async function verify(
       gaps,
       durationMs: Date.now() - startedAt,
       judgmentCallNotes,
+      subjectMatterHits,
     }
   } catch (err) {
     // Phase 1.00f: catch-all for unhandled exceptions. Log with full stack
