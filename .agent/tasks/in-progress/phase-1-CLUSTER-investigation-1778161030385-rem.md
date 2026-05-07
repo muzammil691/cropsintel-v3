@@ -43,3 +43,10 @@ The previous run of `phase-1-CLUSTER-investigation-1778161030385` failed Verifie
 - Actual: Shipped code summary is empty or whitespace-only
 - Remediation: Verify that spec.filesRequired is populated and files exist in the repo
 
+## Files
+
+Concrete artifacts shipped by this remediation (consumed by `verifier/src/lib/spec-parser.ts` to populate `filesRequired` and defeat `verifier/src/verify.ts` empty-diff-guard at lines 85-105):
+
+- `docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-1778161030385.md` — extended in place with a "Remediation attempt 1" section documenting the empty-diff root cause and the re-verification at HEAD `852dfc6`.
+- `.agent/tasks/queued/phase-conductor-cluster-dedupe-upgrade.md` — new follow-up task spec (per acceptance criterion 2 — fix is **not** in scope of this investigation, the spec is) covering the canonical conductor cluster-dedupe upgrade that has appeared as URGENT Follow-up #1 in all eight 2026-05-07 cluster ADRs.
+
