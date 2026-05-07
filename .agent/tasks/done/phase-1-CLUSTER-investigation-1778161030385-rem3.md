@@ -43,3 +43,12 @@ The previous run of `phase-1-CLUSTER-investigation-1778161030385` failed Verifie
 - Actual: ADR explaining root-cause is provided at the required path and states that no code fix is needed, meeting the 3 acceptance points; follow-up spec is referenced as already present, so criteria for gap is met. / The agent has correctly diagnosed a complex, recursive issue where the Verifier was failing on an investigation task about Verifier failures. The submitted ADR is exceptionally thorough, providing a clear root cause analysis for both the original failure cluster and the subsequen
 - Remediation: Inspect judgmentCallNotes for the full judge output and re-run builder against the missing components
 
+## Files
+
+The artifacts produced or hardened by this remediation attempt:
+
+- `docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-1778161030385.md` — ADR updated in place with attempt-3 root-cause section.
+- `.agent/tasks/queued/phase-verifier-parser-subject-matter-immunity.md` — new follow-up spec for the council-parser regex over-trigger.
+- `.agent/tasks/queued/phase-conductor-cluster-dedupe-upgrade.md` — pre-existing follow-up spec for the conductor-side recursion (re-listed here to confirm it remains queued).
+- `.agent/tasks/in-progress/phase-1-CLUSTER-investigation-1778161030385-rem3.md` — this in-progress spec, hardened with backtick paths so `verifier/src/lib/spec-parser.ts:extractFilePathsFromText` populates `filesRequired` for the next verifier run.
+
