@@ -27,3 +27,7 @@ Diagnose the common root cause across these failures. Hypotheses to check:
 1. A short ADR markdown in `docs/atlas-decisions/` describing the root cause.
 2. If a fix is in scope, ship it as a follow-up task spec (not in this investigation).
 3. If no fix is needed (false alarm), document why in the ADR and close.
+
+## Files
+
+- `docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-1778152873297.md`
