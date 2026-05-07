@@ -107,6 +107,35 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 
   const auditStartedAt = Date.now()
+
+  // Sync the local clone to the commit Builder just pushed so files-exist
+  // and other fs-based checks see the new files. If sync fails (post-sync
+  // HEAD ≠ requested), record an unknown row and bail — verifying against
+  // a stale tree produces misleading gaps.
+  const synced = await syncRepoToHead(REPO_ROOT, head_after)
+  if (!synced) {
+    try {
+      await writeUnknownVerifierRun(
+        task_id,
+        null,
+        head_after,
+        'gate',
+        'sync_failed',
+        Date.now() - auditStartedAt,
+      )
+    } catch (writeErr) {
+      const wmsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
+      console.error(`[verifier-server] CRITICAL: sync_failed row write failed: ${wmsg}`)
+    }
+    send(res, 200, {
+      verdict: 'unknown',
+      confidence: 0,
+      gaps: [],
+      audit_run_id: randomUUID(),
+    })
+    return
+  }
+
   const taskSpecPath = findTaskSpec(task_id)
   if (!taskSpecPath) {
     console.log(`[verifier-server] task_id '${task_id}' not found — returning unknown verdict`)
@@ -135,34 +164,6 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 
   console.log(`[verifier-server] auditing ${task_id} (${head_before}..${head_after}) spec=${taskSpecPath}`)
-
-  // Sync the local clone to the commit Builder just pushed so files-exist
-  // and other fs-based checks see the new files. If sync fails (post-sync
-  // HEAD ≠ requested), record an unknown row and bail — verifying against
-  // a stale tree produces misleading gaps.
-  const synced = await syncRepoToHead(REPO_ROOT, head_after)
-  if (!synced) {
-    try {
-      await writeUnknownVerifierRun(
-        task_id,
-        taskSpecPath,
-        head_after,
-        'gate',
-        'sync_failed',
-        Date.now() - auditStartedAt,
-      )
-    } catch (writeErr) {
-      const wmsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
-      console.error(`[verifier-server] CRITICAL: sync_failed row write failed: ${wmsg}`)
-    }
-    send(res, 200, {
-      verdict: 'unknown',
-      confidence: 0,
-      gaps: [],
-      audit_run_id: randomUUID(),
-    })
-    return
-  }
 
   let result
   try {
