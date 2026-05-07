@@ -101,5 +101,5 @@ export async function setMode(newMode: TrustMode, setBy: string): Promise<void> 
   _currentMode = newMode
   _modeSetAt = new Date(updatedAt)
   _modeSetBy = setBy
-  console.log(`[trust-mode] set to ${newMode} by ${setBy}`)
+  console.log(`[trust-mode] persisted mode=${newMode} setBy=${setBy} to atlas_config`)
 }
