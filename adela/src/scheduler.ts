@@ -1,15 +1,14 @@
 /**
- * Adela cron scheduler
+ * Adela Scheduler (Phase 1.6e)
  *
- * Wraps each scraper with:
- *   1. Concurrency lock — never run two ticks of the same job in parallel
- *   2. Health-state updates (markStarted / markFinished) so /health is fresh
- *   3. Outer retry up to config.scheduler.maxAttempts on thrown errors
- *   4. Dead-letter to scraper_errors when all attempts fail
+ * Master cron orchestrator using node-cron. Coordinates four jobs in dependency order:
+ *   - abc-scraper: Daily 06:00 UTC
+ *   - strata-scraper: Daily 07:00 UTC
+ *   - news-scraper: Every 4 hours
+ *   - ai-analyst: Daily 08:00 UTC (runs after scrapers)
  *
- * Each scraper's *internal* fetch retries (fetchWithRetry) handle transient
- * HTTP issues. The outer retry here is for whole-run failures (parse errors,
- * DB issues, etc.).
+ * Each job wrapped in try/catch with lifecycle logging to atlas_dispatches.
+ * Individual job failures never crash the host process.
  *
  * Graceful shutdown (phase-1.00e-rem):
  *   On SIGTERM / SIGINT the scheduler stops accepting new ticks, waits for any
@@ -20,31 +19,31 @@
 
 import cron from "node-cron"
 import { config } from "./config"
+import { supabase } from "./lib/supabase"
 import { runAbcScraper } from "./scrapers/abc"
-import { runStrataScraper } from "./scrapers/strata"
-import { runNewsScraper } from "./scrapers/news"
-import { logScraperError } from "./db"
-import { markFinished, markStarted, registerScraper } from "./health"
+import { runStrataPriceScraper } from "./scrapers/strata-scraper"
+import { runNewsScraper } from "./scrapers/news-scraper"
+import { run as runAiAnalyst } from "./ai-analyst"
 
-type ScraperFn = () => Promise<unknown>
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-interface Job {
+interface JobConfig {
   name: string
   schedule: string
-  run: ScraperFn
+  fn: () => Promise<void>
 }
 
-// CRON_SCHEDULE is the umbrella override (per phase-1.00e-rem spec). When set
-// it overrides the abc schedule. SCRAPER_SCHEDULE and CRON_ABC remain as
-// per-job overrides for backwards compatibility with earlier deployments.
-const ABC_SCHEDULE =
-  process.env.CRON_SCHEDULE ?? process.env.SCRAPER_SCHEDULE ?? config.cron.abc
+// ---------------------------------------------------------------------------
+// Last run tracking (for health endpoint)
+// ---------------------------------------------------------------------------
 
-const jobs: Job[] = [
-  { name: "abc", schedule: ABC_SCHEDULE, run: runAbcScraper },
-  { name: "strata", schedule: config.cron.strata, run: runStrataScraper },
-  { name: "news", schedule: config.cron.news, run: runNewsScraper },
-]
+export const lastRun: Record<string, string> = {}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 
 const inFlight = new Map<string, boolean>()
 const tasks: cron.ScheduledTask[] = []
@@ -54,73 +53,162 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-async function runWithRetries(job: Job): Promise<void> {
-  if (inFlight.get(job.name)) {
-    console.log(`[scheduler] ${job.name} already in-flight — skipping this tick`)
-    return
+// ---------------------------------------------------------------------------
+// Job wrapper with lifecycle logging to atlas_dispatches
+// ---------------------------------------------------------------------------
+
+async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
+  const startTime = Date.now()
+  console.log(`[scheduler] Starting job: ${name}`)
+
+  // Write start event
+  try {
+    await supabase.from("atlas_dispatches").insert({
+      trust_mode: "autonomous",
+      initiated_by: "cron",
+      tool: name,
+      arguments: { phase: "phase-1.6e", scheduler: "adela-scheduler" },
+      result: null,
+      status: "pending",
+      duration_ms: null,
+      error_message: null,
+    })
+  } catch (err) {
+    console.warn(`[scheduler] Failed to log start event for ${name}:`, err)
   }
-  inFlight.set(job.name, true)
-  markStarted(job.name)
 
-  let attempt = 0
-  let lastErr: Error | null = null
+  try {
+    // Execute the job
+    await fn()
 
-  while (attempt < config.scheduler.maxAttempts) {
-    attempt++
+    const duration = Date.now() - startTime
+    console.log(`[scheduler] Job ${name} completed in ${duration}ms`)
+
+    // Write complete event
     try {
-      await job.run()
-      markFinished(job.name, "success")
-      inFlight.set(job.name, false)
-      return
+      await supabase.from("atlas_dispatches").insert({
+        trust_mode: "autonomous",
+        initiated_by: "cron",
+        tool: name,
+        arguments: { phase: "phase-1.6e", scheduler: "adela-scheduler" },
+        result: { status: "complete" },
+        status: "success",
+        duration_ms: duration,
+        error_message: null,
+        cost_usd: 0,
+      })
     } catch (err) {
-      lastErr = err instanceof Error ? err : new Error(String(err))
-      console.warn(
-        `[scheduler] ${job.name} attempt ${attempt}/${config.scheduler.maxAttempts} failed: ${lastErr.message}`
-      )
-      if (attempt < config.scheduler.maxAttempts) {
-        await sleep(config.scheduler.retryDelayMs * attempt)
-      }
+      console.warn(`[scheduler] Failed to log complete event for ${name}:`, err)
     }
-  }
 
-  // All attempts exhausted — dead-letter to scraper_errors
-  const message = lastErr ? lastErr.message : "unknown error"
-  markFinished(job.name, "failed", message)
-  await logScraperError({
-    scraper: job.name,
-    error_message: message,
-    attempt,
-    context: { schedule: job.schedule, max_attempts: config.scheduler.maxAttempts },
-  }).catch((err) => {
-    console.error(`[scheduler] Failed to dead-letter ${job.name}:`, err)
-  })
-  inFlight.set(job.name, false)
+    // Update lastRun timestamp
+    lastRun[name] = new Date().toISOString()
+  } catch (err) {
+    const duration = Date.now() - startTime
+    const errorMessage = err instanceof Error ? err.message : String(err)
+    console.error(`[scheduler] Job ${name} failed after ${duration}ms:`, errorMessage)
+
+    // Write error event
+    try {
+      await supabase.from("atlas_dispatches").insert({
+        trust_mode: "autonomous",
+        initiated_by: "cron",
+        tool: name,
+        arguments: { phase: "phase-1.6e", scheduler: "adela-scheduler" },
+        result: null,
+        status: "error",
+        duration_ms: duration,
+        error_message: errorMessage.slice(0, 2000),
+        cost_usd: 0,
+      })
+    } catch (logErr) {
+      console.error(`[scheduler] Failed to log error event for ${name}:`, logErr)
+    }
+
+    // DO NOT re-throw — individual job failures must not crash the scheduler
+  }
 }
 
-export function startScheduler(): void {
-  for (const job of jobs) {
-    registerScraper(job.name, job.schedule)
+// ---------------------------------------------------------------------------
+// Job definitions
+// ---------------------------------------------------------------------------
 
+const jobs: JobConfig[] = [
+  {
+    name: "abc-scraper",
+    schedule: "0 6 * * *", // Daily at 06:00 UTC
+    fn: async () => {
+      const result = await runAbcScraper()
+      if (!result.success && !("skipped" in result)) {
+        throw new Error(result.error)
+      }
+    },
+  },
+  {
+    name: "strata-scraper",
+    schedule: "0 7 * * *", // Daily at 07:00 UTC
+    fn: runStrataPriceScraper,
+  },
+  {
+    name: "news-scraper",
+    schedule: "0 */4 * * *", // Every 4 hours
+    fn: runNewsScraper,
+  },
+  {
+    name: "ai-analyst",
+    schedule: "0 8 * * *", // Daily at 08:00 UTC (after scrapers)
+    fn: async () => {
+      const result = await runAiAnalyst()
+      if (result.status === "skipped") {
+        console.log(`[scheduler] ai-analyst skipped: ${result.reason}`)
+      }
+    },
+  },
+]
+
+// ---------------------------------------------------------------------------
+// Scheduler activation
+// ---------------------------------------------------------------------------
+
+export function startScheduler(): void {
+  console.log("[scheduler] Registering cron jobs...")
+
+  for (const job of jobs) {
+    // Validate cron expression
+    if (!cron.validate(job.schedule)) {
+      console.error(`[scheduler] Invalid cron expression for ${job.name}: ${job.schedule}`)
+      continue
+    }
+
+    // Register the schedule
     const task = cron.schedule(job.schedule, async () => {
       if (shuttingDown) {
         console.log(`[scheduler] Shutdown in progress — skipping ${job.name} tick`)
         return
       }
-      console.log(`[scheduler] Tick: ${job.name}`)
+
+      // Concurrency guard
+      if (inFlight.get(job.name)) {
+        console.log(`[scheduler] ${job.name} already in-flight — skipping this tick`)
+        return
+      }
+
+      inFlight.set(job.name, true)
       try {
-        await runWithRetries(job)
+        await runJob(job.name, job.fn)
       } catch (err) {
-        // runWithRetries should never throw; this is the last safety net
+        // runJob should never throw; this is the last safety net
         console.error(`[scheduler] Unhandled error in ${job.name}:`, err)
-        markFinished(job.name, "failed", String(err))
+      } finally {
         inFlight.set(job.name, false)
       }
-      console.log(`[scheduler] Done: ${job.name}`)
     })
+
     tasks.push(task)
-    console.log(`[scheduler] Registered: ${job.name} @ ${job.schedule}`)
+    console.log(`[scheduler] Registered ${job.name} with schedule: ${job.schedule}`)
   }
 
+  console.log(`[scheduler] ${jobs.length} cron job(s) registered`)
   installShutdownHandlers()
 }
 

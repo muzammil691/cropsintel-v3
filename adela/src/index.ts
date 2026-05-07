@@ -1,51 +1,65 @@
 /**
- * Adela — CropsIntel V3 runtime nervous system
- * Entrypoint: starts cron scheduler + /health HTTP server, then keeps the
- * process alive.
+ * Adela — CropsIntel V3 runtime nervous system (Phase 1.6e)
+ *
+ * Entry point: starts cron scheduler + lightweight health HTTP server.
  *
  * Required env vars:
- *   V3_SUPABASE_URL         - https://hzrnohsxigrqlmzegwlb.supabase.co
- *   V3_SUPABASE_SECRET_KEY  - sb_secret_... (Supabase new key format)
- *   GEMINI_API_KEY          - Google AI Studio key
+ *   SUPABASE_URL (or V3_SUPABASE_URL)
+ *   SUPABASE_SERVICE_KEY (or V3_SUPABASE_SECRET_KEY)
+ *   GEMINI_API_KEY
+ *   ANTHROPIC_API_KEY (for ai-analyst)
  *
  * Optional env vars:
- *   PORT                    - /health port (default 8080; Railway sets it)
- *   CRON_ABC                - override default ABC cron ("*​/15 * * * *")
- *   CRON_STRATA             - override default Strata cron ("0 * * * *")
- *   CRON_NEWS               - override default news cron ("*​/30 * * * *")
- *   STRATA_BASE_URL         - Strata host; absent → strata scraper skips
- *   STRATA_USERNAME
- *   STRATA_PASSWORD
- *   NEWS_FEEDS              - comma-separated RSS/Atom feed URLs
- *   TWILIO_ACCOUNT_SID      - WhatsApp notifications (optional)
- *   TWILIO_AUTH_TOKEN
- *   TWILIO_WHATSAPP_FROM
- *   TWILIO_WHATSAPP_TO
+ *   PORT - /health port (default 3001; Railway sets it dynamically)
  */
 
-import { startScheduler } from "./scheduler"
-import { notifyWhatsApp } from "./notify"
-import { startHealthServer } from "./health"
-import { config } from "./config"
+import http from "http"
+import { startScheduler, lastRun } from "./scheduler"
 
-console.log("[adela] Starting Adela v1.1 — CropsIntel runtime nervous system")
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
+
+console.log("[adela] Starting Adela — CropsIntel V3 runtime nervous system")
 console.log("[adela] Time:", new Date().toISOString())
 
-// 1. Start the /health HTTP server (Railway expects this on $PORT)
-startHealthServer(config.health.port)
-
-// 2. Register and start cron jobs
+// 1. Start the scheduler (registers all cron jobs)
 startScheduler()
 
-// 3. Startup notification (non-fatal if Twilio not configured).
-// Keep this message in sync with the matching block in adela/README.md.
-const STARTUP_MESSAGE = "🤖 Adela v1.1 online. Cron jobs registered. ABC scrape at 06:00 UTC daily."
+// 2. Start the health HTTP server
+const server = http.createServer((req, res) => {
+  if (!req.url) {
+    res.writeHead(400).end()
+    return
+  }
 
-notifyWhatsApp(STARTUP_MESSAGE).catch((err) =>
-  console.warn("[adela] Startup notification failed:", err)
-)
+  if (req.method === "GET" && (req.url === "/health" || req.url.startsWith("/health?"))) {
+    const body = JSON.stringify(
+      {
+        status: "ok",
+        lastRun,
+        uptime: process.uptime(),
+      },
+      null,
+      2
+    )
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    })
+    res.end(body)
+    return
+  }
 
-// 4. Keep process alive — never exit on uncaught errors
+  // All other paths return 404
+  res.writeHead(404, { "Content-Type": "text/plain" }).end("not found\n")
+})
+
+server.listen(PORT, () => {
+  console.log(`[adela] Health server listening on port ${PORT}`)
+})
+
+console.log("[adela] Adela scheduler started. Health server on port", PORT)
+
+// 3. Keep process alive — never exit on uncaught errors
 process.on("uncaughtException", (err) => {
   console.error("[adela] Uncaught exception:", err)
 })
@@ -53,5 +67,3 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   console.error("[adela] Unhandled rejection:", reason)
 })
-
-console.log("[adela] Ready. Scheduler armed; health server up.")

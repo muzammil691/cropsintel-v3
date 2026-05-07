@@ -2,10 +2,11 @@
   "name": "cropsintel-adela",
   "version": "1.0.0",
   "private": true,
+  "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/scheduler.js",
-    "dev": "ts-node src/scheduler.ts"
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
