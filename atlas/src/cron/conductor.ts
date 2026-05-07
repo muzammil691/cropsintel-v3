@@ -9,6 +9,7 @@ import { sendWhatsAppReplyAutoSplit } from '../lib/twilio'
 const sendWhatsAppReply = (to: string, body: string) =>
   sendWhatsAppReplyAutoSplit(to, body)
 import { simple, debate, DebateResult } from '../lib/multi-brain'
+import { checkClusterDedupe, rememberClusterKey } from '../lib/cluster-dedupe'
 import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
@@ -449,10 +450,39 @@ async function detectFailureClusters(state: ConductorState, trustMode: TrustMode
   })
   if (recentFails.length < 3) return null
 
-  // Avoid debating the same cluster every heartbeat: snapshot the task IDs.
-  const clusterKey = recentFails.map(r => r.task_id as string).sort().join(',')
-  if (recentClusterKeys.has(clusterKey)) return 'already-debated'
-  recentClusterKeys.add(clusterKey)
+  // Persistent dedupe gate. Precedence (highest first): closed-ADR on disk,
+  // queued/in-progress investigation in the trailing 30 min, shipped
+  // remediation task newer than the latest fail, in-process Set snapshot.
+  // Replaces the prior in-process-only Set that wiped on every restart and
+  // re-fired identical clusters (eight ADRs queued in three hours on
+  // 2026-05-07 — see docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-*).
+  const taskIds = recentFails.map(r => r.task_id as string)
+  const clusterKey = [...taskIds].sort().join(',')
+  const failTimestamps = recentFails
+    .map(r => (r.ran_at ?? r.created_at) as string | undefined)
+    .filter((s): s is string => Boolean(s))
+  const dedupe = await checkClusterDedupe({
+    clusterKey,
+    taskIds,
+    failTimestamps,
+    repoRoot: REPO_ROOT,
+  })
+  if (dedupe.skip) {
+    await logDecision({
+      fork_question: 'cluster dedupe',
+      options_considered: { gate: dedupe.reason },
+      chosen_option: dedupe.reason,
+      rationale: dedupe.evidence,
+    })
+    if (trustMode === 'auto' || trustMode === 'confirm') {
+      await sendWhatsAppReply(
+        MUZAMMIL_WHATSAPP,
+        `🟢 Cluster ${truncate(clusterKey, 80)} already addressed (${dedupe.reason}) — skipped`,
+      )
+    }
+    return `deduped-${dedupe.reason}`
+  }
+  rememberClusterKey(clusterKey)
 
   // confirm mode: ping with proposal, do not auto-act.
   if (trustMode === 'confirm') {
@@ -511,8 +541,6 @@ Common root cause? Should we (a) pause Builder, (b) queue an investigation task,
   }
   return 'waiting'
 }
-
-const recentClusterKeys = new Set<string>()
 
 function composeInvestigationSpec(
   recentFails: Array<Record<string, unknown>>,
