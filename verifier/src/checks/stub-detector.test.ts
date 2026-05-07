@@ -156,6 +156,65 @@ ${padding}
   })
 })
 
+// ── 1.10af §6 — three-case acceptance matrix ────────────────────────────────
+// (1) `<NotImplemented phase="…" />` is OK; (2) `// TODO: implement` is a stub;
+// (3) `throw new Error('not implemented')` is a stub.
+
+describe('checkStubDetector — 1.10af §6 acceptance matrix', () => {
+  it('reports 0 stubs for a file containing only <NotImplemented phase="1.5" />', () => {
+    writeFile(
+      'src/pages/Future.tsx',
+      `import NotImplemented from '@/components/NotImplemented'
+export default function Future() {
+  return <NotImplemented phase="1.5" />
+}`,
+    )
+    const spec = makeSpec({ filesRequired: ['src/pages/Future.tsx'] })
+    const gaps = checkStubDetector(spec)
+    expect(gaps).toHaveLength(0)
+  })
+
+  it('flags a file containing `// TODO: implement` as a stub', () => {
+    writeFile(
+      'src/lib/todo-stub.ts',
+      `export function pricingService() {
+  // TODO: implement margin lookup once supabase view ships
+  return null
+}`,
+    )
+    const spec = makeSpec({ filesRequired: ['src/lib/todo-stub.ts'] })
+    const gaps = checkStubDetector(spec)
+    expect(gaps.length).toBeGreaterThan(0)
+    expect(gaps[0].check).toBe('stub-detector')
+  })
+
+  it('flags a function whose body throws Error("not implemented") as a stub', () => {
+    writeFile(
+      'src/lib/throw-stub.ts',
+      `export function foo() {
+  throw new Error('not implemented')
+}`,
+    )
+    const spec = makeSpec({ filesRequired: ['src/lib/throw-stub.ts'] })
+    const gaps = checkStubDetector(spec)
+    expect(gaps.length).toBeGreaterThan(0)
+    expect(gaps[0].check).toBe('stub-detector')
+  })
+
+  it('does NOT over-broaden: a real error throw without "not implemented" passes', () => {
+    writeFile(
+      'src/lib/real-error.ts',
+      `export function divide(a: number, b: number): number {
+  if (b === 0) throw new Error('division by zero')
+  return a / b
+}`,
+    )
+    const spec = makeSpec({ filesRequired: ['src/lib/real-error.ts'] })
+    const gaps = checkStubDetector(spec)
+    expect(gaps).toHaveLength(0)
+  })
+})
+
 // ── isNotImplementedWhitelisted (unit-level) ─────────────────────────────────
 
 describe('isNotImplementedWhitelisted', () => {

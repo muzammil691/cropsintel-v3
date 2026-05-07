@@ -34,6 +34,10 @@ const STUB_PATTERNS: RegExp[] = [
   /agent infrastructure deploying/i,
   /Full product after Phase/i,
   /Production launch follows master plan/i,
+  // 1.10af §6 — runtime stub: a function body that immediately throws
+  // "not implemented" is the JS analogue of a TODO comment. Only matches the
+  // explicit phrase (case-insensitive) so legitimate error throws aren't flagged.
+  /throw\s+new\s+Error\(\s*['"`]\s*not\s+implemented/i,
 ]
 
 // CropsIntel-specific: NotImplemented patterns are sometimes intentional
