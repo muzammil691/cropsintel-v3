@@ -20,10 +20,14 @@ import { TaskSpec } from '../types'
  * markdown (~10-30KB) is accounted for.
  */
 
-const TOTAL_BUDGET_BYTES = 150 * 1024
-const CRITICAL_BUDGET_BYTES = Math.floor((TOTAL_BUDGET_BYTES - 30 * 1024) * 0.8) // ~96KB
-const SECONDARY_BUDGET_BYTES = Math.floor((TOTAL_BUDGET_BYTES - 30 * 1024) * 0.2) // ~24KB
+// 1.10af §7 — bumped to 180_000 chars (safe ceiling for claude-opus-4-7 at
+// 200k tokens after spec markdown overhead). Files ≤ WHOLE_FILE_LINE_LIMIT are
+// preferred for whole-load; longer files truncate by line with an explicit log.
+const TOTAL_BUDGET_BYTES = 180_000
+const CRITICAL_BUDGET_BYTES = Math.floor((TOTAL_BUDGET_BYTES - 30 * 1024) * 0.8) // ~120KB
+const SECONDARY_BUDGET_BYTES = Math.floor((TOTAL_BUDGET_BYTES - 30 * 1024) * 0.2) // ~30KB
 const SECONDARY_PER_FILE_CAP = 5 * 1024 // 5KB
+const WHOLE_FILE_LINE_LIMIT = 2000
 
 export interface LoaderDecision {
   filePath: string
@@ -118,16 +122,50 @@ export function loadShippedCodeContext(opts: LoadOptions): LoaderResult {
   }
 
   for (const { filePath, content, size } of criticalReads) {
-    if (criticalUsed + size > CRITICAL_BUDGET_BYTES && criticalReads.length > 1) {
-      // Skip this file rather than truncate mid-function — judge will see the
-      // omission marker and know the verifier didn't have a view.
+    const lineCount = content.split('\n').length
+
+    // 1.10af §7 — files with ≤ 2000 lines are loaded whole when budget permits.
+    // Beyond that, or when the budget would overflow, truncate by line (keep
+    // the head — most spec-relevant code is at the top of a file) and emit an
+    // explicit log entry so judges can see what they're missing.
+    const fitsWhole = criticalUsed + size <= CRITICAL_BUDGET_BYTES
+    if (lineCount <= WHOLE_FILE_LINE_LIMIT && fitsWhole) {
+      criticalUsed += size
+      decisions.push({ filePath, outcome: 'full', bytesLoaded: size, bytesTotal: size })
+      parts.push(`=== ${filePath} ===\n${content}`)
+      continue
+    }
+
+    const remaining = Math.max(0, CRITICAL_BUDGET_BYTES - criticalUsed)
+    if (remaining < 1024 && criticalReads.length > 1) {
+      // Budget effectively exhausted — omit rather than emit a token-sized
+      // sliver; judge sees [FILE OMITTED] and knows verifier had no view.
       decisions.push({ filePath, outcome: 'omitted', bytesLoaded: 0, bytesTotal: size })
       parts.push(`=== ${filePath} ===\n[FILE OMITTED — too long for context budget (${formatKB(size)})]`)
       continue
     }
-    criticalUsed += size
-    decisions.push({ filePath, outcome: 'full', bytesLoaded: size, bytesTotal: size })
-    parts.push(`=== ${filePath} ===\n${content}`)
+
+    // Truncate by line. Greedy: keep adding head lines until we'd exceed the
+    // remaining budget. The judge sees the head + a truncation marker.
+    const lines = content.split('\n')
+    let used = 0
+    let kept = 0
+    const keptLines: string[] = []
+    for (const line of lines) {
+      const lineSize = line.length + 1 // +1 for the newline
+      if (used + lineSize > remaining) break
+      keptLines.push(line)
+      used += lineSize
+      kept++
+    }
+    const truncatedContent = keptLines.join('\n') +
+      `\n\n[... truncated, kept ${kept} of ${lineCount} lines (${formatKB(used)} of ${formatKB(size)}) ...]`
+    criticalUsed += used
+    decisions.push({ filePath, outcome: 'truncated', bytesLoaded: used, bytesTotal: size })
+    parts.push(`=== ${filePath} ===\n${truncatedContent}`)
+    console.log(
+      `[verifier-context] truncated ${filePath} (${lineCount} → ${kept} lines) to fit model context`,
+    )
   }
 
   // ── Phase 2: secondary files (diff context) ──────────────────────────────
