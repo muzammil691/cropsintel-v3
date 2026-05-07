@@ -502,8 +502,14 @@ async function detectFailureClusters(state: ConductorState, trustMode: TrustMode
 
   const debatePrompt = `Three+ Verifier failures in 30 min:
 ${recentFails.map(r => {
-  const gaps = r.gaps as Array<{ description?: string }> | undefined
-  return `- ${r.task_id}: ${gaps?.[0]?.description ?? 'no gap detail'}`
+  const gaps = r.gaps as
+    | Array<{ description?: string; check?: string; expected?: string; actual?: string; remediation?: string }>
+    | undefined
+  const g = gaps?.[0]
+  const detail = g
+    ? [g.check && `check=${g.check}`, g.expected && `expected=${g.expected}`, g.actual && `actual=${g.actual}`, g.remediation && `fix=${g.remediation}`, !g.check && g.description].filter(Boolean).join(' | ')
+    : ''
+  return `- ${r.task_id}: ${detail || 'no gap detail'}`
 }).join('\n')}
 
 Common root cause? Should we (a) pause Builder, (b) queue an investigation task, (c) wait? Output VERDICT: pause | investigate | wait.`
@@ -547,8 +553,29 @@ function composeInvestigationSpec(
   debateResult: DebateResult,
 ): string {
   const failBullets = recentFails.map(r => {
-    const gaps = r.gaps as Array<{ description?: string }> | undefined
-    return `- **${r.task_id}** (${r.ran_at ?? r.created_at ?? '?'}): ${gaps?.[0]?.description ?? 'no detail'}`
+    // Verifier emits structured Gap[] rows (check/expected/actual/remediation)
+    // — see verifier/src/verify.ts:85-105 for empty-diff-guard. Older code
+    // paths only set `description`. Render whichever fields are present so
+    // investigation specs stop saying "no detail" and the empty-diff-guard
+    // cannot fire on legitimate cluster investigations.
+    const gaps = r.gaps as
+      | Array<{
+          description?: string
+          check?: string
+          expected?: string
+          actual?: string
+          remediation?: string
+        }>
+      | undefined
+    const g = gaps?.[0]
+    const parts: string[] = []
+    if (g?.check) parts.push(`check: ${g.check}`)
+    if (g?.expected) parts.push(`expected: ${g.expected}`)
+    if (g?.actual) parts.push(`actual: ${g.actual}`)
+    if (g?.remediation) parts.push(`remediation: ${g.remediation}`)
+    if (g?.description && parts.length === 0) parts.push(g.description)
+    const detail = parts.length > 0 ? parts.join(' | ') : 'no detail'
+    return `- **${r.task_id}** (${r.ran_at ?? r.created_at ?? '?'}): ${detail}`
   }).join('\n')
 
   return `# Task: Cluster investigation — Verifier failure pattern
