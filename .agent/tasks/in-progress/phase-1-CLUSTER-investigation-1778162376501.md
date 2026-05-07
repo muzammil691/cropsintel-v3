@@ -27,3 +27,13 @@ Diagnose the common root cause across these failures. Hypotheses to check:
 1. A short ADR markdown in `docs/atlas-decisions/` describing the root cause.
 2. If a fix is in scope, ship it as a follow-up task spec (not in this investigation).
 3. If no fix is needed (false alarm), document why in the ADR and close.
+
+## Files
+
+- `docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-1778162376501.md`
+- `verifier/src/lib/council-parser.ts`
+- `supabase/migrations/20260507120000_verifier_subject_matter_hits.sql`
+
+## Investigator notes
+
+This is the ninth duplicate cluster ADR on the `phase-1.10af-workflow-quality-gates-fix` rem-chain lineage in <2.5 hours. The full diagnosis lives in the ADR at `docs/atlas-decisions/ADR-2026-05-07-verifier-cluster-1778162376501.md`. Both canonical follow-ups (conductor cluster dedupe upgrade, verifier parser subject-matter immunity) have now shipped at HEAD `1bede69`. This cluster was queued at `ec95249` (13:59:36 UTC), before both fixes activated, and is the trailing residue of the old failure index rather than a new failure mode. No production code change in scope.
