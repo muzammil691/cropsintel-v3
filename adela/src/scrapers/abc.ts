@@ -20,13 +20,13 @@
 
 import { load as cheerioLoad } from "cheerio"
 import { z } from "zod"
-import { supabase } from "../supabase.js"
-import { extractPdfJson } from "../gemini.js"
-import { notifyWhatsApp } from "../notify.js"
-import { notifyAtlas } from "../lib/notify.js"
-import { ensureStorageBucket } from "../lib/supabase.js"
-import { startRun, finishRun } from "../audit.js"
-import { config } from "../config.js"
+import { supabase } from "../supabase"
+import { extractPdfJson } from "../gemini"
+import { notifyWhatsApp } from "../notify"
+import { notifyAtlas } from "../lib/notify"
+import { ensureStorageBucket } from "../lib/supabase"
+import { startRun, finishRun } from "../audit"
+import { config } from "../config"
 
 // ---------------------------------------------------------------------------
 // Zod schema for Gemini extraction output

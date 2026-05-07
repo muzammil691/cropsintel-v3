@@ -19,7 +19,7 @@
  */
 
 import axios, { type AxiosError } from "axios"
-import { supabase } from "./supabase.js"
+import { supabase } from "./supabase"
 
 // ---------------------------------------------------------------------------
 // Atlas notifier

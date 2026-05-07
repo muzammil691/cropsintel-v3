@@ -2,7 +2,7 @@ import {
   GoogleGenerativeAI,
   type GenerateContentRequest,
 } from "@google/generative-ai"
-import { config } from "./config.js"
+import { config } from "./config"
 
 const apiKey = process.env.GEMINI_API_KEY
 if (!apiKey) throw new Error("GEMINI_API_KEY must be set")

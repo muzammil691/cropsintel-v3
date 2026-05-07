@@ -9,7 +9,7 @@
  * Railway's healthcheck can flag stuck deployments.
  */
 
-import http from "node:http"
+import http from "http"
 
 export type ScraperStatus = "running" | "success" | "skipped" | "failed" | "never_ran"
 

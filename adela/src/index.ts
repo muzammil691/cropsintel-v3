@@ -23,10 +23,10 @@
  *   TWILIO_WHATSAPP_TO
  */
 
-import { startScheduler } from "./scheduler.js"
-import { notifyWhatsApp } from "./notify.js"
-import { startHealthServer } from "./health.js"
-import { config } from "./config.js"
+import { startScheduler } from "./scheduler"
+import { notifyWhatsApp } from "./notify"
+import { startHealthServer } from "./health"
+import { config } from "./config"
 
 console.log("[adela] Starting Adela v1.1 — CropsIntel runtime nervous system")
 console.log("[adela] Time:", new Date().toISOString())

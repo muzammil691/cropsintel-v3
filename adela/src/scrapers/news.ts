@@ -13,22 +13,20 @@
  * (source, source_url) unique index on news_items.
  */
 
-import { readFileSync } from "node:fs"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { readFileSync } from "fs"
+import path from "path"
 import { load as cheerioLoad } from "cheerio"
-import { config } from "../config.js"
-import { startRun, finishRun } from "../audit.js"
+import { config } from "../config"
+import { startRun, finishRun } from "../audit"
 import {
   insertNewsItems,
   resolveCommodityId,
   type NewsItemRow,
-} from "../db.js"
+} from "../db"
 
 // ---------------------------------------------------------------------------
 // Load config
 // ---------------------------------------------------------------------------
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const selectorsPath = path.resolve(__dirname, "./selectors.json")
 
 interface NewsConfig {

@@ -12,7 +12,7 @@
  * so the caller's audit + scraper_errors logging stays in control.
  */
 
-import { supabase } from "./supabase.js"
+import { supabase } from "./supabase"
 
 const BATCH_SIZE = 200
 

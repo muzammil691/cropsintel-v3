@@ -1,10 +1,8 @@
 import { execFile } from "child_process"
 import { promisify } from "util"
 import path from "path"
-import { fileURLToPath } from "url"
 
 const execFileAsync = promisify(execFile)
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const WHATSAPP_SCRIPT = path.resolve(__dirname, "../../agent/notify-whatsapp.sh")
 

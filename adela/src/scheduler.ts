@@ -19,12 +19,12 @@
  */
 
 import cron from "node-cron"
-import { config } from "./config.js"
-import { runAbcScraper } from "./scrapers/abc.js"
-import { runStrataScraper } from "./scrapers/strata.js"
-import { runNewsScraper } from "./scrapers/news.js"
-import { logScraperError } from "./db.js"
-import { markFinished, markStarted, registerScraper } from "./health.js"
+import { config } from "./config"
+import { runAbcScraper } from "./scrapers/abc"
+import { runStrataScraper } from "./scrapers/strata"
+import { runNewsScraper } from "./scrapers/news"
+import { logScraperError } from "./db"
+import { markFinished, markStarted, registerScraper } from "./health"
 
 type ScraperFn = () => Promise<unknown>
 
@@ -180,4 +180,23 @@ function installShutdownHandlers(): void {
 
   process.once("SIGTERM", handle)
   process.once("SIGINT", handle)
+}
+
+// Main execution block (phase-1.6b: run scheduler as standalone cron worker)
+if (require.main === module) {
+  console.log("[scheduler] Starting Adela scheduler — CropsIntel V3 cron worker")
+  console.log("[scheduler] Time:", new Date().toISOString())
+
+  startScheduler()
+
+  console.log("[scheduler] Ready. Cron jobs armed.")
+
+  // Keep process alive
+  process.on("uncaughtException", (err) => {
+    console.error("[scheduler] Uncaught exception:", err)
+  })
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("[scheduler] Unhandled rejection:", reason)
+  })
 }
