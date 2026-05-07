@@ -2,12 +2,13 @@
 
 **Author:** Cowork — Muzammil Akhtar
 **Date:** 2026-04-28
-**Status:** v1.5 — locked. Polish phase complete. Execution begins.
+**Status:** v1.6 — execution in flight. WP-0 quality-gate fixes shipped 2026-05-07; UX polish queue + WP-1/2/3 sequence locked.
 **Inputs (v1.0):** V3 handoff briefing, CropsIntel vision memory, V1 audit, V2 audit, V1 vs V2 comparative
 **Inputs added in v1.1:** `MAXONS_Workflow_v1.docx`; user directive to remove "DNS rollback to V1"
 **Inputs added in v1.2:** User clarification 2026-04-28 — V3 is **CropsIntel standalone**; the MAXONS workflow doc is **knowledge reference only**; MAXONS App and BC are adjacent systems Maxons builds/operates separately
 **Inputs added in v1.3:** Round 2 polish — V3 frontend hosting = GitHub Pages (continuity with V2); V3 Supabase = brand-new project; Adela runtime host = Railway
 **Inputs added in v1.4:** Round 3 polish — AI provider monthly budget caps $400/month total ($200/$50/$50/$100); verified-tier definition = manual review by Maxons team; Phase 1 Zyra modules = 13 (defensive 9 + behavioral 4: personality, navigation, proactive alerts, quality tracker)
+**Inputs added in v1.6:** WP-0 quality-gate retro entry (2026-05-07); Claude Code build prompt with WP-1/2/3 sequence (2026-05-07); user UX requests for Plan tab progress intelligence, Queue card expansion, Chat conversation upgrade, Chat attachments (2026-05-07 evening session)
 **Read time:** ~30 minutes
 **Re-read cadence:** before every new V3 work session, even short ones
 
@@ -703,6 +704,53 @@ Builds the relationship operating system + admin tools + the optional CRM-style 
 - Public APIs without verification gates
 - Any DNS rollback or fallback to V1
 
+### 11.7 Execution log — what shipped, what's queued, what's next (live)
+
+This sub-section is updated whenever the plan is bumped. It is the single source of truth for "where are we now" and replaces ad-hoc status reports.
+
+#### Phase 1.10 — Atlas conductor + 7-agent fleet
+
+**Shipped (`done/`):** 1.10a through 1.10z (30+ specs). Atlas itself, 6 specialist agents, multi-brain quorum, cost gate, invariants engine, voice TTS+STT, WhatsApp, dashboard, PWA. Production house operational.
+
+**WP-0 quality-gate retro (2026-05-07, shipped):** four fixes bundled in `phase-1.10af-workflow-quality-gates-fix.md` plus follow-up fixes:
+- Atlas trust-mode persists across redeploys (DB-backed, not env-only)
+- `designer_runs` Supabase migration applied
+- Verifier retro-audit on boot now opt-in via env var (default off)
+- Atlas git operations serialized via mutex
+- Verifier stub-detector whitelist for legitimate placeholders
+- Verifier context loader prioritizes whole-file load for ≤2,000-line files
+
+**Phase-1 cluster cleanup (2026-05-07 evening):** ~25 specs cancelled to break a Builder zombie pile-up; in-progress drain ongoing.
+
+#### Phase 1.6 — Adela data scraper
+
+**Status:** infrastructure shipped, scrapers cron-registered, but `/health` endpoint missing and several spec parts cancelled in tonight's drain. Re-queue plan: 1.6b (foundation), 1.6c (Supabase wrapper + ABC), 1.6d (Strata + news), 1.6e (`/health` server fix + AI analyst), 1.6f (Gemini-Claude pipeline).
+
+#### NEW UX polish phases — to queue after in-progress drains to ≤5
+
+| Phase | Title | What it does |
+|---|---|---|
+| 1.10aa | Plan tab progress intelligence | Phase tree with % rings, color intensity by progress, parses master plan, overlays live build state, shows "today's additional work" + "future additions" sections |
+| 1.10ab | Queue card expansion + plain-English summary | Each queue card becomes click-to-expand. Shows what's being built in 3-5 plain bullets, current Builder thought, files changed so far, est. time, cost. |
+| 1.10ac | Chat conversation upgrade (voice + tool-call display) | ElevenLabs duplex voice conversation mode in chat. Voice message recording + sending. Tool-call rows show "Calling builder.list_queue..." with progress and expandable real logs (replacing today's `tool_call → pending → null`). |
+| 1.10ad | Chat attachments (paperclip) | Paperclip button. Supports image (jpg/png/heic) and PDF upload to Supabase Storage. Atlas reads via vision capability. MIME-validated, size-capped. |
+
+**Gate condition:** these specs only dispatch when in-progress count ≤ 5 AND no spec has been in in-progress for >2 hours (zombie guard).
+
+#### WP-1 / WP-2 / WP-3 — the customer-facing CropsIntel build
+
+After 1.10aa-ad ship, the next runway is Phase 1.3 → 1.6/1.7/1.8 → 1.10 (Zyra) — these correspond to the Claude Code build prompt's WP-1, WP-2, WP-3:
+
+- **WP-1 = Phase 1.3** — Auth + 3-tier RBAC (registered/verified/admin) + V1/V2 user bridge.
+- **WP-2 = Phase 1.6 + 1.7 + 1.8** — Adela data spine fully connected to UI: position reports, Strata pricing, news, signals at `/insights`.
+- **WP-3 = Phase 1.10za + CRM phases** — verified-tier inquiry → Zyra-drafted offer → Maxons review → customer accept. The value-delivery moment.
+
+These do not start until 1.10aa-ad have shipped and stabilized.
+
+#### Multi-commodity readiness reminder
+
+Every spec from this point forward MUST honour the Day-1 constraint: `commodity_id UUID FK` on every domain row. Walnut and pistachio are configuration, not code branches. Auditing this is part of every Verifier audit going forward.
+
 ---
 
 ## 12. CRM deep dive — the strongest pillar
@@ -1024,6 +1072,30 @@ Adela is a separate Node.js process (not the Vite app). It runs scrapers, proces
 | 2026-04-28 | Cowork | v1.3 | Round 2 polish — (1) V3 frontend hosting = GitHub Pages. (2) V3 Supabase = brand-new project. (3) Adela runtime host = Railway. User initially picked Mac; Cowork pushed back honestly; user reconsidered. Updated section 13.2.8 to GitHub Pages workflow YAML. Added 13.2.9 Railway setup. (4) Resolved O3, O4, O5. | Round 2 polish |
 | 2026-04-28 | Cowork | v1.4 | Round 3 polish — caps + verified-tier + 13 Zyra modules. Resolved O6, O7, O8. | Round 3 polish |
 | 2026-04-28 | Cowork | **v1.5+execution corrections** | Plan locked, Phase 0 closed (deferred per user), Phase 1 execution started. Live corrections during Phase 1.2 scaffold: (a) **Tailwind 3.4 → Tailwind 4.** Master plan section 1.1 said "Tailwind 3.4" matching V1, but shadcn 4.6 (current as of 2026-04) requires Tailwind 4 with new CSS-based config. Migrated mid-scaffold: uninstalled tailwindcss + postcss + autoprefixer, installed `tailwindcss@^4` + `@tailwindcss/vite`, removed `tailwind.config.js` + `postcss.config.js`, updated `vite.config.ts` to use `@tailwindcss/vite` plugin, replaced `src/index.css` to use `@import "tailwindcss";`. (b) **Path aliases manually added** to `tsconfig.json` + `tsconfig.app.json` + `vite.config.ts` for `@/* → ./src/*` (shadcn requires this; Vite TS template doesn't ship with it). (c) **vite-plugin-pwa skipped from initial install** — incompatible with Vite 8; will add in Phase 1 sub-task 1.13 when compatible version exists or Vite is pinned. (d) **shadcn preset locked: Radix + Nova (Lucide + Geist).** | Live corrections during execution; original master plan was Tailwind-3-anchored which was incorrect for 2026 toolchain |
+
+### v1.6 — 2026-05-07 (evening session, Dubai)
+
+**Why bumped:** WP-0 quality-gate retro shipped today; user has explicit UX requests that need to be in the canonical plan before queueing; the Claude Code build prompt's WP-1/2/3 sequence needs to be reconciled with the existing Phase 1.3/1.6/1.7/1.8/1.10 numbering.
+
+**What changed:**
+- Status moved from "locked, execution begins" to "execution in flight."
+- Section 11 gains sub-section 11.7 (live execution log; renumbered from spec's "11.3" to avoid collision with existing 11.3 = Phase 2 CRM).
+- Phase 1.10aa-ad added (UX polish queue).
+- WP-0 retro entry recorded.
+- WP-1/WP-2/WP-3 explicitly mapped to existing phase numbering — no new phase numbers, just clarifying which existing phases are which work-package.
+
+**What did NOT change:**
+- Sections 1-10 (north star, foundation rules, data foundation, agent architecture, AI routing) untouched.
+- The five immutable rules unchanged.
+- Multi-commodity Day-1 constraint unchanged.
+- Cost cap ($400/month) unchanged.
+- All previously-shipped specs and decisions unchanged.
+
+**Source of changes:**
+- 2026-05-07 morning session — WP-0 fix work (Designer Anthropic key rotation, the 7-bug fix plan from `AUTONOMOUS_BUILD_WORKFLOW_FIX_PLAN.md`).
+- 2026-05-07 evening session with Cowork (Claude.ai) — user requested Plan tab intelligence, Queue expansion, chat upgrade (voice + tool-call display), attachments. User explicitly approved 4-spec bundling and "write tonight, queue when safe" gate.
+
+**Approved by:** Muzammil Akhtar, 2026-05-07 evening, via Cowork session.
 
 ---
 
