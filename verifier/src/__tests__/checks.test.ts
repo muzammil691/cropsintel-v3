@@ -203,7 +203,10 @@ describe('checkRoutesWired', () => {
       `<Route path="/auth" element={<NotImplemented phase="1.30" />} />`,
     )
 
-    const spec = makeSpec({ routesRequired: ['/auth'] })
+    const spec = makeSpec({
+      routesRequired: ['/auth'],
+      rawMarkdown: 'Implement <Route path="/auth" element={<Auth />} /> to replace NotImplemented',
+    })
     const gaps = checkRoutesWired(spec)
     expect(gaps.length).toBeGreaterThan(0)
     expect(gaps[0].check).toBe('routes-wired')
