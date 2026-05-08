@@ -3739,8 +3739,29 @@ export async function startServer(): Promise<void> {
         }))
         // List in-flight specs by reading .agent/tasks/in-progress/.
         const inProgressDir = `${process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'}/.agent/tasks/in-progress`
+        const logsDir = `${process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'}/.agent/tasks/logs`
         const fs = await import('fs/promises')
-        let inFlight: Array<{ id: string; filename: string; started_at: string | null }> = []
+
+        // Phase 1.10ai: discover the youngest log mtime for any spec, so the
+        // dashboard can render "in audit phase" instead of "Builder unresponsive"
+        // when the heartbeat is stale but the log is being appended (e.g. mid-
+        // Verifier/Designer run).
+        const logEntries = await fs.readdir(logsDir).catch(() => [] as string[])
+        const logAgeBySpec = async (specId: string): Promise<number> => {
+          const prefix = `${specId}-`
+          let youngest = Number.POSITIVE_INFINITY
+          for (const entry of logEntries) {
+            if (!entry.startsWith(prefix) || !entry.endsWith('.log')) continue
+            try {
+              const s = await fs.stat(`${logsDir}/${entry}`)
+              const ageMs = Date.now() - s.mtime.getTime()
+              if (ageMs < youngest) youngest = ageMs
+            } catch { /* skip */ }
+          }
+          return youngest / 60_000
+        }
+
+        let inFlight: Array<{ id: string; filename: string; started_at: string | null; log_fresh: boolean }> = []
         try {
           const files = await fs.readdir(inProgressDir)
           inFlight = await Promise.all(
@@ -3751,7 +3772,8 @@ export async function startServer(): Promise<void> {
                 const stat = await fs.stat(`${inProgressDir}/${filename}`)
                 started_at = stat.mtime.toISOString()
               } catch { /* ignore */ }
-              return { id, filename, started_at }
+              const ageMin = await logAgeBySpec(id)
+              return { id, filename, started_at, log_fresh: ageMin < 5 }
             }),
           )
         } catch {

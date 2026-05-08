@@ -18,6 +18,7 @@ import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type Workfl
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
 import { maybeSummarize } from '../lib/chat-summarizer'
+import { parseSpec } from '../lib/frontmatter'
 import { readFile, writeFile, rename, mkdir, readdir, access, stat, rm } from 'fs/promises'
 import { resolve, dirname } from 'path'
 import { execFile } from 'child_process'
@@ -804,6 +805,17 @@ async function selfHealStuckBuilder(state: ConductorState, trustMode: TrustMode)
   const allEmptyInFlight = snapshots.every(s => (s.in_flight_specs as number) === 0)
   if (!allSameQueue || !allEmptyInFlight || state.queued.length === 0) return
 
+  // Phase 1.10ai: filesystem + log-freshness real-signal check. The
+  // snapshots above are heartbeat-derived and can lie when Builder is in a
+  // long Verifier/Designer audit. If the log file is fresh, Builder is
+  // genuinely working — don't restart. Skip the WhatsApp ping too so we
+  // don't false-alarm the user.
+  const realBusy = await isBuilderBusy()
+  if (realBusy.busy) {
+    console.log(`[atlas-conductor] selfHealStuckBuilder skipped — ${realBusy.reason}`)
+    return
+  }
+
   await sendWhatsAppReply(
     MUZAMMIL_WHATSAPP,
     `🔧 Builder appears stuck for 30+ min (queue=${state.queued.length}, in-flight=0). ${trustMode === 'auto' ? 'Attempting auto-restart.' : 'Manual intervention needed.'}`,
@@ -1535,6 +1547,94 @@ async function detectInProgressZombies(trustMode: TrustMode): Promise<void> {
 // lifecycle pass or chat tools.
 const REAPER_THRESHOLD_MIN = parseInt(process.env.ATLAS_REAPER_THRESHOLD_MIN ?? '30', 10)
 const HEARTBEAT_FRESH_SECONDS = parseInt(process.env.ATLAS_REAPER_HEARTBEAT_FRESH_SECONDS ?? '120', 10)
+// Phase 1.10ai: floor + ceiling for the dynamic per-spec reaper threshold.
+// The dynamic threshold is `estimated_builder_minutes * 2` clamped to this
+// range, so a 2-min spec still gets 30 min before reaping (no false positives
+// on burst-fast specs) and a 90-min legitimate spec gets up to 180 min.
+const REAPER_THRESHOLD_MIN_FLOOR = parseInt(process.env.ATLAS_REAPER_FLOOR_MIN ?? '30', 10)
+const REAPER_THRESHOLD_MIN_CEIL = parseInt(process.env.ATLAS_REAPER_CEIL_MIN ?? '180', 10)
+// Phase 1.10ai: log-freshness window. If a spec's Builder log file was
+// written within this window, we treat the spec as actively-progressing even
+// when the heartbeat is stale (Builder is silent during Verifier/Designer
+// audits but the log keeps getting appended).
+const LOG_FRESH_MIN = parseInt(process.env.ATLAS_LOG_FRESH_MIN ?? '5', 10)
+const LOGS_DIR_REL = '.agent/tasks/logs'
+
+// Phase 1.10ai: parse `estimated_builder_minutes` from a spec's YAML
+// frontmatter. The field lives in `extra` (not in the strongly-typed
+// SpecFrontmatter shape) because it's purely diagnostic. Falls back to 15
+// when missing — same default the reaper used before this change.
+export function readEstimatedBuilderMinutes(specContent: string): number {
+  const parsed = parseSpec(specContent)
+  const raw = parsed.frontmatter.extra?.estimated_builder_minutes
+  if (!raw) return 15
+  const n = parseInt(raw, 10)
+  return Number.isFinite(n) && n > 0 ? n : 15
+}
+
+// Phase 1.10ai: clamp an estimate × 2 into the floor..ceil range. Pure for
+// testability. Mirrors the conductor reaper math 1:1.
+export function dynamicReaperThresholdMin(estimatedMinutes: number): number {
+  const doubled = (Number.isFinite(estimatedMinutes) ? estimatedMinutes : 15) * 2
+  return Math.min(REAPER_THRESHOLD_MIN_CEIL, Math.max(REAPER_THRESHOLD_MIN_FLOOR, doubled))
+}
+
+// Phase 1.10ai: returns the youngest log-mtime age (in minutes) for any log
+// file matching `${specId}-*.log`, or Infinity if none exists. Used by both
+// the reaper (to skip kills when Builder is mid-audit) and isBuilderBusy
+// (to determine real liveness).
+async function youngestLogAgeMinutes(specId: string): Promise<number> {
+  const logsDir = resolve(REPO_ROOT, LOGS_DIR_REL)
+  let entries: string[]
+  try {
+    entries = await readdir(logsDir)
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+  const prefix = `${specId}-`
+  let youngestAgeMs = Number.POSITIVE_INFINITY
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith('.log')) continue
+    try {
+      const s = await stat(resolve(logsDir, entry))
+      const ageMs = Date.now() - s.mtime.getTime()
+      if (ageMs < youngestAgeMs) youngestAgeMs = ageMs
+    } catch { /* skip */ }
+  }
+  return youngestAgeMs / 60_000
+}
+
+// Phase 1.10ai §2: filesystem + log-freshness reads "is Builder actually
+// working?" without relying on the heartbeat. Heartbeat can lie in two
+// directions: it can go stale during a Verifier audit (false dead) and it
+// can claim to be working on a spec that has actually been moved out of
+// in-progress already (false alive). The filesystem is the truth: if
+// in-progress/ is empty, Builder is free. If a spec is in-progress/ AND its
+// log was written in the last LOG_FRESH_MIN, Builder is genuinely working.
+export async function isBuilderBusy(): Promise<{ busy: boolean; reason: string }> {
+  const inProgressDir = resolve(REPO_ROOT, '.agent/tasks/in-progress')
+  let files: string[]
+  try {
+    files = await readdir(inProgressDir)
+  } catch {
+    return { busy: false, reason: 'in-progress unreadable' }
+  }
+  const candidates = files.filter(f => f.endsWith('.md') && f !== '_template.md')
+  if (candidates.length === 0) {
+    return { busy: false, reason: 'in-progress empty' }
+  }
+  for (const file of candidates) {
+    const specId = file.replace(/\.md$/, '')
+    const ageMin = await youngestLogAgeMinutes(specId)
+    if (ageMin < LOG_FRESH_MIN) {
+      return { busy: true, reason: `${specId} log fresh ${(ageMin * 60).toFixed(0)}s ago` }
+    }
+  }
+  return {
+    busy: false,
+    reason: `in-progress non-empty (${candidates.length}) but no fresh logs (will be reaped)`,
+  }
+}
 
 interface BuilderHeartbeatRow {
   spec_id: string | null
@@ -1572,17 +1672,47 @@ async function reapZombieSpecs(trustMode: TrustMode): Promise<void> {
   const heartbeat = await readBuilderHeartbeatForReaper()
   const now = Date.now()
 
-  type ToReap = { taskId: string; file: string; ageMinutes: number; heartbeatAgeSeconds: number }
+  type ToReap = {
+    taskId: string
+    file: string
+    ageMinutes: number
+    heartbeatAgeSeconds: number
+    estimatedMinutes: number
+    thresholdMin: number
+  }
   const toReap: ToReap[] = []
   for (const file of candidates) {
     let s
     try { s = await stat(resolve(inProgressDir, file)) } catch { continue }
     const ageMinutes = (now - s.mtime.getTime()) / 60_000
     const taskId = file.replace(/\.md$/, '')
+
+    // Phase 1.10ai: read the spec's own estimate from front matter and
+    // derive a per-spec dynamic threshold. Falls back to 15 min × 2 = 30
+    // (= floor) when the estimate is missing — same as the legacy hardcode.
+    let specContent = ''
+    try { specContent = await readFile(resolve(inProgressDir, file), 'utf-8') } catch { /* skip */ }
+    const estimatedMinutes = readEstimatedBuilderMinutes(specContent)
+    const thresholdMin = dynamicReaperThresholdMin(estimatedMinutes)
+
     const isHeartbeating = heartbeat.spec_id === taskId && heartbeat.ageSeconds < HEARTBEAT_FRESH_SECONDS
     if (isHeartbeating) continue
-    if (ageMinutes >= REAPER_THRESHOLD_MIN) {
-      toReap.push({ taskId, file, ageMinutes, heartbeatAgeSeconds: heartbeat.ageSeconds })
+
+    // Phase 1.10ai: log-freshness escape hatch. Heartbeat goes stale during
+    // Verifier/Designer audits because Builder is genuinely paused — but the
+    // Builder's log file gets appended throughout. If any matching log was
+    // written in the last LOG_FRESH_MIN, treat the spec as live and skip
+    // reaping regardless of heartbeat state.
+    const logAgeMin = await youngestLogAgeMinutes(taskId)
+    if (logAgeMin < LOG_FRESH_MIN) {
+      console.log(
+        `[atlas-reaper] skipping ${taskId} — log written ${logAgeMin.toFixed(1)}m ago (heartbeat ${Number.isFinite(heartbeat.ageSeconds) ? heartbeat.ageSeconds + 's' : 'never'})`,
+      )
+      continue
+    }
+
+    if (ageMinutes >= thresholdMin) {
+      toReap.push({ taskId, file, ageMinutes, heartbeatAgeSeconds: heartbeat.ageSeconds, estimatedMinutes, thresholdMin })
     }
   }
   if (toReap.length === 0) return
@@ -1601,9 +1731,11 @@ async function reapZombieSpecs(trustMode: TrustMode): Promise<void> {
     const reapedFrontmatter = [
       '---',
       `reaped_at: ${new Date().toISOString()}`,
-      `reaped_reason: zombie — exceeded ${REAPER_THRESHOLD_MIN}min in in-progress with no Builder heartbeat`,
+      `reaped_reason: zombie — exceeded ${z.thresholdMin}min (estimate ${z.estimatedMinutes}m × 2, clamped ${REAPER_THRESHOLD_MIN_FLOOR}-${REAPER_THRESHOLD_MIN_CEIL}) in in-progress, no fresh log, no Builder heartbeat`,
       `builder_heartbeat_age_seconds: ${Number.isFinite(z.heartbeatAgeSeconds) ? Math.floor(z.heartbeatAgeSeconds) : 'infinity'}`,
       `reaped_age_minutes: ${z.ageMinutes.toFixed(1)}`,
+      `reaped_threshold_minutes: ${z.thresholdMin}`,
+      `reaped_estimate_minutes: ${z.estimatedMinutes}`,
       '---',
       '',
     ].join('\n')
@@ -1646,10 +1778,11 @@ async function reapZombieSpecs(trustMode: TrustMode): Promise<void> {
       options_considered: {
         ageMinutes: Number(z.ageMinutes.toFixed(1)),
         heartbeatAgeSeconds: Number.isFinite(z.heartbeatAgeSeconds) ? Math.floor(z.heartbeatAgeSeconds) : null,
-        thresholdMin: REAPER_THRESHOLD_MIN,
+        thresholdMin: z.thresholdMin,
+        estimatedMinutes: z.estimatedMinutes,
       },
       chosen_option: 'reaped',
-      rationale: 'in-progress mtime exceeded threshold and Builder heartbeat did not match this spec',
+      rationale: 'in-progress mtime exceeded dynamic threshold (estimate × 2 clamped 30-180), Builder heartbeat stale or pointed elsewhere, and no log activity in the last 5 min',
     }).catch(() => { /* non-fatal */ })
   }
 }

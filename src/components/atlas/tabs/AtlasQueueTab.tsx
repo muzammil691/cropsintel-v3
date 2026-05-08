@@ -201,16 +201,29 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
   const builderHeartbeatAgeMs = builderHeartbeat
     ? Math.max(0, now - new Date(builderHeartbeat.updated_at).getTime())
     : null
+  // Phase 1.10ai: when the heartbeat is stale BUT the in-flight spec's log
+  // file is fresh (updated <5min ago), Builder is in a Verifier/Designer
+  // audit — silent on heartbeats but genuinely working. Render that as
+  // "in audit phase" rather than scaring the user with "unresponsive."
+  const builderInAuditPhase = !!(
+    inFlight &&
+    inFlight.log_fresh &&
+    builderHeartbeatAgeMs !== null &&
+    builderHeartbeatAgeMs > 120_000
+  )
   const builderUnresponsive = !!(
     inFlight &&
     builderHeartbeatAgeMs !== null &&
-    builderHeartbeatAgeMs > 120_000
+    builderHeartbeatAgeMs > 120_000 &&
+    !builderInAuditPhase
   )
 
   const headerHint = inFlight
     ? `${total} spec${total === 1 ? '' : 's'} queued · ${
         builderUnresponsive
           ? `Builder unresponsive — last seen ${minutesFromMs(builderHeartbeatAgeMs ?? 0)}m ago`
+          : builderInAuditPhase
+          ? `Builder · in audit phase (${inFlight.id})`
           : `Builder is on ${inFlight.id}${
               inFlight.started_at ? ` (${minutesSince(inFlight.started_at)} min in)` : ''
             }`

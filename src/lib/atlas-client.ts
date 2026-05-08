@@ -1370,6 +1370,11 @@ export interface BuilderInFlightSpec {
   id: string
   filename: string
   started_at: string | null
+  /** Phase 1.10ai: true when any matching `.agent/tasks/logs/<id>-*.log`
+   *  file was modified in the last 5 minutes. Lets the dashboard render
+   *  "Builder · in audit phase" when the heartbeat is stale (Builder is
+   *  silent during Verifier/Designer audits) but the log is being appended. */
+  log_fresh?: boolean
 }
 
 export interface BuilderQueueResponse {
