@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Read(//Users/muzammilakhtar/Documents/Claude/Projects/**)",
+      "Bash(npx supabase *)",
+      "Bash(git add *)"
+    ]
+  }
+}
