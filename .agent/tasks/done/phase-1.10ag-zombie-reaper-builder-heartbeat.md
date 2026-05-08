@@ -3,6 +3,15 @@ reaped_at: 2026-05-08T13:30:06.157Z
 reaped_reason: zombie — exceeded 30min in in-progress with no Builder heartbeat
 builder_heartbeat_age_seconds: 284
 reaped_age_minutes: 30.1
+backfilled_to_done_at: 2026-05-08T18:00:00Z
+backfilled_reason: |
+  Work shipped successfully at bdc3291 (9 files, 987 insertions; build green).
+  Reaped at 519f146 due to Builder lifecycle completion bug — the post-push
+  move-to-done step never ran because the same ship commit modified
+  agent/agent-loop.sh, triggering a Railway redeploy that killed the container
+  before the move could land. Fixed in 1.10ag2 (Layer 1: pre-emptive move-to-done
+  folded into the feat: commit; Layer 2: defensive complete_lifecycle() at
+  every exit path). This backfill restores the audit trail to "shipped".
 ---
 ---
 phase: 1.10ag

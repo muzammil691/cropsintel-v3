@@ -88,6 +88,43 @@ post_atlas_heartbeat() {
 }
 
 # -----------------------------------------------------------------------------
+# 0b. complete_lifecycle — defensive guarantee that no spec sits in in-progress/
+#     after Builder finishes its run. Phase 1.10ag2 fix for the lifecycle
+#     completion bug. Idempotent: safe to call multiple times. If the spec is
+#     already moved (Layer 1 moved it earlier, or Claude moved it itself), this
+#     is a no-op. If the spec is still in in-progress/, this moves it to the
+#     requested bucket, commits, and pushes — guaranteeing no spec ever stays
+#     stuck in in-progress/ longer than the Builder run itself (modulo the
+#     reaper safety net for outright crashes).
+#
+#     Args:
+#       $1 = task name (e.g., phase-1.10ag-zombie-reaper-builder-heartbeat)
+#       $2 = target bucket (done|failed; defaults to failed)
+# -----------------------------------------------------------------------------
+complete_lifecycle() {
+  local task_name="$1"
+  local target_bucket="${2:-failed}"
+  local in_progress_file=".agent/tasks/in-progress/$task_name.md"
+
+  # Idempotent — already moved (Claude did it, or Layer 1 did it). No-op.
+  if [ ! -f "$in_progress_file" ]; then
+    return 0
+  fi
+
+  echo "$LOOP_TAG complete_lifecycle: $task_name still in in-progress/ — moving to $target_bucket/"
+
+  mkdir -p ".agent/tasks/$target_bucket"
+  if ! mv "$in_progress_file" ".agent/tasks/$target_bucket/$task_name.md" 2>/dev/null; then
+    echo "$LOOP_TAG complete_lifecycle: mv failed for $task_name (target=$target_bucket)" >&2
+    return 1
+  fi
+  git add -A 2>/dev/null || true
+  git commit -m "atlas: complete $task_name lifecycle → $target_bucket" 2>/dev/null || true
+  git push origin main 2>/dev/null || true
+  return 0
+}
+
+# -----------------------------------------------------------------------------
 # 0. Bootstrap: SSH key, clone repo
 # -----------------------------------------------------------------------------
 bootstrap() {
@@ -693,6 +730,24 @@ run_task() {
   if [ $BUILD_EXIT -eq 0 ] && [ $QUESTION_EXISTS -eq 0 ]; then
     echo "$LOOP_TAG task $TASK_NAME succeeded in ${DURATION}s"
     cd "$REPO_DIR"
+
+    # Phase 1.10ag2 — Layer 1: pre-emptive move-to-done BEFORE staging the feat
+    # commit. This folds the lifecycle move into the same commit as Claude's
+    # work, so the pushed feat: commit already has the spec in done/. If the
+    # container dies any time after the push (Railway redeploy mid-gate, OOM,
+    # SIGKILL), the spec is already on origin/main in its final bucket. The
+    # reaper sees not-in-in-progress and never fires.
+    #
+    # Conditional: Claude itself sometimes commits + moves the spec during its
+    # session (1.10ae and 1.10af pattern). In that case $IN_PROGRESS_FILE no
+    # longer exists; the mv is skipped and the feat commit just contains
+    # whatever Claude staged.
+    if [ -f "$IN_PROGRESS_FILE" ]; then
+      mkdir -p .agent/tasks/done
+      mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
+      echo "$LOOP_TAG pre-staged lifecycle move: in-progress/ → done/ for $TASK_NAME"
+    fi
+
     git add -A
 
     # Detect REAL work vs empty commit. Compare HEAD before vs after — Claude often
@@ -726,6 +781,7 @@ run_task() {
       git push origin main || {
         echo "$LOOP_TAG push failed (pre-gate)"
         /usr/local/bin/notify-whatsapp.sh "⚠️ Agent built $TASK_NAME but push failed" || true
+        complete_lifecycle "$TASK_NAME" "failed"
         return 1
       }
 
@@ -733,11 +789,10 @@ run_task() {
       post_atlas_heartbeat "verifying" "$TASK_NAME" "$DURATION" "verifier audit"
       if run_verifier_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER" && \
          run_designer_gate "$TASK_NAME" "$HEAD_BEFORE" "$HEAD_AFTER"; then
-        mkdir -p .agent/tasks/done
-        mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
-        git add .agent/
-        git commit -m "chore(agent): $TASK_NAME → done" || true
-        git push origin main || true
+        # Layer 1 already moved the spec to done/ as part of the feat commit.
+        # Layer 2 defensive: catches any spec still stuck (e.g., Claude moved
+        # to a different bucket, or Layer 1 was skipped for some reason).
+        complete_lifecycle "$TASK_NAME" "done"
 
         if [ "$CHANGED_FILES" -gt 0 ]; then
           /usr/local/bin/notify-whatsapp.sh "✅ Agent shipped: $TASK_NAME (${DURATION}s, $CHANGED_FILES files)" || true
@@ -746,37 +801,38 @@ run_task() {
           /usr/local/bin/notify-whatsapp.sh "⚠️ $TASK_NAME marked done but produced 0 file changes — agent likely failed silently. Investigate." || true
         fi
       else
-        # Code already pushed above; gates failed. Move spec to failed/ for
-        # human review; the verifier_gate / designer_gate functions have
-        # already auto-queued a remediation spec.
-        echo "$LOOP_TAG gates failed after push — task moved to failed/, remediation queued"
-        mkdir -p .agent/tasks/failed
-        mv "$IN_PROGRESS_FILE" ".agent/tasks/failed/$TASK_NAME.md" 2>/dev/null || true
-        git add .agent/ 2>/dev/null || true
-        git commit -m "chore(agent): $TASK_NAME → failed (gates blocked, code on main)" 2>/dev/null || true
-        git push origin main 2>/dev/null || true
+        # Code already pushed above; gates failed. Layer 1 put the spec in
+        # done/ as part of the feat commit, so we now do a follow-up move
+        # done/ → failed/ for the audit trail. The verifier_gate /
+        # designer_gate functions have already auto-queued a remediation.
+        echo "$LOOP_TAG gates failed after push — moving $TASK_NAME from done/ → failed/"
+        local DONE_FILE=".agent/tasks/done/$TASK_NAME.md"
+        if [ -f "$DONE_FILE" ]; then
+          mkdir -p .agent/tasks/failed
+          mv "$DONE_FILE" ".agent/tasks/failed/$TASK_NAME.md" 2>/dev/null || true
+          git add -A 2>/dev/null || true
+          git commit -m "chore(agent): $TASK_NAME → failed (gates blocked, code on main)" 2>/dev/null || true
+          git push origin main 2>/dev/null || true
+        fi
+        # Layer 2 defensive: catches any spec still in in-progress/ (would
+        # only happen if Layer 1's move was skipped — for example, Claude
+        # never created the in-progress file; this guard handles that case).
+        complete_lifecycle "$TASK_NAME" "failed"
         /usr/local/bin/notify-whatsapp.sh "🔍 Gates failed for $TASK_NAME — code on main, remediation queued" || true
       fi
     else
-      # No commits at all — suspicious but mark done anyway
-      mkdir -p .agent/tasks/done
-      mv "$IN_PROGRESS_FILE" ".agent/tasks/done/$TASK_NAME.md"
-      git add .agent/
-      git commit -m "chore(agent): $TASK_NAME → done (no code changes)" || true
-      git push origin main || true
+      # No commits at all — suspicious but mark done anyway. Layer 1's
+      # pre-emptive move already put the spec in done/ if it was still
+      # in in-progress/; complete_lifecycle is the defensive backstop.
+      complete_lifecycle "$TASK_NAME" "done"
       echo "$LOOP_TAG SUSPICIOUS: $TASK_NAME marked done but ZERO meaningful files changed"
       /usr/local/bin/notify-whatsapp.sh "⚠️ $TASK_NAME marked done but produced 0 file changes — agent likely failed silently. Investigate." || true
     fi
   else
-    # Failure or question raised
+    # Failure or question raised. Use complete_lifecycle so set -e doesn't
+    # kill the script if the spec was already moved by Claude or another path.
     echo "$LOOP_TAG task $TASK_NAME stopped (build_exit=$BUILD_EXIT, question=$QUESTION_EXISTS)"
-    mkdir -p .agent/tasks/failed
-    mv "$IN_PROGRESS_FILE" ".agent/tasks/failed/$TASK_NAME.md"
-
-    # Don't commit half-broken code — but DO commit the failure record so user sees it
-    git add .agent/ 2>/dev/null || true
-    git commit -m "chore(agent): $TASK_NAME → failed/blocked" 2>/dev/null || true
-    git push origin main 2>/dev/null || true
+    complete_lifecycle "$TASK_NAME" "failed"
 
     if [ $QUESTION_EXISTS -eq 1 ]; then
       /usr/local/bin/notify-whatsapp.sh "❓ Agent has a question on $TASK_NAME — see .agent/questions/" || true
@@ -784,6 +840,14 @@ run_task() {
       /usr/local/bin/notify-whatsapp.sh "❌ Agent failed: $TASK_NAME (build error). Logs in .agent/tasks/failed/" || true
     fi
   fi
+
+  # Phase 1.10ag2 — Hard requirement: completeLifecycle() at the end of EVERY
+  # Builder run, regardless of pass/fail/exception. This is the absolute last
+  # step. Idempotent. If we got this far, every code path above has already
+  # called complete_lifecycle, so this is a final defensive backstop. If a
+  # future change introduces a new path that forgets to call it, this catches
+  # the spec before run_task returns.
+  complete_lifecycle "$TASK_NAME" "failed"
 }
 
 # -----------------------------------------------------------------------------
