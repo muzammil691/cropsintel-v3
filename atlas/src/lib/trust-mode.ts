@@ -61,6 +61,33 @@ export function getModeMetadata() {
   return { mode: _currentMode, setAt: _modeSetAt, setBy: _modeSetBy }
 }
 
+/**
+ * Boot-time self-check (Phase 1.10ae). Round-trips a write+read+delete against
+ * `atlas_config` so deploys fail loudly if the table is missing, RLS revoked
+ * service_role access, or the configured key is wrong. Throws on any failure.
+ * The caller is expected to log a FATAL line and keep running degraded — Atlas
+ * can still answer chat with the env-default mode, but a silent revert to
+ * `passive` (the original 1.10y bug) is now impossible without a loud log.
+ */
+export async function verifyTrustModePersistence(): Promise<void> {
+  const sb = getSupabaseClient()
+  if (!sb) {
+    throw new Error('atlas_config self-check skipped: no Supabase client (set V3_SUPABASE_URL + V3_SUPABASE_SECRET_KEY)')
+  }
+  const testKey = `_trust_mode_self_check_${Date.now()}`
+  const { error: writeErr } = await sb.from('atlas_config').upsert({
+    key: testKey,
+    value: 'check',
+    set_by: 'boot-self-check',
+  }, { onConflict: 'key' })
+  if (writeErr) throw new Error(`atlas_config write failed: ${writeErr.message ?? JSON.stringify(writeErr)}`)
+  const { data, error: readErr } = await sb.from('atlas_config').select('*').eq('key', testKey).maybeSingle()
+  if (readErr || !data) throw new Error(`atlas_config read failed: ${readErr?.message ?? 'no row returned'}`)
+  // Best-effort cleanup; if the delete fails the row is harmless and will be
+  // overwritten on the next boot (key is timestamped).
+  await sb.from('atlas_config').delete().eq('key', testKey)
+}
+
 export async function setMode(newMode: TrustMode, setBy: string): Promise<void> {
   const valid: TrustMode[] = ['passive', 'chat', 'confirm', 'auto', 'stopped']
   if (!valid.includes(newMode)) {

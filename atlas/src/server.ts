@@ -68,7 +68,7 @@ import {
 import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop } from './cron/conductor'
-import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb } from './lib/trust-mode'
+import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb, verifyTrustModePersistence } from './lib/trust-mode'
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
 import {
@@ -4384,6 +4384,24 @@ export async function startServer(): Promise<void> {
 
   startSnapshotCron()
   startConductorLoop()
+
+  // Phase 1.10ae: round-trip atlas_config write+read+delete BEFORE we start
+  // accepting traffic. If the table is missing, RLS broke service_role, or
+  // the env keys are wrong we want a loud log on every deploy — not a silent
+  // revert of every user's mode to `passive` 30 seconds later. Failure does
+  // NOT exit the process: Atlas can still answer chat with the env-default
+  // mode, so we keep listening but log once per minute so the regression is
+  // impossible to miss in Railway logs.
+  try {
+    await verifyTrustModePersistence()
+    console.log('[boot] trust-mode persistence self-check: ok')
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    console.error('[boot] FATAL: trust-mode persistence broken:', detail)
+    setInterval(() => {
+      console.error('[boot] trust-mode degraded — atlas_config not writable:', detail)
+    }, 60_000)
+  }
 
   server.listen(PORT, () => {
     console.log(`[atlas-server] Listening on :${PORT}`)
