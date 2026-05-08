@@ -184,7 +184,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           size="sm"
           variant={intake === 'paste' ? 'default' : 'outline'}
           onClick={() => setIntake(intake === 'paste' ? null : 'paste')}
-          className="text-[11px] h-7"
+          className="text-xs h-7"
           aria-pressed={intake === 'paste'}
           aria-label="Paste concept"
         >
@@ -197,7 +197,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             setIntake(intake === 'upload' ? null : 'upload')
             if (intake !== 'upload') fileInputRef.current?.click()
           }}
-          className="text-[11px] h-7"
+          className="text-xs h-7"
           aria-pressed={intake === 'upload'}
           aria-label="Upload file"
         >
@@ -207,7 +207,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           size="sm"
           variant={intake === 'voice' ? 'default' : 'outline'}
           onClick={() => setIntake(intake === 'voice' ? null : 'voice')}
-          className="text-[11px] h-7"
+          className="text-xs h-7"
           aria-pressed={intake === 'voice'}
           aria-label="Record voice"
         >
@@ -217,7 +217,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           size="sm"
           variant={intake === 'past-chat' ? 'default' : 'outline'}
           onClick={() => setIntake(intake === 'past-chat' ? null : 'past-chat')}
-          className="text-[11px] h-7"
+          className="text-xs h-7"
           aria-pressed={intake === 'past-chat'}
           aria-label="Link past chat"
         >

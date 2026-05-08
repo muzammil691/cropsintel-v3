@@ -165,7 +165,7 @@ function PlanNodeRow(props: PlanNodeRowProps) {
     <div className="border-l border-transparent">
       <div
         className={cn(
-          'flex items-start gap-1 px-1.5 py-1.5 rounded-md transition-colors duration-200 hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer group sm:gap-2 sm:px-2',
+          'flex items-start gap-2 px-1.5 py-1.5 rounded-md transition-colors duration-200 hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer group sm:gap-3 sm:px-2',
           isSelected && 'bg-slate-100 dark:bg-slate-900/60',
           cockpitTint,
         )}

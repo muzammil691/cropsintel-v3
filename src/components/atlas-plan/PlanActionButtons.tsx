@@ -37,6 +37,7 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
         aria-label={`Add sub-phase under ${node.title}`}
         onClick={(e) => { e.stopPropagation(); onAction('add', node) }}
         disabled={isBuilding}
+        className="focus-visible:ring-2 focus-visible:ring-emerald-600/50"
       >
         <PlusCircle className="size-3" />
       </Button>
@@ -47,6 +48,7 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
         aria-label={`Modify ${node.title}`}
         onClick={(e) => { e.stopPropagation(); onAction('modify', node) }}
         disabled={isBuilding}
+        className="focus-visible:ring-2 focus-visible:ring-emerald-600/50"
       >
         <Pencil className="size-3" />
       </Button>
@@ -58,7 +60,7 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
         aria-pressed={Boolean(isFollowing)}
         onClick={(e) => { e.stopPropagation(); onAction('follow', node) }}
         disabled={isBuilding}
-        className={cn(isFollowing && 'text-emerald-700 dark:text-emerald-300')}
+        className={cn('focus-visible:ring-2 focus-visible:ring-emerald-600/50', isFollowing && 'text-emerald-700 dark:text-emerald-300')}
       >
         <Flag className="size-3" />
       </Button>
@@ -70,7 +72,7 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
         aria-pressed={Boolean(isRevisiting)}
         onClick={(e) => { e.stopPropagation(); onAction('revisit', node) }}
         disabled={isBuilding}
-        className={cn(isRevisiting && 'text-slate-400')}
+        className={cn('focus-visible:ring-2 focus-visible:ring-emerald-600/50', isRevisiting && 'text-slate-400')}
       >
         <RotateCcw className="size-3" />
       </Button>
