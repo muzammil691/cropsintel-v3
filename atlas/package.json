@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
     "@google/generative-ai": "^0.21.0",
+    "@octokit/rest": "^19.0.13",
     "@supabase/supabase-js": "^2.45.0",
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",

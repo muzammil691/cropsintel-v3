@@ -136,6 +136,8 @@ import {
   CROPSINTEL_PROJECT_SLUG,
   type ProjectRow,
 } from './lib/project-context'
+import { getRepoIndex, refreshRepoIndex, startRepoIndexLoop } from './lib/repo-index'
+import { getFileContent } from './lib/github-client'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -2384,6 +2386,57 @@ export async function startServer(): Promise<void> {
     if (url === '/atlas/mode' && method === 'GET') {
       if (!(await requireAuth(req, res))) return
       json(res, 200, getModeMetadata())
+      return
+    }
+
+    // ─── GitHub repo reader (Phase 1.10ak) ──────────────────────────────────
+    // Read-only endpoints surfacing the cached repo index + on-demand file
+    // contents. Index read requires auth; file read + manual refresh require
+    // admin so we don't accidentally expose every file in the repo to a
+    // viewer-tier session.
+    if (url === '/atlas/repo/index' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      const idx = await getRepoIndex()
+      if (!idx) {
+        json(res, 200, { index: null, reason: 'github_pat_missing_or_unbuilt' })
+        return
+      }
+      json(res, 200, { index: idx })
+      return
+    }
+
+    if (method === 'GET' && url.startsWith('/atlas/repo/file')) {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const parsed = new URL(url, 'http://_')
+      const path = parsed.searchParams.get('path')?.trim() ?? ''
+      if (!path) { json(res, 400, { error: 'path required' }); return }
+      const content = await getFileContent(path)
+      if (content === null) {
+        json(res, 404, { error: 'not_found_or_binary' })
+        return
+      }
+      json(res, 200, { path, content })
+      return
+    }
+
+    if (url === '/atlas/repo/refresh-index' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const idx = await refreshRepoIndex()
+      if (!idx) {
+        json(res, 503, { error: 'refresh_failed', reason: 'github_pat_missing_or_fetch_failed' })
+        return
+      }
+      json(res, 200, { ok: true, index: idx })
       return
     }
 
@@ -4908,6 +4961,9 @@ export async function startServer(): Promise<void> {
 
   startSnapshotCron()
   startConductorLoop()
+  // Phase 1.10ak: build repo index in the background so the wizard has fresh
+  // facts. Never throws — Atlas keeps booting if GitHub is unreachable.
+  void startRepoIndexLoop()
 
   // Phase 1.10ae: round-trip atlas_config write+read+delete BEFORE we start
   // accepting traffic. If the table is missing, RLS broke service_role, or

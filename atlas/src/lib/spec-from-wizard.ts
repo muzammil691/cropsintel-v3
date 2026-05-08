@@ -8,6 +8,7 @@
 
 import { askClaude } from '../providers/claude'
 import { recordCost } from './cost-log'
+import { loadRepoContext, type RepoContext } from './wizard-engine'
 import { validate } from './spec-template'
 
 export interface WizardAnswer {
@@ -40,7 +41,23 @@ function slugFromTitle(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
 }
 
-function buildScaffold(input: SpecFromWizardInput): string {
+/**
+ * Phase 1.10ak: derive a "Foundation-first check" block from the repo context,
+ * if available. Lists files Atlas read during the wizard so the spec author
+ * sees concrete prior art (✅) and known gaps (❓) instead of generic boilerplate.
+ */
+export function buildFoundationFirstFromRepo(repoContext: RepoContext | null): string {
+  if (!repoContext || repoContext.relevantFiles.length === 0) {
+    return '- (no repo context available — wizard ran without GITHUB_PAT or matching files)'
+  }
+  const lines: string[] = []
+  for (const path of repoContext.relevantFiles.slice(0, 10)) {
+    lines.push(`- ✅ ${path} exists (read by Atlas during wizard)`)
+  }
+  return lines.join('\n')
+}
+
+function buildScaffold(input: SpecFromWizardInput, repoContext: RepoContext | null): string {
   const phase = input.phaseId.trim() || 'X.Y'
   const title = input.parentTitle.trim() || 'wizard-generated phase'
   const answersBlock = input.answers
@@ -49,6 +66,7 @@ function buildScaffold(input: SpecFromWizardInput): string {
   const conceptBlock = (input.conceptSummaries ?? []).length > 0
     ? input.conceptSummaries!.slice(0, 6).map(c => `- ${c}`).join('\n')
     : '- (no relevant concepts linked)'
+  const foundationBlock = buildFoundationFirstFromRepo(repoContext)
 
   return `---
 priority: 3
@@ -74,6 +92,10 @@ model: claude-opus-4-7
 1. Ship the feature described by the wizard answers below.
 2. Honor the master plan's foundation-first dependency graph.
 3. Preserve information walls (registered / verified / admin tiers).
+
+## Foundation-first check
+
+${foundationBlock}
 
 ## Architecture
 
@@ -127,9 +149,21 @@ export async function specFromWizard(input: SpecFromWizardInput): Promise<SpecFr
   const phaseSlug = slugFromTitle(input.phaseHint || input.phaseId) || 'plan'
   const filename = `phase-${phaseSlug}-${slug}.md`
 
-  const scaffold = buildScaffold(input)
+  // Phase 1.10ak: pull repo context once so both Claude prompt + scaffold can
+  // see real file paths. Failures degrade silently — never block spec gen.
+  let repoContext: RepoContext | null = null
+  try {
+    repoContext = await loadRepoContext(input.phaseHint || input.phaseId, input.parentTitle)
+  } catch (err) {
+    console.warn('[spec-from-wizard] repo context load failed:', err instanceof Error ? err.message : err)
+  }
+
+  const scaffold = buildScaffold(input, repoContext)
 
   // Try Claude — request a richer body that still parses through validate().
+  const repoFactsBlock = repoContext
+    ? `\nRepo facts (from real codebase, use these in the Foundation-first check):\n- Framework: ${repoContext.index.package_json_summary.framework}\n- Has shadcn/ui: ${repoContext.index.conventions.has_shadcn}\n- Has Tailwind: ${repoContext.index.conventions.has_tailwind}\n- Auth libraries: ${repoContext.index.conventions.auth_libs.join(', ') || 'none yet'}\n- Test framework: ${repoContext.index.conventions.test_framework}\n- Relevant files Atlas read during the wizard:\n${repoContext.relevantFiles.slice(0, 10).map((p) => `  - ${p}`).join('\n')}\n`
+    : ''
   const userPrompt = `Wizard answers for a CropsIntel V3 cockpit-generated spec:
 
 Phase: ${input.phaseId}
@@ -141,7 +175,7 @@ ${input.answers.map(a => `- ${a.questionPrompt} → ${a.freeText ?? a.answer}`).
 ${input.conceptSummaries && input.conceptSummaries.length ? `Linked concepts:\n${input.conceptSummaries.map(c => `- ${c}`).join('\n')}` : ''}
 
 ${input.mode === 'modify' && input.existingSpec ? `Current spec to modify:\n${input.existingSpec.slice(0, 2400)}` : ''}
-
+${repoFactsBlock}
 Return ONLY a Builder-ready spec markdown. It MUST contain literal headers:
 "# Task: Phase ${input.phaseId} — <name>", "## Goal", "## Files" (or "## Architecture"), "## Success criteria", "## Risks + mitigations", "## NEVER list", and lines "**Master plan reference:**", "**Estimated effort:**", "**Model:**", and a frontmatter line "model: <model-id>". No prose outside the markdown.`
 
@@ -200,4 +234,4 @@ function stripFences(text: string): string {
   return (fenceMatch ? fenceMatch[1] : text).trim()
 }
 
-export const __test_only__ = { buildScaffold, slugFromTitle, stripFences }
+export const __test_only__ = { buildScaffold, slugFromTitle, stripFences, buildFoundationFirstFromRepo }

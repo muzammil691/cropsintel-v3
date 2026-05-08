@@ -10,6 +10,8 @@
 
 import { askClaude } from '../providers/claude'
 import { recordCost } from './cost-log'
+import { getFileContent, getFileTree } from './github-client'
+import { getRepoIndex, type RepoIndex } from './repo-index'
 
 export interface WizardQuestion {
   id: string
@@ -17,6 +19,12 @@ export interface WizardQuestion {
   choices: string[]              // 2-5 short option labels
   allowFreeText: boolean         // true → user can type instead of picking
   rationale?: string             // optional hint shown next to the question
+}
+
+export interface RepoContext {
+  index: RepoIndex
+  relevantFiles: string[]        // file paths matched by phase keywords
+  relevantContents: { path: string; content: string }[]  // up to 5 sampled bodies
 }
 
 export interface WizardProposeInput {
@@ -92,6 +100,18 @@ export async function proposeWizardQuestions(
   }
   if (input.recentDoneSpecs && input.recentDoneSpecs.length > 0) {
     parts.push(`Recently shipped specs (context for what's already done):\n- ${input.recentDoneSpecs.slice(0, 8).join('\n- ')}`)
+  }
+
+  // Phase 1.10ak: ground the wizard in real repo state when GITHUB_PAT is set.
+  // Wrap in try/catch so a GitHub blip never blocks question generation.
+  let repoContext: RepoContext | null = null
+  try {
+    repoContext = await loadRepoContext(input.phaseHint, input.parentBody)
+  } catch (err) {
+    console.warn('[wizard-engine] repo context load failed:', err instanceof Error ? err.message : err)
+  }
+  if (repoContext) {
+    parts.push(formatRepoContextForPrompt(repoContext, input.phaseHint))
   }
 
   const userPrompt = `${parts.join('\n\n')}
@@ -184,4 +204,110 @@ function sanitizeQuestions(raw: Array<Record<string, unknown>>): WizardQuestion[
   return out
 }
 
-export const __test_only__ = { extractJson, sanitizeQuestions, DEFAULT_QUESTIONS }
+/**
+ * Pull the cached repo index and a small set of relevant file contents to feed
+ * into the question-generation prompt. Returns null if no PAT/cache is
+ * available, in which case the wizard runs without repo context.
+ */
+export async function loadRepoContext(
+  phaseHint: string,
+  parentBody: string,
+): Promise<RepoContext | null> {
+  const index = await getRepoIndex()
+  if (!index) return null
+  const relevantFiles = await findRelevantFiles(phaseHint, parentBody, index)
+  // Sample up to 5 file bodies; cap total prompt text by truncating each below.
+  const sampled = relevantFiles.slice(0, 5)
+  const fetched = await Promise.all(
+    sampled.map(async (path) => {
+      const content = await getFileContent(path)
+      return { path, content: content ?? '' }
+    }),
+  )
+  return {
+    index,
+    relevantFiles,
+    relevantContents: fetched.filter((f) => f.content.length > 0),
+  }
+}
+
+export function extractKeywords(phaseHint: string, parentBody: string): string[] {
+  const haystack = `${phaseHint} ${parentBody}`.toLowerCase()
+  const candidates = new Set<string>()
+  // Phase ID itself (e.g. "1.3" or "phase-1-3") is a strong signal.
+  if (phaseHint) candidates.add(phaseHint.toLowerCase())
+  // Common domain words we expect to see in CropsIntel V3 specs.
+  const domainWords = [
+    'auth', 'login', 'signup', 'otp', 'rbac', 'role', 'profile',
+    'whatsapp', 'twilio', 'voice', 'tts', 'stt', 'whisper', 'elevenlabs',
+    'supabase', 'migration', 'rls', 'edge', 'function',
+    'broker', 'supplier', 'customer', 'offer', 'enquiry', 'quote',
+    'company', 'contact', 'commodity', 'product', 'relationship',
+    'zyra', 'atlas', 'adela', 'cockpit', 'plan', 'wizard',
+    'dashboard', 'admin', 'team', 'invite', 'session',
+    'cron', 'webhook', 'health', 'heartbeat', 'cost', 'budget',
+  ]
+  for (const w of domainWords) {
+    if (haystack.includes(w)) candidates.add(w)
+  }
+  // Pull standalone alphanumeric tokens 4+ chars long from the title text only,
+  // not the whole body — keeps the keyword set focused.
+  for (const tok of phaseHint.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (tok.length >= 4) candidates.add(tok)
+  }
+  return Array.from(candidates)
+}
+
+async function findRelevantFiles(
+  phaseHint: string,
+  parentBody: string,
+  index: RepoIndex,
+): Promise<string[]> {
+  // Use the directory histogram to pre-screen — but we still need actual paths
+  // to filter, so call getFileTree once. Cached at the API layer if needed.
+  const tree = await getFileTree()
+  const keywords = extractKeywords(phaseHint, parentBody)
+  if (keywords.length === 0) return []
+  return tree
+    .filter((t) => t.type === 'file')
+    .filter((t) => {
+      const lc = t.path.toLowerCase()
+      return keywords.some((k) => lc.includes(k))
+    })
+    .map((t) => t.path)
+    .sort((a, b) => a.length - b.length)
+    .slice(0, 30)
+    // Reference index so the parameter isn't unused; future-proofs us when we
+    // start scoring relevance against the directory histogram.
+    .filter(() => index.total_files > 0)
+}
+
+function formatRepoContextForPrompt(ctx: RepoContext, phaseHint: string): string {
+  const ix = ctx.index
+  const lines: string[] = []
+  lines.push('Repo facts (from real codebase, not assumptions):')
+  lines.push(`- Framework: ${ix.package_json_summary.framework}`)
+  lines.push(`- Has shadcn/ui: ${ix.conventions.has_shadcn}`)
+  lines.push(`- Has Tailwind: ${ix.conventions.has_tailwind}`)
+  lines.push(`- Auth libraries: ${ix.conventions.auth_libs.join(', ') || 'none yet'}`)
+  lines.push(`- Test framework: ${ix.conventions.test_framework}`)
+  const matchingCommits = ix.recent_commits.filter((c) => c.message.toLowerCase().includes(phaseHint.toLowerCase())).slice(0, 5)
+  lines.push(`- Recent commits matching "${phaseHint}": ${matchingCommits.map((c) => c.message).join(', ') || 'none'}`)
+  if (ctx.relevantFiles.length > 0) {
+    lines.push('')
+    lines.push('Relevant existing files in this area:')
+    for (const p of ctx.relevantFiles.slice(0, 10)) lines.push(`- ${p}`)
+  }
+  if (ctx.relevantContents.length > 0) {
+    lines.push('')
+    lines.push('Sample contents (first 1500 chars each):')
+    for (const f of ctx.relevantContents) {
+      lines.push(`--- ${f.path} ---\n${f.content.slice(0, 1500)}`)
+    }
+  }
+  lines.push('')
+  lines.push('Now propose 3-7 multi-choice questions that ground this phase in REAL repo state. Don\'t ask things the repo already answers. If auth files exist, ask about extending vs replacing them. If shadcn/ui is present, ask about which components to use, not whether to use it.')
+  return lines.join('\n')
+}
+
+export const __test_only__ = { extractJson, sanitizeQuestions, DEFAULT_QUESTIONS, extractKeywords, formatRepoContextForPrompt }
