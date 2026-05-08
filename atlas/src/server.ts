@@ -156,6 +156,105 @@ const AGENT_SERVICE_IDS: Record<string, string | undefined> = {
 const heartbeatLastWrite = new Map<string, number>()
 const HEARTBEAT_MIN_INTERVAL_MS = 30_000
 
+// Phase 1.10ag: read atlas_config.builder_heartbeat (mirrored from the receiver
+// above) and surface { spec_id, beat_at, age_seconds } in the shape the cockpit
+// + reaper consume. Returns the empty shape rather than throwing if the row is
+// missing — first deploy after migration may have no row yet.
+interface BuilderHeartbeat {
+  spec_id: string | null
+  beat_at: string | null
+  state: string | null
+  elapsed_s: number | null
+  age_seconds: number | null
+}
+async function readBuilderHeartbeat(): Promise<BuilderHeartbeat> {
+  const empty: BuilderHeartbeat = { spec_id: null, beat_at: null, state: null, elapsed_s: null, age_seconds: null }
+  const sb = getSupabaseClient()
+  if (!sb) return empty
+  const { data, error } = await sb.from('atlas_config').select('value, updated_at').eq('key', 'builder_heartbeat').maybeSingle()
+  if (error || !data) return empty
+  let parsed: Partial<BuilderHeartbeat> = {}
+  try { parsed = JSON.parse(String(data.value ?? '{}')) as Partial<BuilderHeartbeat> } catch { return empty }
+  const beat_at = (parsed.beat_at as string | null | undefined) ?? null
+  const age_seconds = beat_at ? Math.max(0, Math.floor((Date.now() - new Date(beat_at).getTime()) / 1000)) : null
+  return {
+    spec_id: parsed.spec_id ?? null,
+    beat_at,
+    state: parsed.state ?? null,
+    elapsed_s: typeof parsed.elapsed_s === 'number' ? parsed.elapsed_s : null,
+    age_seconds,
+  }
+}
+
+// Phase 1.10ag: cleanup-ghosts — scans .agent/tasks/in-progress/ for files that
+// also exist in cancelled/, failed/, or done/. The terminal-state copy is
+// canonical; the in-progress copy is the ghost (typically left by a redeploy
+// that re-created the spec from a stale auto-requeue Set). Deletes the ghosts,
+// commits + pushes. Returns counts so the caller can ack via cockpit.
+async function cleanupGhostDuplicates(): Promise<{ pruned: number; ghosts: Array<{ file: string; also_in: string }>; pushed: boolean; sha?: string }> {
+  const fs = await import('fs/promises')
+  const path = await import('path')
+  const repoRoot = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
+  const inProgressDir = path.resolve(repoRoot, '.agent/tasks/in-progress')
+  const terminalDirs = ['cancelled', 'failed', 'done'] as const
+
+  let inProgressFiles: string[] = []
+  try { inProgressFiles = await fs.readdir(inProgressDir) } catch { return { pruned: 0, ghosts: [], pushed: false } }
+
+  const ghosts: Array<{ file: string; also_in: string }> = []
+  const removedRel: string[] = []
+  for (const file of inProgressFiles) {
+    if (!file.endsWith('.md') || file === '_template.md') continue
+    for (const dir of terminalDirs) {
+      const terminalPath = path.resolve(repoRoot, `.agent/tasks/${dir}`, file)
+      try {
+        await fs.access(terminalPath)
+        const inProgressRel = `.agent/tasks/in-progress/${file}`
+        const inProgressFull = path.resolve(repoRoot, inProgressRel)
+        await fs.unlink(inProgressFull)
+        ghosts.push({ file, also_in: dir })
+        removedRel.push(inProgressRel)
+        break
+      } catch { /* not in this terminal bucket */ }
+    }
+  }
+
+  if (ghosts.length === 0) return { pruned: 0, ghosts: [], pushed: false }
+
+  // Commit + push. Wrapped in withGitLock through plan-server's helper so the
+  // conductor cron / chat tools never collide on .git/index.lock.
+  const { execFile } = await import('child_process')
+  const { promisify } = await import('util')
+  const execFileP = promisify(execFile)
+  const { withGitLock } = await import('./lib/git-mutex.js')
+  let sha: string | undefined
+  let pushed = false
+  await withGitLock('atlas:cleanup-ghosts', async () => {
+    try { await execFileP('git', ['pull', '--rebase', 'origin', 'main'], { cwd: repoRoot }) } catch { /* keep going */ }
+    for (const rel of removedRel) {
+      try { await execFileP('git', ['add', rel], { cwd: repoRoot }) } catch { /* ignore */ }
+    }
+    try {
+      await execFileP(
+        'git',
+        ['-c', 'user.name=Atlas', '-c', 'user.email=atlas@cropsintel.local', 'commit', '-m', `atlas: pruned ${ghosts.length} ghost duplicate${ghosts.length === 1 ? '' : 's'} from in-progress/`],
+        { cwd: repoRoot },
+      )
+    } catch { /* nothing to commit */ }
+    try {
+      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+      sha = stdout.trim()
+    } catch { /* ignore */ }
+    try {
+      await execFileP('git', ['push', 'origin', 'main'], { cwd: repoRoot })
+      pushed = true
+    } catch (err) {
+      console.warn('[atlas-cleanup-ghosts] push failed:', err instanceof Error ? err.message : err)
+    }
+  })
+  return { pruned: ghosts.length, ghosts, pushed, sha }
+}
+
 // Railway logs cache (10s) — keyed by serviceId.
 interface LogCacheEntry { fetchedAt: number; lines: Array<{ ts: string; line: string }> }
 const railwayLogsCache = new Map<string, LogCacheEntry>()
@@ -3658,7 +3757,42 @@ export async function startServer(): Promise<void> {
         } catch {
           inFlight = []
         }
-        json(res, 200, { queued, in_flight: inFlight })
+
+        // Phase 1.10ag: include builder_heartbeat so the cockpit can show
+        // Builder's actual liveness next to the in-flight spec.
+        const builder_heartbeat = await readBuilderHeartbeat()
+
+        json(res, 200, { queued, in_flight: inFlight, builder_heartbeat })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // Phase 1.10ag: GET /atlas/builder/heartbeat — reads atlas_config.builder_heartbeat
+    // mirrored from the receiver above. Bare wrapper so the cockpit + reaper can
+    // poll the same source of truth without re-reading the agent_heartbeats row.
+    if (url === '/atlas/builder/heartbeat' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      const heartbeat = await readBuilderHeartbeat()
+      json(res, 200, heartbeat)
+      return
+    }
+
+    // Phase 1.10ag: POST /atlas/cleanup/ghosts — admin only. Scans
+    // .agent/tasks/in-progress/, deletes any file whose name also exists in
+    // cancelled/, failed/, or done/ (those copies are the source of truth —
+    // the in-progress copy is the ghost). Commits + pushes if anything changed.
+    if (url === '/atlas/cleanup/ghosts' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      try {
+        const result = await cleanupGhostDuplicates()
+        json(res, 200, result)
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }
@@ -3834,6 +3968,7 @@ export async function startServer(): Promise<void> {
         heartbeatLastWrite.set(agent, now)
         const sb = getSupabaseClient()
         if (!sb) { json(res, 503, { error: 'Supabase not configured' }); return }
+        const beatAt = new Date().toISOString()
         const { error } = await sb
           .from('atlas_agent_heartbeats')
           .upsert({
@@ -3842,9 +3977,35 @@ export async function startServer(): Promise<void> {
             task: payload.task ? String(payload.task).slice(0, 200) : null,
             elapsed_s: typeof payload.elapsed_s === 'number' ? Math.max(0, Math.floor(payload.elapsed_s)) : 0,
             msg: payload.msg ? String(payload.msg).slice(0, 500) : null,
-            updated_at: new Date().toISOString(),
+            updated_at: beatAt,
           }, { onConflict: 'agent' })
         if (error) { json(res, 500, { error: error.message }); return }
+
+        // Phase 1.10ag: mirror Builder's beat into atlas_config.builder_heartbeat
+        // so the reaper can distinguish "spec mtime is old AND Builder is dead"
+        // from "spec mtime is old BUT Builder is still beating on it." Only fires
+        // for the builder agent — other agents have their own heartbeat surfaces.
+        if (agent === 'builder') {
+          const isActive = payload.state !== 'idle' && payload.state !== 'unreachable' && payload.state !== 'stale'
+          const heartbeatValue = JSON.stringify({
+            spec_id: isActive && payload.task ? String(payload.task).slice(0, 200) : null,
+            beat_at: beatAt,
+            state: payload.state,
+            elapsed_s: typeof payload.elapsed_s === 'number' ? Math.max(0, Math.floor(payload.elapsed_s)) : 0,
+          })
+          const { error: cfgErr } = await sb
+            .from('atlas_config')
+            .upsert({
+              key: 'builder_heartbeat',
+              value: heartbeatValue,
+              set_by: 'builder-heartbeat',
+              updated_at: beatAt,
+            }, { onConflict: 'key' })
+          if (cfgErr) {
+            console.warn('[atlas-heartbeat] atlas_config.builder_heartbeat mirror failed:', cfgErr.message)
+          }
+        }
+
         json(res, 200, { ok: true })
         return
       }

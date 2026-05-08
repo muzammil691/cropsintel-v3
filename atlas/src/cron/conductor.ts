@@ -18,7 +18,7 @@ import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type Workfl
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
 import { maybeSummarize } from '../lib/chat-summarizer'
-import { readFile, writeFile, rename, mkdir, readdir, access, stat } from 'fs/promises'
+import { readFile, writeFile, rename, mkdir, readdir, access, stat, rm } from 'fs/promises'
 import { resolve, dirname } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -118,6 +118,11 @@ async function runHeartbeat(): Promise<void> {
     // (which handles Builder-totally-idle). This pass surfaces specs stuck
     // in in-progress/ for >60 min so the user can force-cancel them.
     await detectInProgressZombies(trustMode)
+    // Phase 1.10ag: actually reap the zombies (move to failed/) when Builder's
+    // heartbeat confirms it isn't beating on the spec. Heartbeat-aware so a
+    // long-running spec that's still legitimately under construction is left
+    // alone. detectInProgressZombies above only PINGS — this MOVES.
+    await reapZombieSpecs(trustMode)
     // Phase 1.10aw-rem: opt-in WhatsApp ping when a task ships. Sibling pass
     // (does not modify the audit/ingest behavior); no-op unless
     // WHATSAPP_NOTIFY_NUMBER is set.
@@ -1512,6 +1517,141 @@ async function detectInProgressZombies(trustMode: TrustMode): Promise<void> {
     chosen_option: 'pinged-user',
     rationale: `User-action required: force-cancel via Queue tab or chat`,
   }).catch(() => { /* non-fatal */ })
+}
+
+// Phase 1.10ag: zombie reaper — moves dead in-progress/ specs to failed/.
+// Distinct from detectInProgressZombies (which only WhatsApp-pings the user
+// at 60min): the reaper is heartbeat-aware and acts on its own at 30min when
+// it's confident Builder isn't actually working the spec.
+//
+// Decision matrix:
+//   - in-progress mtime is fresh (<REAPER_THRESHOLD_MIN)         → leave alone.
+//   - mtime is old AND builder_heartbeat.spec_id matches AND     → leave alone
+//     heartbeat is fresh (<HEARTBEAT_FRESH_SECONDS)                (still working).
+//   - mtime is old AND heartbeat is stale OR points elsewhere    → REAP to failed/.
+//
+// Side effects: moves the file, prepends frontmatter recording the reap, then
+// commits + pushes through withGitLock so we don't collide with the autofix
+// lifecycle pass or chat tools.
+const REAPER_THRESHOLD_MIN = parseInt(process.env.ATLAS_REAPER_THRESHOLD_MIN ?? '30', 10)
+const HEARTBEAT_FRESH_SECONDS = parseInt(process.env.ATLAS_REAPER_HEARTBEAT_FRESH_SECONDS ?? '120', 10)
+
+interface BuilderHeartbeatRow {
+  spec_id: string | null
+  beat_at: string | null
+  state?: string | null
+}
+
+async function readBuilderHeartbeatForReaper(): Promise<{ spec_id: string | null; ageSeconds: number }> {
+  const sb = getSupabaseClient()
+  if (!sb) return { spec_id: null, ageSeconds: Number.POSITIVE_INFINITY }
+  try {
+    const { data } = await sb.from('atlas_config').select('value').eq('key', 'builder_heartbeat').maybeSingle()
+    if (!data) return { spec_id: null, ageSeconds: Number.POSITIVE_INFINITY }
+    let parsed: BuilderHeartbeatRow = { spec_id: null, beat_at: null }
+    try { parsed = JSON.parse(String(data.value ?? '{}')) as BuilderHeartbeatRow } catch { /* malformed */ }
+    const ageSeconds = parsed.beat_at
+      ? Math.max(0, Math.floor((Date.now() - new Date(parsed.beat_at).getTime()) / 1000))
+      : Number.POSITIVE_INFINITY
+    return { spec_id: parsed.spec_id ?? null, ageSeconds }
+  } catch (err) {
+    console.warn('[atlas-reaper] heartbeat read failed:', err instanceof Error ? err.message : err)
+    return { spec_id: null, ageSeconds: Number.POSITIVE_INFINITY }
+  }
+}
+
+async function reapZombieSpecs(trustMode: TrustMode): Promise<void> {
+  if (trustMode !== 'auto' && trustMode !== 'confirm') return
+
+  const inProgressDir = resolve(REPO_ROOT, '.agent/tasks/in-progress')
+  const failedDir = resolve(REPO_ROOT, '.agent/tasks/failed')
+  const files = await readdir(inProgressDir).catch(() => [] as string[])
+  const candidates = files.filter(f => f.endsWith('.md') && f !== '_template.md')
+  if (candidates.length === 0) return
+
+  const heartbeat = await readBuilderHeartbeatForReaper()
+  const now = Date.now()
+
+  type ToReap = { taskId: string; file: string; ageMinutes: number; heartbeatAgeSeconds: number }
+  const toReap: ToReap[] = []
+  for (const file of candidates) {
+    let s
+    try { s = await stat(resolve(inProgressDir, file)) } catch { continue }
+    const ageMinutes = (now - s.mtime.getTime()) / 60_000
+    const taskId = file.replace(/\.md$/, '')
+    const isHeartbeating = heartbeat.spec_id === taskId && heartbeat.ageSeconds < HEARTBEAT_FRESH_SECONDS
+    if (isHeartbeating) continue
+    if (ageMinutes >= REAPER_THRESHOLD_MIN) {
+      toReap.push({ taskId, file, ageMinutes, heartbeatAgeSeconds: heartbeat.ageSeconds })
+    }
+  }
+  if (toReap.length === 0) return
+
+  await mkdir(failedDir, { recursive: true }).catch(() => { /* exists */ })
+
+  for (const z of toReap) {
+    const fromRel = `.agent/tasks/in-progress/${z.file}`
+    const toRel = `.agent/tasks/failed/${z.file}`
+    const fromPath = resolve(REPO_ROOT, fromRel)
+    const toPath = resolve(REPO_ROOT, toRel)
+
+    let original = ''
+    try { original = await readFile(fromPath, 'utf-8') } catch { continue }
+
+    const reapedFrontmatter = [
+      '---',
+      `reaped_at: ${new Date().toISOString()}`,
+      `reaped_reason: zombie — exceeded ${REAPER_THRESHOLD_MIN}min in in-progress with no Builder heartbeat`,
+      `builder_heartbeat_age_seconds: ${Number.isFinite(z.heartbeatAgeSeconds) ? Math.floor(z.heartbeatAgeSeconds) : 'infinity'}`,
+      `reaped_age_minutes: ${z.ageMinutes.toFixed(1)}`,
+      '---',
+      '',
+    ].join('\n')
+
+    try {
+      await writeFile(toPath, reapedFrontmatter + original, 'utf-8')
+      await rm(fromPath).catch(() => { /* race */ })
+    } catch (err) {
+      console.warn(`[atlas-reaper] failed to move ${z.file}:`, err instanceof Error ? err.message : err)
+      continue
+    }
+
+    try {
+      await withGitLock(`reaper:${z.taskId}`, async () => {
+        try { await execFileP('git', ['pull', '--rebase', 'origin', 'main'], { cwd: REPO_ROOT }) } catch { /* keep going */ }
+        try { await execFileP('git', ['add', fromRel, toRel], { cwd: REPO_ROOT }) } catch { /* ignore */ }
+        try {
+          await execFileP(
+            'git',
+            ['-c', 'user.name=Atlas', '-c', 'user.email=atlas@cropsintel.local', 'commit', '-m', `atlas: reaped zombie ${z.taskId} (${z.ageMinutes.toFixed(0)}m stuck)`],
+            { cwd: REPO_ROOT },
+          )
+        } catch { /* nothing to commit */ }
+        try { await execFileP('git', ['push', 'origin', 'main'], { cwd: REPO_ROOT }) } catch (err) {
+          console.warn('[atlas-reaper] push failed:', err instanceof Error ? err.message : err)
+        }
+      })
+    } catch (err) {
+      console.warn('[atlas-reaper] git op failed:', err instanceof Error ? err.message : err)
+    }
+
+    try {
+      await sendWhatsAppReply(MUZAMMIL_WHATSAPP, `⚰️ Reaper killed zombie: ${z.taskId} (${z.ageMinutes.toFixed(0)}m stuck)`)
+    } catch (err) {
+      console.warn('[atlas-reaper] WhatsApp ping failed:', err instanceof Error ? err.message : err)
+    }
+
+    await logDecision({
+      fork_question: `Reap zombie ${z.taskId}`,
+      options_considered: {
+        ageMinutes: Number(z.ageMinutes.toFixed(1)),
+        heartbeatAgeSeconds: Number.isFinite(z.heartbeatAgeSeconds) ? Math.floor(z.heartbeatAgeSeconds) : null,
+        thresholdMin: REAPER_THRESHOLD_MIN,
+      },
+      chosen_option: 'reaped',
+      rationale: 'in-progress mtime exceeded threshold and Builder heartbeat did not match this spec',
+    }).catch(() => { /* non-fatal */ })
+  }
 }
 
 // G.2: Auto-requeue passes — when verifier_runs has a recent passed=false

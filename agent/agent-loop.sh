@@ -601,15 +601,18 @@ run_task() {
   # Notify Atlas cockpit that Builder just picked this spec (state=starting).
   post_atlas_heartbeat "starting" "$TASK_NAME" 0 "spec picked"
 
-  # Background heartbeat — emits "still running" every 60s to STDOUT so Railway logs
-  # show the loop is alive even though Claude's output goes to a separate log file.
-  # Without this, Builder LOOKS idle from Railway's perspective for 15-30+ min.
+  # Background heartbeat — emits "still running" every 30s (1.10ag) to STDOUT so
+  # Railway logs show the loop is alive even though Claude's output goes to a
+  # separate log file. Without this, Builder LOOKS idle from Railway's
+  # perspective for 15-30+ min.
   # Also POSTs to Atlas (state=running) so the cockpit chip + pipeline update
-  # without waiting for the conductor's 5-min poll.
+  # without waiting for the conductor's 5-min poll, AND so atlas_config.builder_heartbeat
+  # gets refreshed within the reaper's 120s freshness window.
   local LOG_FILE=".agent/tasks/in-progress/$TASK_NAME.log"
+  local BUILDER_HEARTBEAT_INTERVAL_S="${BUILDER_HEARTBEAT_INTERVAL_S:-30}"
   (
     while true; do
-      sleep 60
+      sleep "$BUILDER_HEARTBEAT_INTERVAL_S"
       local ELAPSED=$(($(date +%s) - START_TIME))
       echo "$LOOP_TAG heartbeat: claude running on $TASK_NAME for ${ELAPSED}s (model=$MODEL)"
       local TAIL_LINE=""
@@ -645,6 +648,11 @@ run_task() {
 
   # Kill the heartbeat now that Claude finished (or timed out)
   kill "$HEARTBEAT_PID" 2>/dev/null || true
+  # Phase 1.10ag: post one final "idle" beat so atlas_config.builder_heartbeat
+  # is cleared and the reaper sees the spec as no-longer-being-worked. Without
+  # this, the last "running" beat lingers for HEARTBEAT_FRESH_SECONDS (120s)
+  # and the reaper waits longer than necessary.
+  post_atlas_heartbeat "idle" "" $(($(date +%s) - START_TIME)) "task complete"
 
   # Detect timeout (exit code 124 = standard `timeout` SIGTERM)
   if [ "$CLAUDE_EXIT" = "124" ]; then

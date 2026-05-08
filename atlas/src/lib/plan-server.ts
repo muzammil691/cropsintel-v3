@@ -169,6 +169,22 @@ export async function findExistingSpecBucket(filename: string): Promise<SpecBuck
   return null
 }
 
+// Phase 1.10ag: strict variant — also checks cancelled/ and failed/. Used by
+// the auto-requeue path so a remediation that was force-cancelled doesn't
+// reappear as a ghost on the next conductor tick (the bug behind the 11
+// ghost-duplicates we cleaned up on 2026-05-08).
+export type SpecBucketStrict = SpecBucket | 'cancelled' | 'failed'
+export async function findExistingSpecBucketStrict(filename: string): Promise<SpecBucketStrict | null> {
+  const buckets: SpecBucketStrict[] = ['queued', 'in-progress', 'done', 'cancelled', 'failed']
+  for (const bucket of buckets) {
+    try {
+      await readFile(resolve(REPO_ROOT, `.agent/tasks/${bucket}`, filename), 'utf-8')
+      return bucket
+    } catch { /* not in this bucket */ }
+  }
+  return null
+}
+
 /** Build the standard refuse-to-queue error message — exported so callers
  *  (chat tools, HTTP routes) can compose consistent messaging. */
 export function buildDuplicateSpecError(filename: string, bucket: SpecBucket): string {
@@ -234,11 +250,24 @@ export async function requeueWithGaps(args: {
   // Compute remediation filename. Skip if already queued/in-progress (idempotent).
   const remSuffix = attempt === 1 ? '-rem' : `-rem${attempt}`
   const remFilename = `${args.taskId}${remSuffix}.md`
-  const existing = await findExistingSpecBucket(remFilename)
-  if (existing === 'queued' || existing === 'in-progress') {
-    return { ok: true, filename: remFilename, reason: `already ${existing} (idempotent no-op)` }
+  // Phase 1.10ag — strict bucket check covers cancelled/ and failed/ too. If
+  // the remediation already lives in a terminal bucket, refuse and audit-log:
+  // re-queueing it would produce a ghost duplicate when the conductor's
+  // in-memory dedup Set decays on Railway redeploy.
+  const existingStrict = await findExistingSpecBucketStrict(remFilename)
+  if (existingStrict === 'queued' || existingStrict === 'in-progress') {
+    return { ok: true, filename: remFilename, reason: `already ${existingStrict} (idempotent no-op)` }
   }
-  if (existing === 'done') {
+  if (existingStrict === 'cancelled' || existingStrict === 'failed') {
+    await logGhostBlocked(remFilename, existingStrict)
+    if (existingStrict === 'failed') {
+      // Failed remediations can be retried by bumping attempt — that's the
+      // existing 3-attempt cap behavior. Cancelled is terminal (operator intent).
+      return requeueWithGaps({ ...args, attempt: attempt + 1 })
+    }
+    return { ok: false, filename: remFilename, reason: `already ${existingStrict} — refusing ghost re-queue` }
+  }
+  if (existingStrict === 'done') {
     // Try the next attempt number.
     return requeueWithGaps({ ...args, attempt: attempt + 1 })
   }
@@ -265,6 +294,108 @@ export async function requeueWithGaps(args: {
     [relPath],
   )
   return { ok: true, filename: remFilename, sha: result.sha, pushed: result.pushed }
+}
+
+// Phase 1.10ag: log a ghost-requeue block to agent_audit_log so we can prove
+// the guard fired (and over time, count how often the bug would have hit
+// without the fix). Failures here are non-fatal — the audit row is observability,
+// not a hard dependency of the requeue path.
+async function logGhostBlocked(filename: string, existingState: string): Promise<void> {
+  const sb = getSupabaseClient()
+  if (!sb) return
+  try {
+    await sb.from('agent_audit_log').insert({
+      agent_name: 'atlas',
+      action_type: 'ghost_requeue_blocked',
+      payload: {
+        filename,
+        existing_state: existingState,
+        blocked_at: new Date().toISOString(),
+      },
+      status: 'success',
+    })
+  } catch (err) {
+    console.warn('[plan-server] ghost_requeue_blocked audit insert failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+// Phase 1.10ag — safeRequeue: refuses to re-create a spec already present in
+// any terminal state (cancelled/, failed/, done/) OR currently active
+// (in-progress/, queued/). Used by call sites that want to surface a queued
+// spec idempotently without producing ghost duplicates.
+//
+// Unlike requeueWithGaps, this works for arbitrary spec ids — it does NOT
+// inject Verifier gaps. The caller supplies the spec body. If the caller has
+// no body (and the spec doesn't already exist anywhere), safeRequeue returns
+// ok:false with reason 'no_source' so the caller can decide what to do.
+export async function safeRequeue(args: {
+  specId: string
+  body?: string
+}): Promise<{ ok: boolean; created?: boolean; reason?: string; sha?: string; pushed?: boolean }> {
+  const filename = `${args.specId}.md`
+  const bucket = await findExistingSpecBucketStrict(filename)
+  if (bucket === 'queued' || bucket === 'in-progress') {
+    return { ok: true, created: false, reason: `already in ${bucket}` }
+  }
+  if (bucket === 'cancelled' || bucket === 'failed' || bucket === 'done') {
+    await logGhostBlocked(filename, bucket)
+    return { ok: false, created: false, reason: `already in ${bucket}` }
+  }
+  if (!args.body) {
+    return { ok: false, created: false, reason: 'no_source — caller must supply spec body for a fresh queue' }
+  }
+  const relPath = `.agent/tasks/queued/${filename}`
+  const fullPath = resolve(REPO_ROOT, relPath)
+  await writeFile(fullPath, args.body, 'utf-8')
+  const result = await gitCommitAndPush(`atlas: safe-requeue ${args.specId}`, [relPath])
+  return { ok: true, created: true, sha: result.sha, pushed: result.pushed }
+}
+
+// Phase 1.10ag — safeRequeueWithReset: explicit operator-only path that wipes
+// the spec from every bucket (archiving prior copies under
+// .agent/tasks/cancelled/.archive/<ts>/) and creates a fresh queued copy.
+// Use only when the operator genuinely wants to retry a force-cancelled spec.
+export async function safeRequeueWithReset(args: {
+  specId: string
+  body: string
+}): Promise<{ ok: boolean; archived: string[]; sha?: string; pushed?: boolean }> {
+  const filename = `${args.specId}.md`
+  const ts = Date.now()
+  const archiveDirRel = `.agent/tasks/cancelled/.archive/${ts}`
+  const archiveDir = resolve(REPO_ROOT, archiveDirRel)
+  const archived: string[] = []
+  const buckets: SpecBucketStrict[] = ['queued', 'in-progress', 'cancelled', 'failed', 'done']
+
+  const { mkdir, rename: fsRename } = await import('fs/promises')
+  await mkdir(archiveDir, { recursive: true }).catch(() => { /* exists */ })
+
+  for (const b of buckets) {
+    const fromRel = `.agent/tasks/${b}/${filename}`
+    const fromPath = resolve(REPO_ROOT, fromRel)
+    try {
+      await readFile(fromPath, 'utf-8')
+    } catch {
+      continue
+    }
+    const toRel = `${archiveDirRel}/${b}-${filename}`
+    const toPath = resolve(REPO_ROOT, toRel)
+    try {
+      await fsRename(fromPath, toPath)
+      archived.push(`${b}/${filename}`)
+    } catch (err) {
+      console.warn(`[plan-server] safeRequeueWithReset failed to archive ${fromRel}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  const queuedRel = `.agent/tasks/queued/${filename}`
+  const queuedPath = resolve(REPO_ROOT, queuedRel)
+  await writeFile(queuedPath, args.body, 'utf-8')
+
+  const result = await gitCommitAndPush(
+    `atlas: safe-requeue-with-reset ${args.specId} (archived ${archived.length} prior copies)`,
+    [queuedRel, archiveDirRel],
+  )
+  return { ok: true, archived, sha: result.sha, pushed: result.pushed }
 }
 
 function buildGapsSection(gaps: VerifierGap[], taskId: string, attempt: number): string {
