@@ -165,7 +165,7 @@ function PlanNodeRow(props: PlanNodeRowProps) {
     <div className="border-l border-transparent">
       <div
         className={cn(
-          'flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer group',
+          'flex items-start gap-1 px-1.5 py-1.5 rounded-md transition-colors duration-200 hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer group sm:gap-2 sm:px-2',
           isSelected && 'bg-slate-100 dark:bg-slate-900/60',
           cockpitTint,
         )}
@@ -234,7 +234,7 @@ function PlanNodeRow(props: PlanNodeRowProps) {
             <div className="text-xs text-slate-500 truncate">{preview}{node.body.length > 80 ? '…' : ''}</div>
           )}
         </div>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex flex-wrap items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 sm:flex-nowrap sm:gap-1.5">
           {props.onCockpitAction && (
             <PlanActionButtons
               node={node}

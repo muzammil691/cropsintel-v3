@@ -25,7 +25,10 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
   return (
     <div
       data-testid="plan-action-buttons"
-      className={cn('flex items-center gap-0.5', className)}
+      className={cn(
+        'flex flex-wrap items-center gap-1 sm:flex-nowrap sm:gap-1.5',
+        className,
+      )}
     >
       <Button
         type="button"

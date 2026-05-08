@@ -186,6 +186,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           onClick={() => setIntake(intake === 'paste' ? null : 'paste')}
           className="text-[11px] h-7"
           aria-pressed={intake === 'paste'}
+          aria-label="Paste concept"
         >
           <Plus className="size-3" /> Paste
         </Button>
@@ -198,6 +199,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           }}
           className="text-[11px] h-7"
           aria-pressed={intake === 'upload'}
+          aria-label="Upload file"
         >
           <Paperclip className="size-3" /> Upload
         </Button>
@@ -207,6 +209,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           onClick={() => setIntake(intake === 'voice' ? null : 'voice')}
           className="text-[11px] h-7"
           aria-pressed={intake === 'voice'}
+          aria-label="Record voice"
         >
           <Mic className="size-3" /> Voice
         </Button>
@@ -216,6 +219,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           onClick={() => setIntake(intake === 'past-chat' ? null : 'past-chat')}
           className="text-[11px] h-7"
           aria-pressed={intake === 'past-chat'}
+          aria-label="Link past chat"
         >
           <Search className="size-3" /> Past chat
         </Button>
@@ -229,7 +233,8 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             e.target.value = ''
           }}
           className="sr-only"
-          aria-label="Upload concept file"
+          aria-hidden="true"
+          tabIndex={-1}
         />
       </div>
 

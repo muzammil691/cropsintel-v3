@@ -55,7 +55,7 @@ export function PhaseApprovalBanner(props: PhaseApprovalBannerProps) {
           <p className="text-xs font-semibold text-emerald-900 dark:text-emerald-200">
             Phase {phaseId} ready to start.
           </p>
-          <p className="text-[11px] text-emerald-800 dark:text-emerald-300 truncate">
+          <p className="text-xs text-emerald-800 dark:text-emerald-300 truncate">
             {title}
             {description && <span className="text-emerald-700/80"> — {description}</span>}
           </p>
@@ -65,7 +65,8 @@ export function PhaseApprovalBanner(props: PhaseApprovalBannerProps) {
             size="sm"
             onClick={() => handleDecision('approve')}
             disabled={busy || decided !== null}
-            className="text-[11px] h-7"
+            aria-label="Approve phase"
+            className="text-xs h-7 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           >
             {busy && decided === null ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
             Approve
@@ -75,7 +76,8 @@ export function PhaseApprovalBanner(props: PhaseApprovalBannerProps) {
             variant="outline"
             onClick={() => handleDecision('modify')}
             disabled={busy || decided !== null}
-            className="text-[11px] h-7"
+            aria-label="Modify phase"
+            className="text-xs h-7 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           >
             <Pencil className="size-3" /> Modify
           </Button>
@@ -84,7 +86,8 @@ export function PhaseApprovalBanner(props: PhaseApprovalBannerProps) {
             variant="outline"
             onClick={() => handleDecision('skip')}
             disabled={busy || decided !== null}
-            className="text-[11px] h-7"
+            aria-label="Skip phase"
+            className="text-xs h-7 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           >
             <SkipForward className="size-3" /> Skip
           </Button>
@@ -93,19 +96,20 @@ export function PhaseApprovalBanner(props: PhaseApprovalBannerProps) {
             variant="ghost"
             onClick={() => handleDecision('pause')}
             disabled={busy || decided !== null}
-            className="text-[11px] h-7"
+            aria-label="Pause phase"
+            className="text-xs h-7 focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           >
             <Pause className="size-3" /> Pause
           </Button>
         </div>
       </div>
       {decided && (
-        <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+        <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">
           Recorded: {decided}.
         </p>
       )}
       {error && (
-        <p className="mt-1 text-[11px] text-red-700 dark:text-red-400">{error}</p>
+        <p className="mt-1 text-xs text-red-700 dark:text-red-400">{error}</p>
       )}
     </div>
   )
