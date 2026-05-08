@@ -1386,6 +1386,10 @@ export async function followPhase(input: {
   conceptSummaries?: string[]
   existingSpec?: string
   isNewPhase: boolean
+  /** Phase 1.10am — when set, /atlas/plan/follow writes this markdown verbatim
+   *  instead of re-running spec-from-wizard. Used by the deep multi-turn wizard
+   *  whose final spec_draft is already complete (and may have been edited). */
+  overrideSpecMarkdown?: string
 }): Promise<FollowPhaseResponse> {
   return fetchJson<FollowPhaseResponse>(`${ATLAS_URL}/atlas/plan/follow`, {
     method: 'POST',
@@ -1405,8 +1409,132 @@ export async function followPhase(input: {
       concept_summaries: input.conceptSummaries,
       existing_spec: input.existingSpec,
       is_new_phase: input.isNewPhase,
+      override_spec_markdown: input.overrideSpecMarkdown,
     }),
   })
+}
+
+// ─── Phase 1.10am — Deep multi-turn wizard ─────────────────────────────────
+// The cockpit drives the wizard one turn at a time:
+//   1. startDeepWizard() → first session + first turn
+//   2. answerDeepWizard() repeated until session.state.is_complete
+//   3. followPhase({ overrideSpecMarkdown: session.state.spec_draft }) to save
+
+export interface WizardTurn {
+  question: string
+  options: string[]
+  allow_freeform: boolean
+  rationale: string
+}
+
+export interface WizardHistoryEntry {
+  question: string
+  answer: string
+}
+
+export interface WizardState {
+  phase_id: string
+  parent_title: string
+  parent_body: string
+  phase_hint: string
+  mode: 'add' | 'modify'
+  existing_spec?: string
+  concept_summaries?: string[]
+  history: WizardHistoryEntry[]
+  total_turns: number
+  is_complete: boolean
+  clarity_score: number
+  current_turn?: WizardTurn
+  spec_draft?: string
+  summary_of_decisions?: string
+}
+
+export interface WizardSession {
+  id: string
+  phase_id: string
+  state: WizardState
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface DeepWizardStartResponse {
+  ok: true
+  session: WizardSession
+  source: 'claude' | 'fallback'
+  costUsd: number
+}
+
+export async function startDeepWizard(input: {
+  phaseId: string
+  parentTitle: string
+  parentBody: string
+  phaseHint: string
+  mode: 'add' | 'modify'
+  existingSpec?: string
+  conceptSummaries?: string[]
+}): Promise<DeepWizardStartResponse> {
+  return fetchJson<DeepWizardStartResponse>(`${ATLAS_URL}/atlas/wizard/start`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      phase_id: input.phaseId,
+      parent_title: input.parentTitle,
+      parent_body: input.parentBody,
+      phase_hint: input.phaseHint,
+      mode: input.mode,
+      existing_spec: input.existingSpec,
+      concept_summaries: input.conceptSummaries,
+    }),
+  })
+}
+
+export interface DeepWizardAnswerResponse {
+  ok: true
+  session: WizardSession
+  source: 'claude' | 'fallback'
+  costUsd: number
+  completion?: {
+    kind: 'complete'
+    current_clarity: number
+    summary_of_decisions: string
+    spec_draft: string
+  }
+}
+
+export async function answerDeepWizard(input: {
+  sessionId: string
+  answer: string
+}): Promise<DeepWizardAnswerResponse> {
+  return fetchJson<DeepWizardAnswerResponse>(`${ATLAS_URL}/atlas/wizard/answer`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: input.sessionId,
+      answer: input.answer,
+    }),
+  })
+}
+
+export async function getDeepWizardSession(sessionId: string): Promise<{ ok: true; session: WizardSession }> {
+  return fetchJson<{ ok: true; session: WizardSession }>(
+    `${ATLAS_URL}/atlas/wizard/session/${encodeURIComponent(sessionId)}`,
+    { headers: authHeaders() },
+  )
+}
+
+export async function deleteDeepWizardSession(sessionId: string): Promise<{ ok: boolean }> {
+  return fetchJson<{ ok: boolean }>(
+    `${ATLAS_URL}/atlas/wizard/session/${encodeURIComponent(sessionId)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  )
+}
+
+export async function findResumableDeepWizard(phaseId: string): Promise<{ ok: true; session: WizardSession | null }> {
+  return fetchJson<{ ok: true; session: WizardSession | null }>(
+    `${ATLAS_URL}/atlas/wizard/resumable?phase_id=${encodeURIComponent(phaseId)}`,
+    { headers: authHeaders() },
+  )
 }
 
 export async function revisitPlanNode(

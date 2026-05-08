@@ -109,6 +109,13 @@ import { getWorkflowGraph, clearWorkflowCache } from './lib/workflow-parser'
 import { setPlanNodeState, clearPlanNodeState } from './lib/plan-state'
 import { startAddWizard, startModifyWizard, followPhase, toggleRevisit } from './lib/plan-action-handler'
 import { specFromWizard } from './lib/spec-from-wizard'
+import {
+  startSession as startWizardSession,
+  answerSession as answerWizardSession,
+  getSession as getWizardSession,
+  deleteSession as deleteWizardSession,
+  findResumableSession as findResumableWizardSession,
+} from './lib/wizard-session'
 import { preflight as buildRunnerPreflight, runBuild as buildRunnerRun, type BuildRunnerNode } from './lib/build-runner'
 import { routeApproval, parseKeywordDecision, isApprovedWhatsAppSender } from './lib/approval-router'
 import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind, type DiagnosisBucket } from './lib/diagnose'
@@ -3799,6 +3806,141 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // ─── Phase 1.10am — deep multi-turn wizard ─────────────────────────────
+    // POST /atlas/wizard/start — open a new session and return the first turn.
+    if (url === '/atlas/wizard/start' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        phase_id?: string
+        parent_title?: string
+        parent_body?: string
+        phase_hint?: string
+        mode?: 'add' | 'modify'
+        existing_spec?: string
+        concept_summaries?: string[]
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.phase_id || !payload.parent_title) {
+        json(res, 400, { error: 'phase_id and parent_title required' })
+        return
+      }
+      try {
+        const result = await startWizardSession({
+          phaseId: payload.phase_id,
+          parentTitle: payload.parent_title,
+          parentBody: payload.parent_body ?? '',
+          phaseHint: payload.phase_hint ?? 'plan',
+          mode: payload.mode ?? 'add',
+          existingSpec: payload.existing_spec,
+          conceptSummaries: payload.concept_summaries,
+          createdBy: principal.phone,
+        })
+        json(res, 200, { ok: true, ...result })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/wizard/answer — record the user's answer and fetch the next
+    // turn (or completion).
+    if (url === '/atlas/wizard/answer' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { session_id?: string; answer?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.session_id || typeof payload.answer !== 'string') {
+        json(res, 400, { error: 'session_id and answer required' })
+        return
+      }
+      try {
+        const result = await answerWizardSession({
+          sessionId: payload.session_id,
+          answer: payload.answer,
+        })
+        if ('ok' in result && result.ok === false) {
+          json(res, 409, { ok: false, reason: result.reason })
+          return
+        }
+        json(res, 200, { ok: true, ...(result as Record<string, unknown>) })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // GET /atlas/wizard/session/:id — fetch a session for resume.
+    if (method === 'GET' && url.startsWith('/atlas/wizard/session/')) {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const id = decodeURIComponent(url.replace('/atlas/wizard/session/', '').split('?')[0]).trim()
+      if (!id) { json(res, 400, { error: 'session id required' }); return }
+      try {
+        const session = await getWizardSession(id)
+        if (!session) { json(res, 404, { error: 'session_not_found' }); return }
+        json(res, 200, { ok: true, session })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // DELETE /atlas/wizard/session/:id — abandon a session.
+    if (method === 'DELETE' && url.startsWith('/atlas/wizard/session/')) {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const id = decodeURIComponent(url.replace('/atlas/wizard/session/', '').split('?')[0]).trim()
+      if (!id) { json(res, 400, { error: 'session id required' }); return }
+      try {
+        const result = await deleteWizardSession(id)
+        json(res, 200, { ok: result.ok })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // GET /atlas/wizard/resumable?phase_id=… — find an in-progress session for
+    // a phase, so the cockpit can prompt "Resume?" when the user reopens.
+    if (method === 'GET' && url.startsWith('/atlas/wizard/resumable')) {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const qs = url.split('?')[1] ?? ''
+      const params = new URLSearchParams(qs)
+      const phaseId = params.get('phase_id')?.trim()
+      if (!phaseId) { json(res, 400, { error: 'phase_id required' }); return }
+      try {
+        const session = await findResumableWizardSession(phaseId)
+        json(res, 200, { ok: true, session })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
     // POST /atlas/plan/follow — persist wizard-generated spec, set follow
     // state on the node, and (when isNewPhase) append phase to master plan.
     if (url === '/atlas/plan/follow' && method === 'POST') {
@@ -3819,6 +3961,7 @@ export async function startServer(): Promise<void> {
         concept_summaries?: string[]
         existing_spec?: string
         is_new_phase?: boolean
+        override_spec_markdown?: string
       }
       try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
       if (!payload.plan_node_id || !payload.parent_title || !payload.phase_id) {
@@ -3842,6 +3985,7 @@ export async function startServer(): Promise<void> {
           existingSpec: payload.existing_spec,
           isNewPhase: payload.is_new_phase === true,
           actorPhone: principal.phone,
+          overrideSpecMarkdown: payload.override_spec_markdown,
         })
         json(res, result.ok ? 200 : 409, result)
       } catch (err) {

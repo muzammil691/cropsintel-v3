@@ -17,6 +17,7 @@ import { resolve } from 'path'
 import { setPlanNodeState, clearPlanNodeState } from './plan-state'
 import { proposeWizardQuestions, type WizardQuestion, type WizardProposeInput } from './wizard-engine'
 import { specFromWizard, type WizardAnswer, type SpecFromWizardResult } from './spec-from-wizard'
+import { validate as validateSpecTemplate } from './spec-template'
 import { findExistingSpecBucket, buildDuplicateSpecError, REPO_ROOT } from './plan-server'
 import { withGitLock } from './git-mutex'
 import { execFile } from 'child_process'
@@ -76,6 +77,13 @@ export interface FollowPhaseInput {
    */
   isNewPhase: boolean
   actorPhone?: string
+  /**
+   * Phase 1.10am — when the deep multi-turn wizard wraps, it returns a complete
+   * spec markdown (`spec_draft`). The user can edit it, then post it back. If
+   * `overrideSpecMarkdown` is set we skip spec-from-wizard entirely and write
+   * the supplied markdown verbatim. The `answers[]` are still used for audit.
+   */
+  overrideSpecMarkdown?: string
 }
 
 export interface FollowPhaseResult {
@@ -96,15 +104,17 @@ export interface FollowPhaseResult {
  * spec in queued/, in-progress/, or done/ buckets.
  */
 export async function followPhase(input: FollowPhaseInput): Promise<FollowPhaseResult> {
-  const spec = await specFromWizard({
-    parentTitle: input.parentTitle,
-    phaseId: input.phaseId,
-    phaseHint: input.phaseHint,
-    mode: input.mode,
-    answers: input.answers,
-    conceptSummaries: input.conceptSummaries,
-    existingSpec: input.existingSpec,
-  })
+  const spec = input.overrideSpecMarkdown
+    ? buildOverrideSpecResult(input)
+    : await specFromWizard({
+        parentTitle: input.parentTitle,
+        phaseId: input.phaseId,
+        phaseHint: input.phaseHint,
+        mode: input.mode,
+        answers: input.answers,
+        conceptSummaries: input.conceptSummaries,
+        existingSpec: input.existingSpec,
+      })
 
   const existing = await findExistingSpecBucket(spec.filename)
   if (existing) {
@@ -158,6 +168,28 @@ export async function followPhase(input: FollowPhaseInput): Promise<FollowPhaseR
     pushed: commit.pushed,
     sha: commit.sha,
     masterPlanUpdated,
+  }
+}
+
+/**
+ * Phase 1.10am — when the deep wizard hands back a complete `spec_draft` (and
+ * the user may have edited it), we skip spec-from-wizard and write the
+ * markdown verbatim. We still wrap it in a SpecFromWizardResult so the rest
+ * of followPhase doesn't branch.
+ */
+function buildOverrideSpecResult(input: FollowPhaseInput): SpecFromWizardResult {
+  const slug = (input.parentTitle || 'cockpit-wizard').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'cockpit-wizard'
+  const phaseSlug = (input.phaseHint || input.phaseId || 'plan').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'plan'
+  const filename = `phase-${phaseSlug}-${slug}.md`
+  const markdown = input.overrideSpecMarkdown ?? ''
+  const v = validateSpecTemplate(markdown)
+  return {
+    filename,
+    markdown,
+    validationOk: v.ok,
+    validationErrors: v.errors,
+    source: 'claude',
+    costUsd: 0,
   }
 }
 
