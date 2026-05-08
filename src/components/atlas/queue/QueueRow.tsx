@@ -17,6 +17,13 @@ interface QueueRowProps {
   startedAt?: string | null
   canManage: boolean
   busy?: boolean
+  /** 1.10af: Builder hasn't published a heartbeat in >120s while this spec is
+   *  in-progress. Renders a red border + "Builder unresponsive" label instead
+   *  of the live elapsed timer (the timer is lying when Builder isn't running). */
+  builderUnresponsive?: boolean
+  /** 1.10af: minutes since the Builder heartbeat was last seen, used to render
+   *  the "last seen Nm ago" label when builderUnresponsive is true. */
+  builderLastSeenMin?: number | null
   /** Pillar B.1: positional move (replaces the old priority +/- buttons). */
   onMoveUp?: () => void
   onMoveDown?: () => void
@@ -50,6 +57,8 @@ export function QueueRow({
   startedAt,
   canManage,
   busy,
+  builderUnresponsive,
+  builderLastSeenMin,
   onMoveUp,
   onMoveDown,
   onEdit,
@@ -66,9 +75,12 @@ export function QueueRow({
   const isStuck = isInFlight && stuckMinutes >= STUCK_THRESHOLD_MIN
   return (
     <li
+      data-testid={isInFlight ? `queue-row-inflight-${taskId}` : `queue-row-${taskId}`}
       className={cn(
         'rounded-md border p-3',
-        isInFlight && isStuck
+        isInFlight && builderUnresponsive
+          ? 'border-red-400 dark:border-red-700 bg-red-50/60 dark:bg-red-950/40'
+          : isInFlight && isStuck
           ? 'border-amber-400 dark:border-amber-700 bg-amber-50/60 dark:bg-amber-950/40'
           : isInFlight
           ? 'border-emerald-300 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/30'
@@ -88,9 +100,15 @@ export function QueueRow({
         </code>
         <span className={cn(
           'ml-auto text-[10px] uppercase tracking-wider tabular-nums whitespace-nowrap',
-          isStuck ? 'text-amber-700 dark:text-amber-300 font-semibold' : 'text-slate-500',
+          isInFlight && builderUnresponsive
+            ? 'text-red-700 dark:text-red-300 font-semibold'
+            : isStuck
+            ? 'text-amber-700 dark:text-amber-300 font-semibold'
+            : 'text-slate-500',
         )}>
-          {isStuck
+          {isInFlight && builderUnresponsive
+            ? 'BUILDER UNRESPONSIVE'
+            : isStuck
             ? `STUCK? ${stuckMinutes}m`
             : isInFlight
             ? 'IN-PROGRESS'
@@ -101,7 +119,15 @@ export function QueueRow({
       </div>
 
       <div className="mt-1 text-[11px] text-slate-500 flex items-center gap-2 flex-wrap">
-        {isInFlight ? (
+        {isInFlight && builderUnresponsive ? (
+          <span className="inline-flex items-center gap-1 text-red-700 dark:text-red-300 font-medium">
+            <AlertTriangle className="size-3" aria-hidden />
+            Builder unresponsive — last seen{' '}
+            {builderLastSeenMin === null
+              ? 'unknown'
+              : `${builderLastSeenMin}m ago`}
+          </span>
+        ) : isInFlight ? (
           <>
             <span className="inline-flex items-center gap-1">
               <Clock className="size-3" aria-hidden />

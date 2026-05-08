@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Sparkles, Settings, LogOut, Hammer, Users } from 'lucide-react'
+import { Sparkles, Settings, LogOut, Hammer, Users, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -14,6 +14,7 @@ import { TrustModeBadge } from './TrustModeBadge'
 import { ProjectSwitcher } from './projects/ProjectSwitcher'
 import {
   fetchAtlasMe,
+  fetchMode,
   logoutAtlas,
   setMode,
   type AtlasCosts,
@@ -57,6 +58,7 @@ export function AtlasHeader({
   const navigate = useNavigate()
   const [trustDialogOpen, setTrustDialogOpen] = useState(false)
   const [trustUpdating, setTrustUpdating] = useState(false)
+  const [trustError, setTrustError] = useState<string | null>(null)
   const [costDialogOpen, setCostDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
@@ -80,9 +82,8 @@ export function AtlasHeader({
     }
   }, [])
 
-  // Persist trust-mode choice across refreshes (defensive — server is the
-  // source of truth; the localStorage entry is just an optimistic mirror so
-  // the UI doesn't flash on reload).
+  // 1.10af: persist a localStorage hint for fast first-paint on reload, but
+  // never trust it — the badge always reflects the most recent server poll.
   useEffect(() => {
     if (trustMode) {
       try {
@@ -93,17 +94,54 @@ export function AtlasHeader({
     }
   }, [trustMode])
 
+  // 1.10af: dedicated /atlas/mode poll every 10s. /atlas/status already feeds
+  // trust_mode every 5s, so this is belt-and-braces — if status drifts (e.g.
+  // status is stale-cached) the dedicated mode endpoint still keeps the badge
+  // honest. On every successful response we push the server-confirmed mode
+  // into the parent so any optimistic local override is corrected.
+  useEffect(() => {
+    let cancelled = false
+    const sync = async () => {
+      try {
+        const r = await fetchMode()
+        if (cancelled) return
+        if (r.mode && r.mode !== trustMode) {
+          onTrustModeChange(r.mode)
+        }
+      } catch {
+        // ignore — status polling is the primary source.
+      }
+    }
+    void sync()
+    const id = window.setInterval(sync, 10_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+    // We intentionally re-run this effect when trustMode changes so the
+    // comparison against server's value uses fresh local state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trustMode, onTrustModeChange])
+
   const overallStatus = computeOverall(status)
   const todayCost = costs?.today ?? 0
 
   async function handleSetTrust(mode: TrustMode) {
     setTrustUpdating(true)
+    setTrustError(null)
     try {
-      await setMode(mode)
-      onTrustModeChange(mode)
+      // 1.10af: trust the SERVER's confirmed mode, not the requested one.
+      // If the server hot-corrects the value (e.g. clamping by policy), the
+      // badge follows the server — no optimistic divergence.
+      const result = await setMode(mode)
+      onTrustModeChange(result.mode)
+      setTrustDialogOpen(false)
+    } catch (err) {
+      // 1.10af: do NOT optimistically update on failure — leave the badge at
+      // its previous server-confirmed value and surface an error toast.
+      setTrustError(err instanceof Error ? err.message : 'mode change failed')
     } finally {
       setTrustUpdating(false)
-      setTrustDialogOpen(false)
     }
   }
 
@@ -134,11 +172,21 @@ export function AtlasHeader({
         <button
           type="button"
           onClick={() => setTrustDialogOpen(true)}
-          className="rounded-full transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+          className="relative rounded-full transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
           aria-label="Change trust mode"
+          aria-busy={trustUpdating || undefined}
           title="Change trust mode"
         >
           <TrustModeBadge mode={trustMode} />
+          {trustUpdating && (
+            <span
+              data-testid="trust-mode-spinner"
+              aria-hidden
+              className="absolute inset-0 grid place-items-center rounded-full bg-white/60 dark:bg-slate-950/60"
+            >
+              <Loader2 className="size-3 animate-spin text-emerald-700 dark:text-emerald-300" />
+            </span>
+          )}
         </button>
         <InFlightChip heartbeat={heartbeats?.builder} onClick={onOpenAgentsTab} />
       </div>
@@ -205,7 +253,13 @@ export function AtlasHeader({
       </div>
 
       {/* Trust-mode dialog */}
-      <Dialog open={trustDialogOpen} onOpenChange={setTrustDialogOpen}>
+      <Dialog
+        open={trustDialogOpen}
+        onOpenChange={(o) => {
+          setTrustDialogOpen(o)
+          if (!o) setTrustError(null)
+        }}
+      >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Trust mode</DialogTitle>
@@ -233,9 +287,31 @@ export function AtlasHeader({
               </li>
             ))}
           </ul>
+          {trustError && (
+            <div
+              role="alert"
+              data-testid="trust-mode-error"
+              className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-700 dark:text-red-300"
+            >
+              Mode change failed: {trustError}
+            </div>
+          )}
           <DialogFooter showCloseButton />
         </DialogContent>
       </Dialog>
+
+      {/* 1.10af: floating error toast — visible even after dialog closes so the
+          operator never thinks the mode change succeeded silently. */}
+      {trustError && !trustDialogOpen && (
+        <div
+          role="status"
+          data-testid="trust-mode-error-toast"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 rounded-md bg-red-600 text-white px-3 py-1.5 text-xs shadow-lg"
+        >
+          Mode change failed: {trustError}
+        </div>
+      )}
 
       {/* Cost dialog */}
       <Dialog open={costDialogOpen} onOpenChange={setCostDialogOpen}>

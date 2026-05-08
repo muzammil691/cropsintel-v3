@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Inbox, RefreshCw, RefreshCcw, AlertTriangle } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Inbox, RefreshCw, RefreshCcw, AlertTriangle, WifiOff } from 'lucide-react'
 import { TabFrame } from './AtlasPlanTab'
 import { QueueRow } from '../queue/QueueRow'
 import { Button } from '@/components/ui/button'
@@ -44,6 +44,11 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     taskId: string
     mode: 'cancel' | 'force-cancel'
   } | null>(null)
+  // 1.10af: track last successful queue fetch so the UI can show a stale-state
+  // banner when /atlas/queue has been unreachable for >30s.
+  const lastSuccessRef = useRef<number>(Date.now())
+  const [lastSuccessAt, setLastSuccessAt] = useState<number>(Date.now())
+  const [now, setNow] = useState<number>(Date.now())
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -51,6 +56,9 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
       const next = await fetchBuilderQueue()
       setData(next)
       setError(null)
+      const ts = Date.now()
+      lastSuccessRef.current = ts
+      setLastSuccessAt(ts)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -58,13 +66,38 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     }
   }, [])
 
+  // 1.10af: 5s polling, paused when the tab is hidden. A wall-clock tick keeps
+  // "stale since" / "last seen" labels live without a network round-trip.
   useEffect(() => {
     void refresh()
     fetchAtlasMe()
       .then(me => setRole(me.role))
       .catch(() => setRole('viewer'))
-    const id = window.setInterval(() => void refresh(), 15_000)
-    return () => window.clearInterval(id)
+
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      void refresh()
+    }
+    const pollId = window.setInterval(tick, 5_000)
+
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void refresh()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility)
+    }
+
+    const wallClockId = window.setInterval(() => setNow(Date.now()), 5_000)
+
+    return () => {
+      window.clearInterval(pollId)
+      window.clearInterval(wallClockId)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility)
+      }
+    }
   }, [refresh])
 
   const canManage = role === 'owner' || role === 'admin'
@@ -148,6 +181,10 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     } catch (err) {
       const fallback = mode === 'force-cancel' ? 'force-cancel failed' : 'cancel failed'
       showToast(err instanceof Error ? err.message : fallback)
+      // 1.10af: spec may have already moved on the server (e.g. force-cancel
+      // succeeded on disk before erroring on push). Refetch so the UI doesn't
+      // keep showing the spec the user already cancelled.
+      await refresh()
     } finally {
       setBusyTaskId(null)
     }
@@ -160,11 +197,36 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
   const inFlight = data.in_flight[0]
   const total = data.queued.length
 
+  // 1.10af: Builder unresponsive detection. The spec calls for using a
+  // `builder_last_heartbeat_at` field on the queue payload (1.10ag). Until
+  // that ships we degrade gracefully to the existing per-agent heartbeat:
+  // the builder card is "unresponsive" when its heartbeat hasn't refreshed in
+  // >120s while a spec is in-progress.
+  const builderHeartbeat = heartbeats?.builder
+  const builderHeartbeatAgeMs = builderHeartbeat
+    ? Math.max(0, now - new Date(builderHeartbeat.updated_at).getTime())
+    : null
+  const builderUnresponsive = !!(
+    inFlight &&
+    builderHeartbeatAgeMs !== null &&
+    builderHeartbeatAgeMs > 120_000
+  )
+
   const headerHint = inFlight
-    ? `${total} spec${total === 1 ? '' : 's'} queued · Builder is on ${inFlight.id}${
-        inFlight.started_at ? ` (${minutesSince(inFlight.started_at)} min in)` : ''
+    ? `${total} spec${total === 1 ? '' : 's'} queued · ${
+        builderUnresponsive
+          ? `Builder unresponsive — last seen ${minutesFromMs(builderHeartbeatAgeMs ?? 0)}m ago`
+          : `Builder is on ${inFlight.id}${
+              inFlight.started_at ? ` (${minutesSince(inFlight.started_at)} min in)` : ''
+            }`
       }`
     : `${total} spec${total === 1 ? '' : 's'} queued · Builder idle`
+
+  // 1.10af: stale-state banner — if /atlas/queue hasn't returned successfully
+  // for >30s, the dashboard is showing frozen data. Make this impossible to
+  // miss with a red banner at the top of the queue tab.
+  const staleSinceMs = now - lastSuccessAt
+  const showStaleBanner = staleSinceMs > 30_000
 
   // Idle-banner condition: queue has items, no agent in-flight, AND the
   // Builder heartbeat (or any agent's heartbeat) hasn't shown 'running' for >5 min.
@@ -212,6 +274,25 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
         </Button>
       }
     >
+      {showStaleBanner && (
+        <div
+          role="alert"
+          data-testid="dashboard-stale-banner"
+          className="mb-2 rounded-md border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-xs text-red-800 dark:text-red-200 flex items-start gap-2"
+        >
+          <WifiOff className="size-4 shrink-0 mt-0.5" aria-hidden />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold">Dashboard cannot reach Atlas</p>
+            <p className="mt-0.5 text-red-700/80 dark:text-red-300/80">
+              Showing stale data from {new Date(lastSuccessAt).toLocaleTimeString()} (
+              {minutesFromMs(staleSinceMs) > 0
+                ? `${minutesFromMs(staleSinceMs)}m ago`
+                : `${Math.floor(staleSinceMs / 1000)}s ago`}
+              ).
+            </p>
+          </div>
+        </div>
+      )}
       {loading && total === 0 && !inFlight ? (
         <ul className="space-y-2">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -275,6 +356,10 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
               startedAt={inFlight.started_at}
               canManage={canManage}
               busy={busyTaskId === inFlight.id}
+              builderUnresponsive={builderUnresponsive}
+              builderLastSeenMin={
+                builderHeartbeatAgeMs !== null ? minutesFromMs(builderHeartbeatAgeMs) : null
+              }
               onForceCancel={canManage ? () => void handleForceCancel(inFlight.id) : undefined}
             />
           )}
@@ -399,5 +484,10 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
 function minutesSince(iso: string): number {
   const ms = Date.now() - new Date(iso).getTime()
   if (Number.isNaN(ms) || ms < 0) return 0
+  return Math.floor(ms / 60_000)
+}
+
+function minutesFromMs(ms: number): number {
+  if (!Number.isFinite(ms) || ms < 0) return 0
   return Math.floor(ms / 60_000)
 }
