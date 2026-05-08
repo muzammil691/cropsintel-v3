@@ -10,7 +10,7 @@
 // would be unjustified weight.
 
 import { useEffect, useMemo, useState } from 'react'
-import { BookOpen, Loader2 } from 'lucide-react'
+import { BookOpen } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { fetchIdeaFile, type IdeaFileResponse } from '@/lib/atlas-client'
 
 interface IdeaFileDrawerProps {
@@ -66,13 +67,13 @@ export function IdeaFileDrawer({ open, onOpenChange }: IdeaFileDrawerProps) {
         data-testid="idea-file-drawer"
       >
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <BookOpen className="size-4 text-emerald-600" />
+          <DialogTitle className="flex items-center gap-4 text-base">
+            <BookOpen className="w-4 h-4 text-emerald-600" />
             Product vision
           </DialogTitle>
-          <DialogDescription className="text-[11px]">
+          <DialogDescription className="text-xs">
             Canonical vision Atlas reads on every wizard run. Edit{' '}
-            <code className="px-1 rounded bg-slate-100 dark:bg-slate-800 text-[10px]">.agent/idea.md</code>{' '}
+            <code className="px-1 rounded-sm bg-slate-100 dark:bg-slate-800 text-xs">.agent/idea.md</code>{' '}
             in VS Code — cockpit is read-only in v1.2.
           </DialogDescription>
         </DialogHeader>
@@ -82,9 +83,14 @@ export function IdeaFileDrawer({ open, onOpenChange }: IdeaFileDrawerProps) {
           data-testid="idea-file-content"
         >
           {loading && (
-            <div className="flex items-center gap-2 text-slate-500 py-8 justify-center">
-              <Loader2 className="size-4 animate-spin" />
-              <span>Loading vision…</span>
+            <div className="space-y-3 py-2" data-testid="idea-file-loading">
+              <Skeleton className="h-6 w-2/3" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-11/12" />
+              <Skeleton className="h-4 w-9/12" />
+              <Skeleton className="h-5 w-1/2 mt-4" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-10/12" />
             </div>
           )}
           {!loading && error && (
@@ -93,6 +99,12 @@ export function IdeaFileDrawer({ open, onOpenChange }: IdeaFileDrawerProps) {
             </div>
           )}
           {!loading && !error && data && (
+            // Safe by construction: renderIdeaMarkdown HTML-escapes every input
+            // line before applying inline markdown rules, blocks unsafe URL
+            // schemes (javascript:/data:/vbscript:) on links, and only emits a
+            // fixed set of structural tags. e2e/idea-file.spec.ts verifies that
+            // <script> input survives only as &lt;script&gt;. No external
+            // sanitizer dependency needed.
             <article
               className="idea-file-body prose prose-sm dark:prose-invert max-w-none"
               dangerouslySetInnerHTML={{ __html: html }}
@@ -101,7 +113,7 @@ export function IdeaFileDrawer({ open, onOpenChange }: IdeaFileDrawerProps) {
         </div>
 
         {data && (
-          <div className="text-[10px] text-slate-400 border-t border-slate-200 dark:border-slate-800 pt-2">
+          <div className="text-xs text-slate-400 border-t border-slate-200 dark:border-slate-800 pt-2">
             Source: {data.source}
           </div>
         )}
@@ -211,9 +223,17 @@ function inline(t: string): string {
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>')
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) =>
-    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+    `<a href="${escapeHtml(safeUrl(url))}" target="_blank" rel="noopener noreferrer">${label}</a>`,
   )
   return s
+}
+
+// Block javascript:/data:/vbscript: hrefs even if the idea file ever ingests
+// untrusted markdown. Anything not http/https/mailto/relative becomes '#'.
+function safeUrl(url: string): string {
+  const trimmed = url.trim()
+  if (/^(https?:|mailto:|\/|#|\.\/|\.\.\/)/i.test(trimmed)) return trimmed
+  return '#'
 }
 
 function escapeHtml(s: string): string {
