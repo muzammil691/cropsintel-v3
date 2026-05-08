@@ -1,4 +1,10 @@
 ---
+reaped_at: 2026-05-08T13:30:06.157Z
+reaped_reason: zombie — exceeded 30min in in-progress with no Builder heartbeat
+builder_heartbeat_age_seconds: 284
+reaped_age_minutes: 30.1
+---
+---
 phase: 1.10ag
 title: Zombie reaper + Builder heartbeat + ghost-duplicate prevention
 status: planned
