@@ -4,8 +4,12 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import type { PlanNode } from '@/lib/atlas-client'
+import { PlanActionButtons, type PlanCockpitAction } from './PlanActionButtons'
 
 export type SpecStatus = 'shipped' | 'queued' | 'planned' | 'blocked'
+
+/** Phase 1.10aj — cockpit phase status overlay (separate from SpecStatus). */
+export type CockpitNodeStatus = 'planned' | 'wizard-active' | 'follow' | 'revisit' | 'building' | 'built'
 
 interface PlanTreeProps {
   root: PlanNode
@@ -54,6 +58,17 @@ interface PlanTreeProps {
    * see what the agents recommended next.
    */
   suggestedIds?: Set<string>
+  /**
+   * Phase 1.10aj — cockpit overlays. When provided, the row renders the
+   * 4-button cockpit action surface (Add / Modify / Follow / Revisit) and
+   * paints the row by cockpit status. Existing handlers (onMoveUp etc.)
+   * remain wired for backwards compatibility.
+   */
+  cockpitStatusByNodeId?: Map<string, CockpitNodeStatus>
+  followingIds?: Set<string>
+  revisitingIds?: Set<string>
+  buildingIds?: Set<string>
+  onCockpitAction?: (action: PlanCockpitAction, node: PlanNode) => void
 }
 
 const STATUS_ICON: Record<SpecStatus, string> = {
@@ -67,6 +82,16 @@ const STATUS_DOT: Record<SpecStatus, string> = {
   queued: 'bg-amber-400',
   planned: 'bg-slate-300',
   blocked: 'bg-rose-500',
+}
+
+// Phase 1.10aj — cockpit row tinting per status.
+const COCKPIT_ROW_TINT: Record<CockpitNodeStatus, string> = {
+  planned: '',
+  'wizard-active': 'bg-amber-50/60 dark:bg-amber-950/30',
+  follow: 'bg-emerald-50/60 dark:bg-emerald-950/30',
+  revisit: 'opacity-60 grayscale',
+  building: 'bg-blue-50/60 dark:bg-blue-950/30 animate-pulse',
+  built: 'bg-emerald-100/40 dark:bg-emerald-900/30',
 }
 
 // Phase A.1: a node passes the status filter if it (or any descendant) has
@@ -133,6 +158,8 @@ function PlanNodeRow(props: PlanNodeRowProps) {
   const isSelected = props.selectedId === node.id
   const isMultiChecked = props.selectedIds.has(node.id)
   const preview = node.body.replace(/\s+/g, ' ').slice(0, 80)
+  const cockpitStatus = props.cockpitStatusByNodeId?.get(node.id)
+  const cockpitTint = cockpitStatus ? COCKPIT_ROW_TINT[cockpitStatus] : ''
 
   return (
     <div className="border-l border-transparent">
@@ -140,6 +167,7 @@ function PlanNodeRow(props: PlanNodeRowProps) {
         className={cn(
           'flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer group',
           isSelected && 'bg-slate-100 dark:bg-slate-900/60',
+          cockpitTint,
         )}
         style={{ paddingLeft: `${0.5 + depth * 1.0}rem` }}
         onClick={() => props.onSelect(node)}
@@ -207,6 +235,16 @@ function PlanNodeRow(props: PlanNodeRowProps) {
           )}
         </div>
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          {props.onCockpitAction && (
+            <PlanActionButtons
+              node={node}
+              onAction={props.onCockpitAction}
+              isFollowing={props.followingIds?.has(node.id)}
+              isRevisiting={props.revisitingIds?.has(node.id)}
+              isBuilding={props.buildingIds?.has(node.id)}
+              className="mr-0.5"
+            />
+          )}
           <Button
             type="button"
             size="icon-xs"

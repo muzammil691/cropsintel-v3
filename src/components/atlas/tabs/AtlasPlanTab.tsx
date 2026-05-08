@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Layers, RefreshCw, ListTree, Network, CheckSquare, X } from 'lucide-react'
+import { Layers, RefreshCw, ListTree, Network, CheckSquare, X, Hammer } from 'lucide-react'
 import {
   fetchPlan,
   buildFromPlanNode,
@@ -8,12 +8,19 @@ import {
   recoverPlanNode,
   undeployPlanNode,
   addPlanNodeToQueue,
+  revisitPlanNode,
   type PlanNode,
+  type CockpitConcept,
 } from '@/lib/atlas-client'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { PlanTree, type SpecStatus } from '@/components/atlas-plan/PlanTree'
+import { PlanTree, type SpecStatus, type CockpitNodeStatus } from '@/components/atlas-plan/PlanTree'
 import { PlanGraphView } from '@/components/atlas-plan/PlanGraphView'
+import { ConceptsPanel } from '@/components/atlas-plan/ConceptsPanel'
+import { PhaseWizard } from '@/components/atlas-plan/PhaseWizard'
+import { BuildRunnerModal } from '@/components/atlas-plan/BuildRunnerModal'
+import { PhaseApprovalBanner } from '@/components/atlas-plan/PhaseApprovalBanner'
+import type { PlanCockpitAction } from '@/components/atlas-plan/PlanActionButtons'
 
 type ViewMode = 'tree' | 'graph'
 
@@ -117,6 +124,17 @@ export default function AtlasPlanTab() {
   const [suggestedIds, setSuggestedIds] = useState<Set<string>>(new Set())
   const [shippedIds] = useState<Set<string>>(new Set())
 
+  // Phase 1.10aj — cockpit state.
+  const [followingIds, setFollowingIds] = useState<Set<string>>(new Set())
+  const [revisitingIds, setRevisitingIds] = useState<Set<string>>(new Set())
+  const [buildingIds] = useState<Set<string>>(new Set())
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [wizardMode, setWizardMode] = useState<'add' | 'modify'>('add')
+  const [wizardNode, setWizardNode] = useState<PlanNode | null>(null)
+  const [wizardSelectedConcepts] = useState<CockpitConcept[]>([])
+  const [buildRunnerOpen, setBuildRunnerOpen] = useState(false)
+  const [approvalBanner, setApprovalBanner] = useState<{ phaseId: string; title: string } | null>(null)
+
   const load = () => {
     setLoading(true)
     setError(null)
@@ -130,9 +148,18 @@ export default function AtlasPlanTab() {
         const newVoided = new Set<string>()
         const newQueued = new Set<string>()
         const newSuggested = new Set<string>()
+        const newFollowing = new Set<string>()
+        const newRevisiting = new Set<string>()
         for (const [id, list] of Object.entries(states)) {
           if (list.includes('voided')) newVoided.add(id)
-          if (list.includes('queued-no-build')) newQueued.add(id)
+          if (list.includes('queued-no-build')) {
+            newQueued.add(id)
+            // Phase 1.10aj — queued-no-build with `follow:true` metadata is
+            // the "Follow" cockpit state; the metadata isn't returned in the
+            // bulk overview, so we use queued-no-build as a proxy here.
+            newFollowing.add(id)
+          }
+          if (list.includes('optional')) newRevisiting.add(id)
           if (list.includes('suggested-by-multi-brain') || list.includes('suggested-by-verifier')) {
             newSuggested.add(id)
           }
@@ -140,6 +167,8 @@ export default function AtlasPlanTab() {
         setVoidedIds(newVoided)
         setQueuedIds(newQueued)
         setSuggestedIds(newSuggested)
+        setFollowingIds(newFollowing)
+        setRevisitingIds(newRevisiting)
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
@@ -326,6 +355,62 @@ export default function AtlasPlanTab() {
     setBulkResult(`Discussion seeded with ${selectedNodes.length} nodes — open chat.`)
   }
 
+  // ─── Phase 1.10aj cockpit action handler ───────────────────────────────
+  const onCockpitAction = (action: PlanCockpitAction, node: PlanNode) => {
+    if (action === 'add' || action === 'modify') {
+      setWizardMode(action)
+      setWizardNode(node)
+      setWizardOpen(true)
+      return
+    }
+    if (action === 'follow') {
+      // Quick-follow: open wizard pre-filled (mode='modify' uses existing body).
+      setWizardMode('modify')
+      setWizardNode(node)
+      setWizardOpen(true)
+      return
+    }
+    if (action === 'revisit') {
+      void runWithBusy(node, async () => {
+        const r = await revisitPlanNode(node.id)
+        if (r.revisiting) {
+          setRevisitingIds(prev => new Set(prev).add(node.id))
+        } else {
+          setRevisitingIds(prev => {
+            const next = new Set(prev); next.delete(node.id); return next
+          })
+        }
+      })
+    }
+  }
+
+  const cockpitStatusByNodeId = useMemo(() => {
+    const map = new Map<string, CockpitNodeStatus>()
+    for (const id of revisitingIds) map.set(id, 'revisit')
+    for (const id of followingIds) map.set(id, 'follow')
+    for (const id of buildingIds) map.set(id, 'building')
+    if (wizardNode) map.set(wizardNode.id, 'wizard-active')
+    return map
+  }, [revisitingIds, followingIds, buildingIds, wizardNode])
+
+  const followedNodesForRunner = useMemo(() => {
+    if (!tree) return []
+    const out: { planNodeId: string; title: string; body: string; phaseHint: string }[] = []
+    const walk = (n: PlanNode) => {
+      if (followingIds.has(n.id) && !revisitingIds.has(n.id)) {
+        out.push({
+          planNodeId: n.id,
+          title: n.title,
+          body: n.body,
+          phaseHint: 'plan',
+        })
+      }
+      for (const c of n.children) walk(c)
+    }
+    for (const c of tree.children) walk(c)
+    return out
+  }, [tree, followingIds, revisitingIds])
+
   const onDiscuss = (node: PlanNode) => {
     // Seed the cockpit chat with the node title + body excerpt so Atlas can
     // discuss this specific phase. CockpitChat listens for this event and
@@ -348,7 +433,9 @@ export default function AtlasPlanTab() {
   }
 
   return (
-    <section className="flex flex-col h-full overflow-hidden">
+    <section className="flex flex-row h-full overflow-hidden" data-testid="atlas-plan-cockpit">
+      <ConceptsPanel className="hidden md:flex" />
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
       <div className="flex flex-col gap-2 px-3 sm:px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 shrink-0">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
           <div className="min-w-0">
@@ -554,6 +641,11 @@ export default function AtlasPlanTab() {
             queuedIds={queuedIds}
             shippedIds={shippedIds}
             suggestedIds={suggestedIds}
+            cockpitStatusByNodeId={cockpitStatusByNodeId}
+            followingIds={followingIds}
+            revisitingIds={revisitingIds}
+            buildingIds={buildingIds}
+            onCockpitAction={onCockpitAction}
           />
         )}
         {tree && viewMode === 'graph' && (
@@ -580,6 +672,69 @@ export default function AtlasPlanTab() {
         {busy && busyNode && (
           <div role="status" aria-live="polite" className="mt-2 text-[11px] text-slate-500">Queueing spec for {busyNode}…</div>
         )}
+      </div>
+
+      {/* Phase 1.10aj — Build button at the bottom of the workspace */}
+      <div className="px-3 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 shrink-0 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-slate-500">
+          {followedNodesForRunner.length > 0
+            ? `${followedNodesForRunner.length} phase${followedNodesForRunner.length === 1 ? '' : 's'} following`
+            : 'Click Follow on a phase to queue it for the build runner'}
+        </span>
+        <Button
+          size="sm"
+          onClick={() => setBuildRunnerOpen(true)}
+          disabled={followedNodesForRunner.length === 0}
+          data-testid="cockpit-build-button"
+          className="text-xs"
+        >
+          <Hammer className="size-3" /> Build
+        </Button>
+      </div>
+
+      {approvalBanner && (
+        <PhaseApprovalBanner
+          phaseId={approvalBanner.phaseId}
+          title={approvalBanner.title}
+          onDismiss={() => setApprovalBanner(null)}
+        />
+      )}
+
+      {wizardOpen && wizardNode && (
+        <PhaseWizard
+          open={wizardOpen}
+          onOpenChange={(o) => { setWizardOpen(o); if (!o) setWizardNode(null) }}
+          mode={wizardMode}
+          parentTitle={wizardNode.title}
+          parentBody={wizardNode.body ?? ''}
+          phaseId={wizardNode.id || '1.x'}
+          phaseHint="plan"
+          planNodeId={wizardNode.id}
+          existingSpec={wizardMode === 'modify' ? wizardNode.body : undefined}
+          isNewPhase={wizardMode === 'add'}
+          selectedConcepts={wizardSelectedConcepts}
+          onCompleted={() => {
+            setFollowingIds((prev) => new Set(prev).add(wizardNode.id))
+            load()
+          }}
+        />
+      )}
+
+      <BuildRunnerModal
+        open={buildRunnerOpen}
+        onOpenChange={setBuildRunnerOpen}
+        followedNodes={followedNodesForRunner}
+        onRunComplete={(queued, pending) => {
+          if (pending > 0 && followedNodesForRunner.length > 0) {
+            // Surface an approval banner for the first followed node.
+            const next = followedNodesForRunner[0]
+            setApprovalBanner({ phaseId: next.planNodeId, title: next.title })
+          }
+          setBulkResult(`Build runner queued ${queued}, ${pending} pending approval.`)
+          load()
+        }}
+      />
+
       </div>
     </section>
   )

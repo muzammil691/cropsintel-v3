@@ -1222,6 +1222,252 @@ export async function buildFromPlanNode(
   )
 }
 
+// ── Phase 1.10aj — Plan cockpit client functions ────────────────────────────
+
+export interface CockpitConcept {
+  id: string
+  title: string
+  content: string
+  source_type: 'paste' | 'upload' | 'voice' | 'past-chat'
+  source_ref: string | null
+  theme: string | null
+  used_in_phases: unknown
+  created_at: string
+}
+
+export async function fetchConcepts(theme?: string): Promise<CockpitConcept[]> {
+  const url = theme
+    ? `${ATLAS_URL}/atlas/concepts?theme=${encodeURIComponent(theme)}`
+    : `${ATLAS_URL}/atlas/concepts`
+  const data = await fetchJson<{ concepts?: CockpitConcept[] }>(url, { headers: authHeaders() })
+  return Array.isArray(data?.concepts) ? data!.concepts! : []
+}
+
+export async function createConcept(input: {
+  title: string
+  content?: string
+  sourceType: 'paste' | 'upload' | 'voice' | 'past-chat'
+  sourceRef?: string
+  theme?: string
+}): Promise<CockpitConcept> {
+  const data = await fetchJson<{ ok: true; concept: CockpitConcept }>(`${ATLAS_URL}/atlas/concepts`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: input.title,
+      content: input.content ?? '',
+      source_type: input.sourceType,
+      source_ref: input.sourceRef,
+      theme: input.theme,
+    }),
+  })
+  return data.concept
+}
+
+export interface WizardQuestion {
+  id: string
+  prompt: string
+  choices: string[]
+  allowFreeText: boolean
+  rationale?: string
+}
+
+export interface WizardProposeResponse {
+  ok: true
+  questions: WizardQuestion[]
+  source: 'claude' | 'fallback'
+  costUsd: number
+}
+
+export async function proposeWizard(input: {
+  mode: 'add' | 'modify'
+  parentTitle: string
+  parentBody: string
+  phaseHint: string
+  existingSpec?: string
+  conceptSummaries?: string[]
+}): Promise<WizardProposeResponse> {
+  return fetchJson<WizardProposeResponse>(`${ATLAS_URL}/atlas/plan/wizard/propose`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: input.mode,
+      parent_title: input.parentTitle,
+      parent_body: input.parentBody,
+      phase_hint: input.phaseHint,
+      existing_spec: input.existingSpec,
+      concept_summaries: input.conceptSummaries,
+    }),
+  })
+}
+
+export interface WizardAnswerInput {
+  questionId: string
+  questionPrompt: string
+  answer: string
+  freeText?: string
+}
+
+export interface WizardFinalizeResponse {
+  ok: true
+  filename: string
+  markdown: string
+  validationOk: boolean
+  validationErrors: string[]
+  source: 'claude' | 'fallback'
+  costUsd: number
+}
+
+export async function finalizeWizard(input: {
+  parentTitle: string
+  phaseId: string
+  phaseHint: string
+  mode: 'add' | 'modify'
+  answers: WizardAnswerInput[]
+  conceptSummaries?: string[]
+  existingSpec?: string
+}): Promise<WizardFinalizeResponse> {
+  return fetchJson<WizardFinalizeResponse>(`${ATLAS_URL}/atlas/plan/wizard/finalize`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      parent_title: input.parentTitle,
+      phase_id: input.phaseId,
+      phase_hint: input.phaseHint,
+      mode: input.mode,
+      answers: input.answers.map(a => ({
+        question_id: a.questionId,
+        question_prompt: a.questionPrompt,
+        answer: a.answer,
+        free_text: a.freeText,
+      })),
+      concept_summaries: input.conceptSummaries,
+      existing_spec: input.existingSpec,
+    }),
+  })
+}
+
+export interface FollowPhaseResponse {
+  ok: boolean
+  filename: string
+  pushed: boolean
+  sha?: string
+  masterPlanUpdated: boolean
+  reason?: string
+}
+
+export async function followPhase(input: {
+  planNodeId: string
+  parentTitle: string
+  phaseId: string
+  phaseHint: string
+  mode: 'add' | 'modify'
+  answers: WizardAnswerInput[]
+  conceptSummaries?: string[]
+  existingSpec?: string
+  isNewPhase: boolean
+}): Promise<FollowPhaseResponse> {
+  return fetchJson<FollowPhaseResponse>(`${ATLAS_URL}/atlas/plan/follow`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      plan_node_id: input.planNodeId,
+      parent_title: input.parentTitle,
+      phase_id: input.phaseId,
+      phase_hint: input.phaseHint,
+      mode: input.mode,
+      answers: input.answers.map(a => ({
+        question_id: a.questionId,
+        question_prompt: a.questionPrompt,
+        answer: a.answer,
+        free_text: a.freeText,
+      })),
+      concept_summaries: input.conceptSummaries,
+      existing_spec: input.existingSpec,
+      is_new_phase: input.isNewPhase,
+    }),
+  })
+}
+
+export async function revisitPlanNode(
+  planNodeId: string,
+): Promise<{ ok: boolean; revisiting: boolean; reason?: string }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/revisit`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_node_id: planNodeId }),
+  })
+}
+
+export interface BuildRunnerNodeInput {
+  planNodeId: string
+  title: string
+  body: string
+  phaseHint?: string
+  dependsOn?: string[]
+}
+
+export interface BuildRunnerPreflight {
+  totalNodes: number
+  ordered: BuildRunnerNodeInput[]
+  warnings: string[]
+  estimatedSpecs: number
+  estimatedMinutes: number
+}
+
+export interface BuildRunnerResult {
+  ok: boolean
+  preflight: BuildRunnerPreflight
+  run?: {
+    ok: boolean
+    queued: Array<{ planNodeId: string; filename: string; sha?: string; pushed?: boolean }>
+    pending: Array<{ planNodeId: string; title: string }>
+    reason?: string
+  }
+}
+
+export async function runBuildCockpit(
+  nodes: BuildRunnerNodeInput[],
+  mode: 'approve-all' | 'per-phase',
+  action: 'preflight' | 'run',
+): Promise<BuildRunnerResult> {
+  return fetchJson<BuildRunnerResult>(`${ATLAS_URL}/atlas/plan/build-runner?action=${action}`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode,
+      action,
+      nodes: nodes.map(n => ({
+        plan_node_id: n.planNodeId,
+        title: n.title,
+        body: n.body,
+        phase_hint: n.phaseHint,
+        depends_on: n.dependsOn,
+      })),
+    }),
+  })
+}
+
+export async function approveCockpitPhase(input: {
+  phaseId: string
+  via: 'panel' | 'chat' | 'whatsapp'
+  approverPhone?: string
+  decision?: 'approve' | 'skip' | 'pause' | 'modify'
+  rawMessage?: string
+}): Promise<{ ok: boolean; recorded: boolean; advanced: boolean; advancedTo?: string }> {
+  return fetchJson(`${ATLAS_URL}/atlas/plan/approve`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      phase_id: input.phaseId,
+      via: input.via,
+      approver_phone: input.approverPhone,
+      decision: input.decision,
+      raw_message: input.rawMessage,
+    }),
+  })
+}
+
 export interface WorkflowGraphNode {
   id: string
   type: 'workflow' | 'department' | 'operating_model'

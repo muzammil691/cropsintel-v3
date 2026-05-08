@@ -107,6 +107,10 @@ import {
 } from './lib/plan-server'
 import { getWorkflowGraph, clearWorkflowCache } from './lib/workflow-parser'
 import { setPlanNodeState, clearPlanNodeState } from './lib/plan-state'
+import { startAddWizard, startModifyWizard, followPhase, toggleRevisit } from './lib/plan-action-handler'
+import { specFromWizard } from './lib/spec-from-wizard'
+import { preflight as buildRunnerPreflight, runBuild as buildRunnerRun, type BuildRunnerNode } from './lib/build-runner'
+import { routeApproval, parseKeywordDecision, isApprovedWhatsAppSender } from './lib/approval-router'
 import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind, type DiagnosisBucket } from './lib/diagnose'
 import { traceArtifact, formatTraceForChat } from './lib/workflow-trace'
 import { buildClaudeCodePrompt } from './lib/claude-code-prompt-builder'
@@ -3542,6 +3546,343 @@ export async function startServer(): Promise<void> {
         )
         // result already carries an `ok` field from reorderPlanNode; spread directly.
         json(res, 200, result)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // ─── Phase 1.10aj: Plan tab build cockpit ────────────────────────────────
+
+    // GET /atlas/concepts — list concepts. Query string ?theme=auth filters.
+    if (url.split('?')[0] === '/atlas/concepts' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { concepts: [] }); return }
+      const queryStr = url.includes('?') ? url.split('?')[1] : ''
+      const params = new URLSearchParams(queryStr)
+      const theme = params.get('theme')
+      let q = sb
+        .from('concepts')
+        .select('id, title, content, source_type, source_ref, theme, used_in_phases, created_at')
+        .order('created_at', { ascending: false })
+        .limit(200)
+      if (theme) q = q.eq('theme', theme)
+      const { data, error } = await q
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { concepts: data ?? [] })
+      return
+    }
+
+    // POST /atlas/concepts — create a concept. Source types: paste, upload,
+    // voice, past-chat. Upload payloads carry source_ref pointing at the
+    // chat-attachments storage path; voice carries the transcript in content.
+    if (url === '/atlas/concepts' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        title?: string
+        content?: string
+        source_type?: 'paste' | 'upload' | 'voice' | 'past-chat'
+        source_ref?: string
+        theme?: string
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.title || !payload.source_type) {
+        json(res, 400, { error: 'title and source_type required' })
+        return
+      }
+      const allowed = ['paste', 'upload', 'voice', 'past-chat']
+      if (!allowed.includes(payload.source_type)) {
+        json(res, 400, { error: 'invalid source_type' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const { data, error } = await sb
+        .from('concepts')
+        .insert({
+          title: payload.title.slice(0, 200),
+          content: payload.content ?? '',
+          source_type: payload.source_type,
+          source_ref: payload.source_ref ?? null,
+          theme: payload.theme ?? null,
+        })
+        .select('id, title, content, source_type, source_ref, theme, used_in_phases, created_at')
+        .single()
+      if (error || !data) { json(res, 500, { error: error?.message ?? 'insert failed' }); return }
+      json(res, 200, { ok: true, concept: data })
+      return
+    }
+
+
+
+    // POST /atlas/plan/wizard/propose — wizard question generator. Atlas
+    // (Claude Sonnet) proposes 3-7 multi-choice questions to resolve a vague
+    // phase into a concrete spec. Returns DEFAULT_QUESTIONS on Claude failure.
+    if (url === '/atlas/plan/wizard/propose' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        mode?: 'add' | 'modify'
+        parent_title?: string
+        parent_body?: string
+        phase_hint?: string
+        existing_spec?: string
+        concept_summaries?: string[]
+        recent_done_specs?: string[]
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.parent_title) { json(res, 400, { error: 'parent_title required' }); return }
+      try {
+        const result = payload.mode === 'modify'
+          ? await startModifyWizard({
+              parentTitle: payload.parent_title,
+              parentBody: payload.parent_body ?? '',
+              phaseHint: payload.phase_hint ?? 'plan',
+              existingSpec: payload.existing_spec ?? '',
+              conceptSummaries: payload.concept_summaries,
+              recentDoneSpecs: payload.recent_done_specs,
+            })
+          : await startAddWizard({
+              parentTitle: payload.parent_title,
+              parentBody: payload.parent_body ?? '',
+              phaseHint: payload.phase_hint ?? 'plan',
+              conceptSummaries: payload.concept_summaries,
+              recentDoneSpecs: payload.recent_done_specs,
+            })
+        json(res, 200, { ok: true, ...result })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/wizard/finalize — turn wizard answers into a spec
+    // markdown preview. Doesn't write to disk — that's /follow.
+    if (url === '/atlas/plan/wizard/finalize' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        parent_title?: string
+        phase_id?: string
+        phase_hint?: string
+        mode?: 'add' | 'modify'
+        answers?: Array<{ question_id?: string; question_prompt?: string; answer?: string; free_text?: string }>
+        concept_summaries?: string[]
+        existing_spec?: string
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.parent_title || !payload.phase_id) {
+        json(res, 400, { error: 'parent_title and phase_id required' })
+        return
+      }
+      try {
+        const result = await specFromWizard({
+          parentTitle: payload.parent_title,
+          phaseId: payload.phase_id,
+          phaseHint: payload.phase_hint ?? 'plan',
+          mode: payload.mode ?? 'add',
+          answers: (payload.answers ?? []).map(a => ({
+            questionId: a.question_id ?? '',
+            questionPrompt: a.question_prompt ?? '',
+            answer: a.answer ?? '',
+            freeText: a.free_text,
+          })),
+          conceptSummaries: payload.concept_summaries,
+          existingSpec: payload.existing_spec,
+        })
+        json(res, 200, { ok: true, ...result })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/follow — persist wizard-generated spec, set follow
+    // state on the node, and (when isNewPhase) append phase to master plan.
+    if (url === '/atlas/plan/follow' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        plan_node_id?: string
+        parent_title?: string
+        phase_id?: string
+        phase_hint?: string
+        mode?: 'add' | 'modify'
+        answers?: Array<{ question_id?: string; question_prompt?: string; answer?: string; free_text?: string }>
+        concept_summaries?: string[]
+        existing_spec?: string
+        is_new_phase?: boolean
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id || !payload.parent_title || !payload.phase_id) {
+        json(res, 400, { error: 'plan_node_id, parent_title, and phase_id required' })
+        return
+      }
+      try {
+        const result = await followPhase({
+          planNodeId: payload.plan_node_id,
+          parentTitle: payload.parent_title,
+          phaseId: payload.phase_id,
+          phaseHint: payload.phase_hint ?? 'plan',
+          mode: payload.mode ?? 'add',
+          answers: (payload.answers ?? []).map(a => ({
+            questionId: a.question_id ?? '',
+            questionPrompt: a.question_prompt ?? '',
+            answer: a.answer ?? '',
+            freeText: a.free_text,
+          })),
+          conceptSummaries: payload.concept_summaries,
+          existingSpec: payload.existing_spec,
+          isNewPhase: payload.is_new_phase === true,
+          actorPhone: principal.phone,
+        })
+        json(res, result.ok ? 200 : 409, result)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/revisit — toggle revisit state on a node.
+    if (url === '/atlas/plan/revisit' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: { plan_node_id?: string }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.plan_node_id) { json(res, 400, { error: 'plan_node_id required' }); return }
+      try {
+        const r = await toggleRevisit(payload.plan_node_id)
+        json(res, r.ok ? 200 : 500, r)
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/build-runner — pre-flight + execute the build runner.
+    // Two-phase API: ?action=preflight for the dry-run, default action is
+    // 'run' which actually writes specs / sets state.
+    if (url.split('?')[0] === '/atlas/plan/build-runner' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        nodes?: Array<{
+          plan_node_id?: string
+          title?: string
+          body?: string
+          phase_hint?: string
+          depends_on?: string[]
+        }>
+        mode?: 'approve-all' | 'per-phase'
+        action?: 'preflight' | 'run'
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      const nodes: BuildRunnerNode[] = (payload.nodes ?? [])
+        .filter(n => typeof n.plan_node_id === 'string' && typeof n.title === 'string')
+        .map(n => ({
+          planNodeId: n.plan_node_id!,
+          title: n.title!,
+          body: n.body ?? '',
+          phaseHint: n.phase_hint ?? 'plan',
+          dependsOn: n.depends_on,
+        }))
+      const action = payload.action ?? 'run'
+      try {
+        const pre = buildRunnerPreflight(nodes)
+        if (action === 'preflight') {
+          json(res, 200, { ok: true, preflight: pre })
+          return
+        }
+        const runResult = await buildRunnerRun(pre.ordered, payload.mode ?? 'approve-all')
+        json(res, runResult.ok ? 200 : 500, { ok: runResult.ok, preflight: pre, run: runResult })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // POST /atlas/plan/approve — unified approval router. Dashboard panel
+    // calls this directly with via='panel'. Chat handlers + WhatsApp webhook
+    // also funnel through here. WhatsApp callers must pass approver_phone;
+    // we validate it matches MUZAMMIL_WHATSAPP before recording.
+    if (url === '/atlas/plan/approve' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        phase_id?: string
+        via?: 'panel' | 'chat' | 'whatsapp'
+        approver_phone?: string
+        decision?: 'approve' | 'skip' | 'pause' | 'modify'
+        raw_message?: string
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.phase_id || !payload.via) {
+        json(res, 400, { error: 'phase_id and via required' })
+        return
+      }
+      // Decision parsing — if raw_message present and decision missing, derive.
+      let decision = payload.decision
+      if (!decision && payload.raw_message) {
+        decision = parseKeywordDecision(payload.raw_message) ?? undefined
+      }
+      // WhatsApp lane: validate sender matches admin phone.
+      if (payload.via === 'whatsapp') {
+        if (!payload.approver_phone || !isApprovedWhatsAppSender(payload.approver_phone)) {
+          json(res, 403, { error: 'whatsapp_sender_not_admin' })
+          return
+        }
+      }
+      try {
+        const result = await routeApproval({
+          phaseId: payload.phase_id,
+          via: payload.via,
+          approvedBy: payload.approver_phone ?? principal.phone,
+          decision,
+          rawMessage: payload.raw_message,
+        })
+        json(res, result.ok ? 200 : 500, result)
       } catch (err) {
         json(res, 500, { error: err instanceof Error ? err.message : String(err) })
       }
