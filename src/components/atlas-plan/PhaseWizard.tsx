@@ -9,6 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import {
   followPhase as followPhaseApi,
@@ -66,6 +68,8 @@ export function PhaseWizard(props: PhaseWizardProps) {
   const [editedMarkdown, setEditedMarkdown] = useState('')
   const [committedSummary, setCommittedSummary] = useState<{ filename: string; pushed: boolean } | null>(null)
   const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const freeTextInputId = `wizard-freetext-${phaseId}`
+  const specPreviewId = `wizard-spec-${phaseId}`
 
   const conceptSummaries = useMemo(
     () =>
@@ -129,6 +133,10 @@ export function PhaseWizard(props: PhaseWizardProps) {
   const clarity = state?.clarity_score ?? 0
   const totalTurns = state?.total_turns ?? 0
   const turnsRemaining = Math.max(0, MAX_WIZARD_TURNS - totalTurns)
+
+  // Clarity-score color band (design tokens, no hex literals).
+  const clarityBarClass =
+    clarity >= 70 ? 'bg-emerald-600' : clarity >= 40 ? 'bg-amber-500' : 'bg-red-600'
 
   const submitAnswer = async () => {
     if (!session) return
@@ -238,6 +246,19 @@ export function PhaseWizard(props: PhaseWizardProps) {
     }
   }
 
+  // Dynamic dialog description for screen readers — reflects current stage.
+  const dialogDescriptionText = (() => {
+    if (stage === 'loading') return 'Initializing wizard…'
+    if (stage === 'resume') return 'An in-progress wizard session exists for this phase. Resume?'
+    if (stage === 'turns') {
+      return `Atlas is interviewing you. Question ${totalTurns + 1} of up to ${MAX_WIZARD_TURNS}. Each question depends on your previous answers.`
+    }
+    if (stage === 'preview') return 'Preview the generated spec, edit if needed, then Save & Add to Follow.'
+    if (stage === 'committed') return 'Spec saved and queued.'
+    if (stage === 'error') return 'The wizard hit an error. See details below.'
+    return ''
+  })()
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -246,33 +267,43 @@ export function PhaseWizard(props: PhaseWizardProps) {
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-1.5">
-            <Wand2 className="size-4 text-emerald-600" />
-            {mode === 'add' ? 'Add phase' : 'Modify phase'} — {parentTitle}
+            <Wand2 className="size-4 text-emerald-600" aria-hidden="true" />
+            {mode === 'add' ? 'Add phase' : 'Modify phase'}
           </DialogTitle>
-          <DialogDescription>
-            {stage === 'turns' && (
-              <>Atlas is interviewing you. Each question depends on your previous answers.</>
-            )}
-            {stage === 'preview' && (
-              <>Preview the generated spec, edit if needed, then Save &amp; Add to Follow.</>
-            )}
-            {stage === 'committed' && (
-              <>Spec saved and queued.</>
-            )}
-            {stage === 'resume' && (
-              <>An in-progress wizard session exists for this phase. Resume?</>
-            )}
-          </DialogDescription>
+          <DialogDescription>{dialogDescriptionText}</DialogDescription>
+          <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mt-1">
+            {parentTitle}
+          </h3>
         </DialogHeader>
 
         {stage === 'loading' && (
-          <div className="flex items-center justify-center py-8 gap-2 text-sm text-slate-500" data-testid="wizard-loading">
-            <Loader2 className="size-4 animate-spin" /> Atlas is opening the interview…
+          <div
+            className="space-y-3 py-2"
+            data-testid="wizard-loading"
+            aria-busy="true"
+            aria-live="polite"
+          >
+            <span className="sr-only">Atlas is opening the interview…</span>
+            <div className="flex items-center justify-between">
+              <Skeleton className="h-3 w-48" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="h-1.5 w-full" />
+            <Skeleton className="h-24 w-full" />
+            <div className="flex flex-wrap gap-1.5">
+              <Skeleton className="h-8 w-20 rounded-full" />
+              <Skeleton className="h-8 w-24 rounded-full" />
+              <Skeleton className="h-8 w-16 rounded-full" />
+            </div>
+            <Skeleton className="h-10 w-32" />
           </div>
         )}
 
         {stage === 'error' && error && (
-          <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+          <div
+            className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-700 dark:text-red-300"
+            role="alert"
+          >
             {error}
           </div>
         )}
@@ -286,10 +317,15 @@ export function PhaseWizard(props: PhaseWizardProps) {
               {Math.round(resumable.state.clarity_score)}%.
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleResumeAccept} disabled={busy}>
+              <Button onClick={handleResumeAccept} disabled={busy} className="min-h-[44px]">
                 Resume
               </Button>
-              <Button variant="ghost" onClick={handleResumeDiscard} disabled={busy}>
+              <Button
+                variant="ghost"
+                onClick={handleResumeDiscard}
+                disabled={busy}
+                className="min-h-[44px]"
+              >
                 Start over
               </Button>
             </div>
@@ -307,20 +343,24 @@ export function PhaseWizard(props: PhaseWizardProps) {
             <div
               className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden"
               role="progressbar"
+              aria-label="Wizard clarity score"
               aria-valuenow={Math.round(clarity)}
               aria-valuemin={0}
               aria-valuemax={100}
             >
               <div
-                className="h-full bg-emerald-500 transition-all duration-500"
+                className={cn('h-full transition-all duration-500', clarityBarClass)}
                 style={{ width: `${Math.min(100, Math.max(0, clarity))}%` }}
               />
             </div>
 
             <div
               ref={transcriptRef}
-              className="max-h-72 overflow-y-auto space-y-2 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2"
+              className="max-h-[60vh] md:max-h-72 overflow-y-auto space-y-2 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2"
               data-testid="wizard-transcript"
+              aria-live="polite"
+              aria-atomic="false"
+              aria-label="Wizard interview transcript"
             >
               {state.history.length === 0 && !currentTurn && (
                 <div className="text-xs text-slate-500 italic">Atlas is composing the first question…</div>
@@ -328,22 +368,36 @@ export function PhaseWizard(props: PhaseWizardProps) {
               {state.history.map((h, i) => (
                 <div key={`turn-${i}`} className="space-y-1">
                   <div className="flex items-start gap-1.5">
-                    <MessageSquare className="size-3 text-emerald-600 mt-1 shrink-0" />
+                    <MessageSquare
+                      className="size-3 text-emerald-600 mt-1 shrink-0"
+                      aria-hidden="true"
+                    />
                     <p className="text-xs font-medium text-slate-900 dark:text-slate-100">{h.question}</p>
                   </div>
                   <div className="ml-5 text-xs text-slate-700 dark:text-slate-300 italic">→ {h.answer}</div>
                 </div>
               ))}
               {busy && (
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-500" data-testid="wizard-thinking">
-                  <Loader2 className="size-3 animate-spin" /> Atlas is thinking…
+                <div
+                  className="flex items-center gap-1.5 text-[11px] text-slate-500"
+                  data-testid="wizard-thinking"
+                  role="status"
+                >
+                  <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                  <span>Atlas is thinking…</span>
                 </div>
               )}
               {!busy && currentTurn && (
-                <div className="space-y-1">
+                <div className="space-y-1" role="status">
                   <div className="flex items-start gap-1.5">
-                    <MessageSquare className="size-3 text-emerald-600 mt-1 shrink-0" />
-                    <p className="text-xs font-medium text-slate-900 dark:text-slate-100" data-testid="wizard-question">
+                    <MessageSquare
+                      className="size-3 text-emerald-600 mt-1 shrink-0"
+                      aria-hidden="true"
+                    />
+                    <p
+                      className="text-xs font-medium text-slate-900 dark:text-slate-100"
+                      data-testid="wizard-question"
+                    >
                       {currentTurn.question}
                     </p>
                   </div>
@@ -356,7 +410,11 @@ export function PhaseWizard(props: PhaseWizardProps) {
 
             {!busy && currentTurn && (
               <div className="space-y-2">
-                <div className="flex flex-wrap gap-1.5" role="radiogroup">
+                <div
+                  className="flex flex-wrap gap-1.5"
+                  role="radiogroup"
+                  aria-label="Answer options"
+                >
                   {currentTurn.options.map((choice) => {
                     const selected = pendingAnswer === choice && !pendingFreeText
                     return (
@@ -367,7 +425,7 @@ export function PhaseWizard(props: PhaseWizardProps) {
                         aria-checked={selected}
                         onClick={() => { setPendingAnswer(choice); setPendingFreeText('') }}
                         className={cn(
-                          'rounded-full border px-3 py-1 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+                          'min-h-[44px] rounded-full border px-3 py-1 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2',
                           selected
                             ? 'border-emerald-500 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200'
                             : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:border-emerald-400',
@@ -380,21 +438,25 @@ export function PhaseWizard(props: PhaseWizardProps) {
                 </div>
                 {currentTurn.allow_freeform && (
                   <div>
-                    <label className="text-[11px] text-slate-500 block mb-1">
+                    <Label
+                      htmlFor={freeTextInputId}
+                      className="text-[11px] text-slate-500 block mb-1"
+                    >
                       None of the above — let me describe it:
-                    </label>
+                    </Label>
                     <textarea
+                      id={freeTextInputId}
                       value={pendingFreeText}
                       onChange={(e) => { setPendingFreeText(e.target.value); setPendingAnswer('') }}
                       rows={2}
-                      className="w-full text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                      className="w-full text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
                     />
                   </div>
                 )}
               </div>
             )}
             {error && (
-              <p className="text-[11px] text-red-600 dark:text-red-400">{error}</p>
+              <p className="text-[11px] text-red-600 dark:text-red-400" role="alert">{error}</p>
             )}
           </div>
         )}
@@ -409,35 +471,48 @@ export function PhaseWizard(props: PhaseWizardProps) {
                 {state.summary_of_decisions}
               </div>
             )}
+            <Label htmlFor={specPreviewId} className="sr-only">
+              Generated spec markdown — edit before saving
+            </Label>
             <textarea
+              id={specPreviewId}
               data-testid="wizard-spec-preview"
               value={editedMarkdown}
               onChange={(e) => setEditedMarkdown(e.target.value)}
               rows={16}
-              className="w-full text-[11px] font-mono px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 resize-y focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+              className="w-full text-[11px] font-mono px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 resize-y focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
             />
             {error && (
-              <p className="text-[11px] text-red-600 dark:text-red-400">{error}</p>
+              <p className="text-[11px] text-red-600 dark:text-red-400" role="alert">{error}</p>
             )}
           </div>
         )}
 
         {stage === 'committed' && committedSummary && (
           <div className="space-y-2 py-2">
-            <div className="rounded-md border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-              <Check className="size-4" />
+            <div
+              className="rounded-md border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5"
+              role="status"
+            >
+              <Check className="size-4" aria-hidden="true" />
               Spec <code className="font-mono">{committedSummary.filename}</code> saved.
               {committedSummary.pushed ? ' Pushed to main.' : ' Push pending.'}
             </div>
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="pb-4">
           {stage === 'turns' && currentTurn && (
-            <Button onClick={submitAnswer} disabled={busy} data-testid="wizard-submit-answer">
-              {busy && <Loader2 className="size-3.5 animate-spin" />}
+            <Button
+              onClick={submitAnswer}
+              disabled={busy}
+              data-testid="wizard-submit-answer"
+              aria-label="Send answer"
+              className="min-h-[44px]"
+            >
+              {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
               Send answer
-              <Send className="size-3.5" />
+              <Send className="size-3.5" aria-hidden="true" />
             </Button>
           )}
           {stage === 'preview' && (
@@ -446,18 +521,31 @@ export function PhaseWizard(props: PhaseWizardProps) {
                 variant="ghost"
                 onClick={() => setStage('turns')}
                 disabled={busy}
+                className="min-h-[44px]"
               >
                 Back to interview
               </Button>
-              <Button onClick={handleSaveAndFollow} disabled={busy} data-testid="wizard-save-follow">
-                {busy && <Loader2 className="size-3.5 animate-spin" />}
+              <Button
+                onClick={handleSaveAndFollow}
+                disabled={busy}
+                data-testid="wizard-save-follow"
+                aria-label="Save spec and add to follow list"
+                className="min-h-[44px]"
+              >
+                {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
                 Save &amp; Add to Follow list
+                <Check className="size-3.5" aria-hidden="true" />
               </Button>
             </>
           )}
           {(stage === 'committed' || stage === 'error') && (
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              <X className="size-3.5" /> Close
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close wizard"
+              className="min-h-[44px]"
+            >
+              <X className="size-3.5" aria-hidden="true" /> Close
             </Button>
           )}
         </DialogFooter>
