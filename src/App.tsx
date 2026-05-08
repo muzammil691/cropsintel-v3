@@ -5,6 +5,7 @@
 
 import { Routes, Route, Navigate } from "react-router-dom"
 import { lazy, Suspense, type ReactNode } from "react"
+import { Toaster } from "sonner"
 import { AuthGuard } from "@/components/auth/AuthGuard"
 import { LoadingScreen } from "@/components/auth/LoadingScreen"
 import NotImplemented from "@/components/NotImplemented"
@@ -77,6 +78,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <MigrationBanner />
+      <Toaster position="bottom-center" richColors closeButton />
       <Suspense fallback={<LoadingScreen />}>
         <Routes>
           {/* Root — Landing page */}

@@ -92,9 +92,29 @@ export function QueueRow({
       )}
     >
       <div className="flex items-baseline gap-2">
-        <span aria-hidden className="text-sm shrink-0">
-          {isInFlight ? '⏳' : paused ? '⏸' : circleNumber(position ?? 0)}
-        </span>
+        {isInFlight ? (
+          <span
+            role="status"
+            aria-label="In progress"
+            className="inline-flex items-center text-sm shrink-0 text-emerald-700 dark:text-emerald-300"
+          >
+            <Clock className="h-4 w-4" aria-hidden />
+            <span className="sr-only">In progress</span>
+          </span>
+        ) : paused ? (
+          <span
+            role="status"
+            aria-label="Paused"
+            className="inline-flex items-center text-sm shrink-0 text-slate-500 dark:text-slate-400"
+          >
+            <Pause className="h-4 w-4" aria-hidden />
+            <span className="sr-only">Paused</span>
+          </span>
+        ) : (
+          <span aria-hidden className="text-sm shrink-0">
+            {circleNumber(position ?? 0)}
+          </span>
+        )}
         <code className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
           {taskId}
         </code>

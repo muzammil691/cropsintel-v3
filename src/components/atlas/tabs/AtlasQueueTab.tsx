@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Inbox, RefreshCw, RefreshCcw, AlertTriangle, WifiOff } from 'lucide-react'
+import { toast } from 'sonner'
 import { TabFrame } from './AtlasPlanTab'
 import { QueueRow } from '../queue/QueueRow'
 import { Button } from '@/components/ui/button'
@@ -36,7 +37,6 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<AtlasRole | null>(null)
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null)
-  const [toastMsg, setToastMsg] = useState<string | null>(null)
   const [forcePickOpen, setForcePickOpen] = useState(false)
   const [forcePickBusy, setForcePickBusy] = useState(false)
   const [forcePickError, setForcePickError] = useState<string | null>(null)
@@ -102,11 +102,6 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
 
   const canManage = role === 'owner' || role === 'admin'
 
-  const showToast = (msg: string) => {
-    setToastMsg(msg)
-    window.setTimeout(() => setToastMsg(null), 3000)
-  }
-
   // Pillar B.1: positional move (replaces the old priority +/- buttons).
   const handleMove = async (taskId: string, direction: 'up' | 'down') => {
     setBusyTaskId(taskId)
@@ -114,12 +109,12 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
       const r = await moveBuilderPosition(taskId, direction)
       await refresh()
       if (r.moved) {
-        showToast(`moved ${taskId} ${direction}`)
+        toast.success(`moved ${taskId} ${direction}`)
       } else {
-        showToast(r.reason ?? `${taskId} stayed put`)
+        toast.message(r.reason ?? `${taskId} stayed put`)
       }
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'move failed')
+      toast.error(err instanceof Error ? err.message : 'move failed')
     } finally {
       setBusyTaskId(null)
     }
@@ -131,9 +126,9 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     try {
       await pauseBuilderTask(taskId)
       await refresh()
-      showToast(`paused ${taskId}`)
+      toast.success(`paused ${taskId}`)
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'pause failed')
+      toast.error(err instanceof Error ? err.message : 'pause failed')
     } finally {
       setBusyTaskId(null)
     }
@@ -144,9 +139,9 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     try {
       await resumeBuilderTask(taskId)
       await refresh()
-      showToast(`resumed ${taskId}`)
+      toast.success(`resumed ${taskId}`)
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'resume failed')
+      toast.error(err instanceof Error ? err.message : 'resume failed')
     } finally {
       setBusyTaskId(null)
     }
@@ -172,15 +167,15 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
       if (mode === 'force-cancel') {
         const r = await forceCancelBuilderTask(taskId)
         await refresh()
-        showToast(`force-cancelled ${taskId} (was in ${r.from_bucket}/)`)
+        toast.success(`force-cancelled ${taskId} (was in ${r.from_bucket}/)`)
       } else {
         await cancelBuilderTask(taskId)
         await refresh()
-        showToast(`cancelled ${taskId}`)
+        toast.success(`cancelled ${taskId}`)
       }
     } catch (err) {
       const fallback = mode === 'force-cancel' ? 'force-cancel failed' : 'cancel failed'
-      showToast(err instanceof Error ? err.message : fallback)
+      toast.error(err instanceof Error ? err.message : fallback)
       // 1.10af: spec may have already moved on the server (e.g. force-cancel
       // succeeded on disk before erroring on push). Refetch so the UI doesn't
       // keep showing the spec the user already cancelled.
@@ -191,7 +186,7 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
   }
 
   const handleEdit = (taskId: string) => {
-    showToast(`Atlas, edit the spec at .agent/tasks/queued/${taskId}.md — describe the change in chat.`)
+    toast.message(`Atlas, edit the spec at .agent/tasks/queued/${taskId}.md — describe the change in chat.`)
   }
 
   const inFlight = data.in_flight[0]
@@ -248,7 +243,7 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
     setForcePickError(null)
     try {
       await forcePickBuilder()
-      showToast('Builder redeploy triggered — picking next spec…')
+      toast.success('Builder redeploy triggered — picking next spec…')
       setForcePickOpen(false)
     } catch (err) {
       setForcePickError(err instanceof Error ? err.message : String(err))
@@ -397,16 +392,6 @@ export default function AtlasQueueTab({ heartbeats }: AtlasQueueTabProps = {}) {
             ))
           })()}
         </ul>
-      )}
-
-      {toastMsg && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-3 py-1.5 text-xs shadow-lg"
-        >
-          {toastMsg}
-        </div>
       )}
 
       <Dialog
