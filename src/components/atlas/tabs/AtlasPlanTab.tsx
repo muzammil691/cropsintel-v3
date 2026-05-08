@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Layers, RefreshCw, ListTree, Network, CheckSquare, X, Hammer } from 'lucide-react'
+import { Layers, RefreshCw, ListTree, Network, CheckSquare, X, Hammer, BookOpen } from 'lucide-react'
 import {
   fetchPlan,
   buildFromPlanNode,
@@ -19,6 +19,7 @@ import { PlanGraphView } from '@/components/atlas-plan/PlanGraphView'
 import { ConceptsPanel } from '@/components/atlas-plan/ConceptsPanel'
 import { PhaseWizard } from '@/components/atlas-plan/PhaseWizard'
 import { BuildRunnerModal } from '@/components/atlas-plan/BuildRunnerModal'
+import { IdeaFileDrawer } from '@/components/atlas-plan/IdeaFileDrawer'
 import { PhaseApprovalBanner } from '@/components/atlas-plan/PhaseApprovalBanner'
 import type { PlanCockpitAction } from '@/components/atlas-plan/PlanActionButtons'
 
@@ -115,6 +116,8 @@ export default function AtlasPlanTab() {
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [viewMode, setViewMode] = useState<ViewMode>('tree')
   const [multiSelectMode, setMultiSelectMode] = useState(false)
+  // Phase 1.10al — "View vision" drawer (.agent/idea.md).
+  const [ideaDrawerOpen, setIdeaDrawerOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkResult, setBulkResult] = useState<string | null>(null)
   // Phase A.2/A.5 state-overlay sets. Declared up front so load() can
@@ -447,6 +450,19 @@ export default function AtlasPlanTab() {
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {/* Phase 1.10al — View vision (.agent/idea.md) */}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setIdeaDrawerOpen(true)}
+              data-testid="view-vision-button"
+              className="text-[11px] h-7 px-2 gap-1 transition-colors duration-200"
+              title="View product vision (.agent/idea.md)"
+            >
+              <BookOpen className="size-3" />
+              View vision
+            </Button>
             {/* Multi-select toggle (Phase A.4) */}
             <Button
               type="button"
@@ -734,6 +750,8 @@ export default function AtlasPlanTab() {
           load()
         }}
       />
+
+      <IdeaFileDrawer open={ideaDrawerOpen} onOpenChange={setIdeaDrawerOpen} />
 
       </div>
     </section>

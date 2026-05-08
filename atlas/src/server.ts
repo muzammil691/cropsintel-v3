@@ -2440,6 +2440,33 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // Phase 1.10al — GET /atlas/repo/idea returns the current `.agent/idea.md`
+    // content (canonical product vision). Falls back to local repo read if
+    // GITHUB_PAT is missing so the cockpit drawer renders even offline. Auth
+    // required (any role); contents are non-secret but session-scoped.
+    if (url === '/atlas/repo/idea' && method === 'GET') {
+      if (!(await requireAuth(req, res))) return
+      let content = await getFileContent('.agent/idea.md')
+      let source: 'github' | 'local' | 'missing' = 'github'
+      if (content === null) {
+        try {
+          const fs = await import('fs/promises')
+          const path = await import('path')
+          const localPath = path.resolve(process.env.REPO_ROOT ?? '/workspace/cropsintel-v3', '.agent/idea.md')
+          content = await fs.readFile(localPath, 'utf-8')
+          source = 'local'
+        } catch {
+          source = 'missing'
+        }
+      }
+      if (content === null) {
+        json(res, 404, { error: 'idea_file_missing', source })
+        return
+      }
+      json(res, 200, { content, source })
+      return
+    }
+
     // GET /atlas/conversations/<threadId>/summaries?limit=N — Phase 1.10ar
     // chat-summary timeline rows for the cockpit horizontal bar.
     {

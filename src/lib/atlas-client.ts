@@ -1108,6 +1108,26 @@ export async function draftNewPlan(
   })
 }
 
+/**
+ * Phase 1.10al — fetch the canonical product vision (`.agent/idea.md`).
+ * The cockpit "View vision" drawer renders this read-only. Returns null if
+ * the file is missing or unreachable so the drawer can show a helpful empty
+ * state instead of a hard error.
+ */
+export interface IdeaFileResponse {
+  content: string
+  source: 'github' | 'local' | 'missing'
+}
+
+export async function fetchIdeaFile(): Promise<IdeaFileResponse | null> {
+  try {
+    return await fetchJson<IdeaFileResponse>(`${ATLAS_URL}/atlas/repo/idea`, { headers: authHeaders() })
+  } catch (err) {
+    console.warn('[atlas-client] fetchIdeaFile failed:', err)
+    return null
+  }
+}
+
 /** Apply a previously-drafted plan amendment — writes + commits + pushes. */
 export async function applyPlanAmendment(
   proposedMarkdown: string,

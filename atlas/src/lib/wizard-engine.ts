@@ -102,6 +102,19 @@ export async function proposeWizardQuestions(
     parts.push(`Recently shipped specs (context for what's already done):\n- ${input.recentDoneSpecs.slice(0, 8).join('\n- ')}`)
   }
 
+  // Phase 1.10al: read the canonical product vision (`.agent/idea.md`) and
+  // inject it ahead of master-plan/repo context. Every wizard question should
+  // reflect the vision (audience, non-goals, voice). Defensive: if the file is
+  // missing or GitHub fails, the wizard runs without it.
+  try {
+    const ideaContent = await loadIdeaFileContent()
+    if (ideaContent) {
+      parts.push(`Product vision (canonical, Muzammil-edited — read FIRST, every question must align):\n${ideaContent.slice(0, 6000)}`)
+    }
+  } catch (err) {
+    console.warn('[wizard-engine] idea file load failed:', err instanceof Error ? err.message : err)
+  }
+
   // Phase 1.10ak: ground the wizard in real repo state when GITHUB_PAT is set.
   // Wrap in try/catch so a GitHub blip never blocks question generation.
   let repoContext: RepoContext | null = null
@@ -310,4 +323,26 @@ function formatRepoContextForPrompt(ctx: RepoContext, phaseHint: string): string
   return lines.join('\n')
 }
 
-export const __test_only__ = { extractJson, sanitizeQuestions, DEFAULT_QUESTIONS, extractKeywords, formatRepoContextForPrompt }
+/**
+ * Phase 1.10al — load `.agent/idea.md` (canonical product vision). Tries the
+ * GitHub reader first so the cockpit-server and Builder agree on a single
+ * source. Falls back to the local clone when GITHUB_PAT is unset (dev mode).
+ * Returns null if the file is missing in both places — the wizard should still
+ * run, it just won't anchor questions in the vision document.
+ */
+export async function loadIdeaFileContent(): Promise<string | null> {
+  const remote = await getFileContent('.agent/idea.md')
+  if (remote && remote.trim().length > 0) return remote
+  try {
+    const fs = await import('fs/promises')
+    const path = await import('path')
+    const repoRoot = process.env.REPO_ROOT ?? '/workspace/cropsintel-v3'
+    const localPath = path.resolve(repoRoot, '.agent/idea.md')
+    const local = await fs.readFile(localPath, 'utf-8')
+    return local.trim().length > 0 ? local : null
+  } catch {
+    return null
+  }
+}
+
+export const __test_only__ = { extractJson, sanitizeQuestions, DEFAULT_QUESTIONS, extractKeywords, formatRepoContextForPrompt, loadIdeaFileContent }
