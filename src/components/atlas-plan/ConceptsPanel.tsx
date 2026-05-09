@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Lightbulb, Mic, Paperclip, Plus, RefreshCw, Search, Tag, X } from 'lucide-react'
+import { Lightbulb, Mic, Paperclip, Plus, RefreshCw, Search, Tag, Wand2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { fetchConcepts, createConcept, type CockpitConcept } from '@/lib/atlas-client'
@@ -368,29 +368,50 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           </p>
         )}
         {filtered.map((c) => (
-          <button
+          <div
             key={c.id}
-            type="button"
-            onClick={() => setSelectedConcept(c)}
+            data-testid="concept-card"
             className={cn(
-              'block w-full text-left rounded-md px-2 py-1.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-400 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40',
+              'group rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-emerald-400 transition-colors duration-200 focus-within:ring-2 focus-within:ring-emerald-500/40',
               selectedConcept?.id === c.id && 'border-emerald-500 ring-1 ring-emerald-500/30',
             )}
           >
-            <div className="flex items-start justify-between gap-1">
-              <span className="text-[11px] font-medium text-slate-900 dark:text-slate-100 truncate flex-1">
-                {c.title}
-              </span>
-              <span className="text-[10px] text-slate-400 shrink-0">
-                {c.source_type}
-              </span>
-            </div>
-            {c.theme && (
-              <div className="mt-0.5 flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-400">
-                <Tag className="size-2.5" /> {c.theme}
+            <button
+              type="button"
+              onClick={() => setSelectedConcept(c)}
+              className="block w-full text-left px-2 py-1.5 focus:outline-none"
+              aria-label={`Open concept ${c.title}`}
+            >
+              <div className="flex items-start justify-between gap-1">
+                <span className="text-[11px] font-medium text-slate-900 dark:text-slate-100 truncate flex-1">
+                  {c.title}
+                </span>
+                <span className="text-[10px] text-slate-400 shrink-0">
+                  {c.source_type}
+                </span>
               </div>
-            )}
-          </button>
+              {c.theme && (
+                <div className="mt-0.5 flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-400">
+                  <Tag className="size-2.5" /> {c.theme}
+                </div>
+              )}
+            </button>
+            <div className="px-2 pb-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('atlas:concept-to-wizard', { detail: c }))
+                  if (onUseInPhase) onUseInPhase(c)
+                }}
+                data-testid="concept-use-in-wizard"
+                className="text-[11px] h-6 w-full justify-start gap-1 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                aria-label={`Use ${c.title} in wizard`}
+              >
+                <Wand2 className="size-3" /> Use in wizard
+              </Button>
+            </div>
+          </div>
         ))}
       </div>
 
@@ -414,15 +435,17 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             {selectedConcept.content.slice(0, 600)}
             {selectedConcept.content.length > 600 && '…'}
           </p>
-          {onUseInPhase && (
-            <Button
-              size="sm"
-              onClick={() => onUseInPhase(selectedConcept)}
-              className="text-[11px] h-7 w-full"
-            >
-              Use in current phase
-            </Button>
-          )}
+          <Button
+            size="sm"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('atlas:concept-to-wizard', { detail: selectedConcept }))
+              if (onUseInPhase) onUseInPhase(selectedConcept)
+            }}
+            data-testid="concept-detail-use-in-wizard"
+            className="text-[11px] h-7 w-full gap-1"
+          >
+            <Wand2 className="size-3" /> Use in wizard
+          </Button>
         </div>
       )}
     </aside>

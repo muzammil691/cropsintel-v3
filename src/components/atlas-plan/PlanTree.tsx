@@ -234,17 +234,19 @@ function PlanNodeRow(props: PlanNodeRowProps) {
             <div className="text-xs text-slate-500 truncate">{preview}{node.body.length > 80 ? '…' : ''}</div>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 sm:flex-nowrap sm:gap-1.5">
-          {props.onCockpitAction && (
-            <PlanActionButtons
-              node={node}
-              onAction={props.onCockpitAction}
-              isFollowing={props.followingIds?.has(node.id)}
-              isRevisiting={props.revisitingIds?.has(node.id)}
-              isBuilding={props.buildingIds?.has(node.id)}
-              className="mr-0.5"
-            />
-          )}
+        {/* Phase 1.10ba — cockpit Add/Modify/Follow/Revisit are always visible
+            (not gated by row hover) so users can see the actions exist. */}
+        {props.onCockpitAction && (
+          <PlanActionButtons
+            node={node}
+            onAction={props.onCockpitAction}
+            isFollowing={props.followingIds?.has(node.id)}
+            isRevisiting={props.revisitingIds?.has(node.id)}
+            isBuilding={props.buildingIds?.has(node.id)}
+            className="mr-0.5 shrink-0"
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200 sm:flex-nowrap sm:gap-1.5">
           <Button
             type="button"
             size="icon-xs"

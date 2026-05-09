@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Wand2, Check, Loader2, X, MessageSquare, Send } from 'lucide-react'
+import { Wand2, Check, Loader2, X, MessageSquare, Send, Sparkles, Lightbulb } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -71,10 +71,21 @@ export function PhaseWizard(props: PhaseWizardProps) {
   const freeTextInputId = `wizard-freetext-${phaseId}`
   const specPreviewId = `wizard-spec-${phaseId}`
 
+  // Phase 1.10ba — concept summaries are passed into startDeepWizard. After
+  // a session is live, freshly-injected concepts (from ConceptsPanel "Use in
+  // wizard") render as visible context cards above the transcript so Atlas's
+  // next answer can reference them. Stable reference: serialized join means
+  // useEffect below only re-fires when the concept set actually changes,
+  // which prevents a render-loop when AtlasPlanTab re-emits state.
+  const conceptSummariesKey = selectedConcepts
+    .slice(0, 8)
+    .map((c) => `${c.id}:${c.title}`)
+    .join('|')
   const conceptSummaries = useMemo(
     () =>
       selectedConcepts.slice(0, 8).map((c) => `${c.title} — ${c.content.slice(0, 100).replace(/\s+/g, ' ')}`),
-    [selectedConcepts],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conceptSummariesKey],
   )
 
   // Reset on open + check for a resumable session.
@@ -138,13 +149,8 @@ export function PhaseWizard(props: PhaseWizardProps) {
   const clarityBarClass =
     clarity >= 70 ? 'bg-emerald-600' : clarity >= 40 ? 'bg-amber-500' : 'bg-red-600'
 
-  const submitAnswer = async () => {
+  const sendAnswer = async (answer: string) => {
     if (!session) return
-    const answer = pendingFreeText.trim() || pendingAnswer.trim()
-    if (!answer) {
-      setError('Pick an option or type a free-form answer')
-      return
-    }
     setBusy(true)
     setError(null)
     try {
@@ -163,6 +169,22 @@ export function PhaseWizard(props: PhaseWizardProps) {
     } finally {
       setBusy(false)
     }
+  }
+
+  const submitAnswer = async () => {
+    const answer = pendingFreeText.trim() || pendingAnswer.trim()
+    if (!answer) {
+      setError('Pick an option or type a free-form answer')
+      return
+    }
+    await sendAnswer(answer)
+  }
+
+  // Phase 1.10ba — when clarity is high enough, the user can ask Atlas to
+  // wrap up. We send a sentinel "ready" answer; the multi-turn engine will
+  // generate the spec_draft on its next turn (clarity_score >= 90).
+  const generateSpecWhenReady = async () => {
+    await sendAnswer('Ready — generate the spec from what we have.')
   }
 
   const handleResumeAccept = async () => {
@@ -336,13 +358,14 @@ export function PhaseWizard(props: PhaseWizardProps) {
           <div className="space-y-3 py-2">
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span data-testid="wizard-clarity">
-                Clarity: {Math.round(clarity)}% — {turnsRemaining} more questions likely.
+                Clarity: {Math.round(clarity)}%{turnsRemaining > 0 ? ` — ${turnsRemaining} more questions likely` : ''}.
               </span>
               <span>Turn {totalTurns + 1} of ≤{MAX_WIZARD_TURNS}</span>
             </div>
             <div
-              className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden"
+              className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden"
               role="progressbar"
+              data-testid="wizard-clarity-bar"
               aria-label="Wizard clarity score"
               aria-valuenow={Math.round(clarity)}
               aria-valuemin={0}
@@ -353,6 +376,31 @@ export function PhaseWizard(props: PhaseWizardProps) {
                 style={{ width: `${Math.min(100, Math.max(0, clarity))}%` }}
               />
             </div>
+
+            {/* Phase 1.10ba — injected-context cards from ConceptsPanel handoff.
+                Renders above the transcript so Atlas's next reply can use them. */}
+            {selectedConcepts.length > 0 && (
+              <div
+                data-testid="wizard-injected-concepts"
+                className="rounded-md border border-emerald-200 dark:border-emerald-900 bg-emerald-50/70 dark:bg-emerald-950/30 px-2 py-1.5 space-y-1"
+                aria-label="Injected concept context"
+              >
+                <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                  <Lightbulb className="size-3" /> Concept context ({selectedConcepts.length})
+                </div>
+                {selectedConcepts.slice(0, 4).map((c) => (
+                  <p key={c.id} className="text-[11px] text-emerald-900 dark:text-emerald-200 truncate">
+                    <span className="font-medium">{c.title}</span>
+                    {c.theme ? <span className="text-emerald-700/80 dark:text-emerald-400/80"> — {c.theme}</span> : null}
+                  </p>
+                ))}
+                {selectedConcepts.length > 4 && (
+                  <p className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 italic">
+                    + {selectedConcepts.length - 4} more
+                  </p>
+                )}
+              </div>
+            )}
 
             <div
               ref={transcriptRef}
@@ -366,15 +414,23 @@ export function PhaseWizard(props: PhaseWizardProps) {
                 <div className="text-xs text-slate-500 italic">Atlas is composing the first question…</div>
               )}
               {state.history.map((h, i) => (
-                <div key={`turn-${i}`} className="space-y-1">
+                <div key={`turn-${i}`} className="space-y-1.5" data-testid="wizard-turn">
+                  {/* Atlas bubble — left aligned. */}
                   <div className="flex items-start gap-1.5">
                     <MessageSquare
-                      className="size-3 text-emerald-600 mt-1 shrink-0"
+                      className="size-3 text-emerald-600 mt-1.5 shrink-0"
                       aria-hidden="true"
                     />
-                    <p className="text-xs font-medium text-slate-900 dark:text-slate-100">{h.question}</p>
+                    <div className="max-w-[85%] rounded-md rounded-tl-none bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900 px-2 py-1.5">
+                      <p className="text-xs text-slate-900 dark:text-slate-100">{h.question}</p>
+                    </div>
                   </div>
-                  <div className="ml-5 text-xs text-slate-700 dark:text-slate-300 italic">→ {h.answer}</div>
+                  {/* User bubble — right aligned. */}
+                  <div className="flex justify-end">
+                    <div className="max-w-[85%] rounded-md rounded-tr-none bg-slate-200 dark:bg-slate-800 px-2 py-1.5">
+                      <p className="text-xs text-slate-800 dark:text-slate-200">{h.answer}</p>
+                    </div>
+                  </div>
                 </div>
               ))}
               {busy && (
@@ -391,19 +447,21 @@ export function PhaseWizard(props: PhaseWizardProps) {
                 <div className="space-y-1" role="status">
                   <div className="flex items-start gap-1.5">
                     <MessageSquare
-                      className="size-3 text-emerald-600 mt-1 shrink-0"
+                      className="size-3 text-emerald-600 mt-1.5 shrink-0"
                       aria-hidden="true"
                     />
-                    <p
-                      className="text-xs font-medium text-slate-900 dark:text-slate-100"
-                      data-testid="wizard-question"
-                    >
-                      {currentTurn.question}
-                    </p>
+                    <div className="max-w-[85%] rounded-md rounded-tl-none bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900 px-2 py-1.5">
+                      <p
+                        className="text-xs font-medium text-slate-900 dark:text-slate-100"
+                        data-testid="wizard-question"
+                      >
+                        {currentTurn.question}
+                      </p>
+                      {currentTurn.rationale && (
+                        <p className="text-[11px] text-slate-500 italic mt-1">{currentTurn.rationale}</p>
+                      )}
+                    </div>
                   </div>
-                  {currentTurn.rationale && (
-                    <p className="ml-5 text-[11px] text-slate-500 italic">{currentTurn.rationale}</p>
-                  )}
                 </div>
               )}
             </div>
@@ -501,19 +559,35 @@ export function PhaseWizard(props: PhaseWizardProps) {
           </div>
         )}
 
-        <DialogFooter className="pb-4">
+        <DialogFooter className="pb-4 flex flex-wrap gap-2">
           {stage === 'turns' && currentTurn && (
-            <Button
-              onClick={submitAnswer}
-              disabled={busy}
-              data-testid="wizard-submit-answer"
-              aria-label="Send answer"
-              className="min-h-[44px]"
-            >
-              {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
-              Send answer
-              <Send className="size-3.5" aria-hidden="true" />
-            </Button>
+            <>
+              <Button
+                onClick={submitAnswer}
+                disabled={busy}
+                data-testid="wizard-submit-answer"
+                aria-label="Send answer"
+                className="min-h-[44px]"
+              >
+                {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+                Send answer
+                <Send className="size-3.5" aria-hidden="true" />
+              </Button>
+              {/* Phase 1.10ba — once Atlas is confident enough, surface a
+                  shortcut so the user can finalize without answering more. */}
+              <Button
+                onClick={generateSpecWhenReady}
+                disabled={busy || clarity < 90}
+                title={clarity < 90 ? `Available when Atlas reaches 90% clarity (currently ${Math.round(clarity)}%)` : 'Send a "ready" answer to wrap up the interview'}
+                data-testid="wizard-generate-spec"
+                aria-label="Generate spec when ready"
+                variant="outline"
+                className="min-h-[44px]"
+              >
+                <Sparkles className="size-3.5" aria-hidden="true" />
+                Generate spec when ready
+              </Button>
+            </>
           )}
           {stage === 'preview' && (
             <>

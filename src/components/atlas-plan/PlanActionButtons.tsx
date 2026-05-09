@@ -15,9 +15,11 @@ interface PlanActionButtonsProps {
 }
 
 /**
- * Phase 1.10aj — the four cockpit action buttons rendered next to each plan
- * node row. Add inserts a sub-phase; Modify rewrites this one; Follow queues
- * the spec; Revisit dims the node so the build runner skips it.
+ * Phase 1.10ba — always-visible labeled cockpit action buttons. Add inserts a
+ * sub-phase; Modify rewrites this one; Follow queues the spec for the build
+ * runner; Revisit dims the node so the runner skips it. On screens narrower
+ * than `lg` the labels collapse to icon-only with `title` tooltips so the
+ * actions never go invisible (cockpit row density).
  */
 export function PlanActionButtons(props: PlanActionButtonsProps) {
   const { node, onAction, isFollowing, isRevisiting, isBuilding, className } = props
@@ -25,56 +27,75 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
   return (
     <div
       data-testid="plan-action-buttons"
-      className={cn(
-        'flex flex-wrap items-center gap-1 sm:flex-nowrap sm:gap-1.5',
-        className,
-      )}
+      className={cn('flex items-center gap-1 sm:gap-1.5', className)}
     >
       <Button
         type="button"
-        size="icon-xs"
+        size="sm"
         variant="ghost"
+        title={`Add sub-phase under ${node.title}`}
         aria-label={`Add sub-phase under ${node.title}`}
         onClick={(e) => { e.stopPropagation(); onAction('add', node) }}
         disabled={isBuilding}
-        className="focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+        data-cockpit-action="add"
+        className="h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50"
       >
         <PlusCircle className="size-3" />
+        <span className="hidden lg:inline">Add</span>
       </Button>
       <Button
         type="button"
-        size="icon-xs"
-        variant="ghost"
+        size="sm"
+        variant="outline"
+        title={`Modify ${node.title}`}
         aria-label={`Modify ${node.title}`}
         onClick={(e) => { e.stopPropagation(); onAction('modify', node) }}
         disabled={isBuilding}
-        className="focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+        data-cockpit-action="modify"
+        className="h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50"
       >
         <Pencil className="size-3" />
+        <span className="hidden lg:inline">Modify</span>
       </Button>
       <Button
         type="button"
-        size="icon-xs"
-        variant={isFollowing ? 'default' : 'ghost'}
+        size="sm"
+        variant={isFollowing ? 'default' : 'outline'}
+        title={isFollowing ? `Following ${node.title} — click to un-follow` : `Follow ${node.title} (queue for build)`}
         aria-label={isFollowing ? `Following ${node.title}` : `Follow ${node.title}`}
         aria-pressed={Boolean(isFollowing)}
         onClick={(e) => { e.stopPropagation(); onAction('follow', node) }}
         disabled={isBuilding}
-        className={cn('focus-visible:ring-2 focus-visible:ring-emerald-600/50', isFollowing && 'text-emerald-700 dark:text-emerald-300')}
+        data-cockpit-action="follow"
+        className={cn(
+          'h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+          isFollowing
+            ? 'bg-emerald-600 text-white hover:bg-emerald-600/90 border-emerald-600'
+            : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/40',
+        )}
       >
         <Flag className="size-3" />
+        <span className="hidden lg:inline">{isFollowing ? 'Following' : 'Follow'}</span>
       </Button>
       <Button
         type="button"
-        size="icon-xs"
-        variant={isRevisiting ? 'default' : 'ghost'}
+        size="sm"
+        variant="outline"
+        title={isRevisiting ? `Un-revisit ${node.title}` : `Revisit ${node.title} (defer)`}
         aria-label={isRevisiting ? `Un-revisit ${node.title}` : `Revisit ${node.title}`}
         aria-pressed={Boolean(isRevisiting)}
         onClick={(e) => { e.stopPropagation(); onAction('revisit', node) }}
         disabled={isBuilding}
-        className={cn('focus-visible:ring-2 focus-visible:ring-emerald-600/50', isRevisiting && 'text-slate-400')}
+        data-cockpit-action="revisit"
+        className={cn(
+          'h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+          isRevisiting
+            ? 'border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+            : 'border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-900 dark:text-amber-400 dark:hover:bg-amber-950/40',
+        )}
       >
         <RotateCcw className="size-3" />
+        <span className="hidden lg:inline">{isRevisiting ? 'Revisiting' : 'Revisit'}</span>
       </Button>
     </div>
   )

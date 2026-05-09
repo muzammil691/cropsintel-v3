@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Hammer, Loader2, AlertTriangle, Check } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Hammer, Loader2, AlertTriangle, Check, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -20,6 +20,22 @@ interface BuildRunnerModalProps {
 
 type Stage = 'preflight' | 'confirm' | 'running' | 'done' | 'error'
 
+// Phase 1.10ba — derive a launch tier from a phase title so the modal can
+// group nodes by tier (1.0-alpha → 1.0-beta → 1.x → ...). We look for the
+// first dotted version-like prefix; everything else falls into "later".
+function deriveLaunchTier(title: string): string {
+  const m = title.match(/^\s*\[?\s*(\d+\.\d+(?:-?[a-z]+)?)\b/i)
+  if (m) return m[1].toLowerCase()
+  const m2 = title.match(/\bphase\s+(\d+\.\d+(?:-?[a-z]+)?)\b/i)
+  if (m2) return m2[1].toLowerCase()
+  return 'later'
+}
+
+// Phase 1.10ba — calibrated per-phase Builder estimate. Mirrors the server
+// preflight (25 min average) so the UI reads the same number whether or not
+// the server returned a per-phase break-down.
+const PER_PHASE_MIN = 25
+
 export function BuildRunnerModal(props: BuildRunnerModalProps) {
   const { open, onOpenChange, followedNodes, onRunComplete } = props
   const [stage, setStage] = useState<Stage>('preflight')
@@ -27,6 +43,10 @@ export function BuildRunnerModal(props: BuildRunnerModalProps) {
   const [error, setError] = useState<string | null>(null)
   const [runSummary, setRunSummary] = useState<{ queued: number; pending: number } | null>(null)
   const [busy, setBusy] = useState(false)
+  // Phase 1.10ba — UI-only "Pause after each launch tier" toggle. The runner
+  // server already supports per-phase confirmation via mode='per-phase'; this
+  // toggle nudges the user toward that mode for cross-tier workflows.
+  const [pauseBetweenTiers, setPauseBetweenTiers] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -34,6 +54,7 @@ export function BuildRunnerModal(props: BuildRunnerModalProps) {
     setPreflight(null)
     setError(null)
     setRunSummary(null)
+    setPauseBetweenTiers(false)
     let cancelled = false
     runBuildCockpit(followedNodes, 'approve-all', 'preflight')
       .then((res) => {
@@ -105,25 +126,11 @@ export function BuildRunnerModal(props: BuildRunnerModalProps) {
         )}
 
         {stage === 'confirm' && preflight && (
-          <div className="space-y-2">
-            {preflight.warnings.length > 0 && (
-              <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
-                <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
-                <ul className="space-y-0.5">
-                  {preflight.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                </ul>
-              </div>
-            )}
-            <div className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 max-h-60 overflow-y-auto">
-              <ol className="text-xs space-y-0.5 list-decimal pl-4">
-                {preflight.ordered.map((n) => (
-                  <li key={n.planNodeId} className="text-slate-700 dark:text-slate-300">
-                    {n.title}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </div>
+          <PreflightDetails
+            preflight={preflight}
+            pauseBetweenTiers={pauseBetweenTiers}
+            onTogglePause={setPauseBetweenTiers}
+          />
         )}
 
         {stage === 'running' && (
@@ -170,6 +177,82 @@ export function BuildRunnerModal(props: BuildRunnerModalProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// Phase 1.10ba — broken out so the long preflight markup doesn't drown the
+// stage-machine in BuildRunnerModal.
+function PreflightDetails({
+  preflight,
+  pauseBetweenTiers,
+  onTogglePause,
+}: {
+  preflight: BuildRunnerPreflight
+  pauseBetweenTiers: boolean
+  onTogglePause: (v: boolean) => void
+}) {
+  // Group ordered nodes by launch tier in topological order. Tiers retain
+  // first-appearance order (Map preserves insertion order).
+  const grouped = useMemo(() => {
+    const tiers = new Map<string, BuildRunnerPreflight['ordered']>()
+    for (const n of preflight.ordered) {
+      const tier = deriveLaunchTier(n.title)
+      const list = tiers.get(tier) ?? []
+      list.push(n)
+      tiers.set(tier, list)
+    }
+    return Array.from(tiers.entries())
+  }, [preflight.ordered])
+
+  return (
+    <div className="space-y-2">
+      {preflight.warnings.length > 0 && (
+        <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
+          <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
+          <ul className="space-y-0.5">
+            {preflight.warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+      <div
+        className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 max-h-72 overflow-y-auto"
+        data-testid="build-runner-ordered-list"
+      >
+        {grouped.map(([tier, nodes], tierIdx) => (
+          <div key={tier} className="mb-2 last:mb-0" data-testid={`build-runner-tier-${tier}`}>
+            <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+              <span>Launch tier: {tier}</span>
+              <span className="flex items-center gap-1 text-slate-400 normal-case font-normal">
+                <Clock className="size-3" /> ~{nodes.length * PER_PHASE_MIN} min
+              </span>
+            </div>
+            <ol className="text-xs space-y-0.5 list-decimal pl-4">
+              {nodes.map((n) => (
+                <li key={n.planNodeId} className="text-slate-700 dark:text-slate-300 flex items-baseline justify-between gap-2">
+                  <span className="truncate">{n.title}</span>
+                  <span className="text-[10px] text-slate-400 shrink-0">~{PER_PHASE_MIN} min</span>
+                </li>
+              ))}
+            </ol>
+            {tierIdx < grouped.length - 1 && pauseBetweenTiers && (
+              <div className="mt-1 mb-1 ml-4 text-[10px] italic text-amber-700 dark:text-amber-400">
+                ⏸ pause for review before next tier
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={pauseBetweenTiers}
+          onChange={(e) => onTogglePause(e.target.checked)}
+          data-testid="build-runner-pause-tiers"
+          className="size-3.5 rounded border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-500/40"
+        />
+        Pause between launch tiers (use Per-phase mode for hand-controlled rollout)
+      </label>
+    </div>
   )
 }
 
