@@ -134,3 +134,7 @@
   box-shadow: 0 0 0 2px rgb(16 185 129 / 0.7);
   transition: box-shadow 0.5s ease-out;
 }
+
+/* Phase 1.3b — Staggered pulse for the chat thinking indicator. */
+.thinking-dots > span:nth-child(3) { animation-delay: 120ms; }
+.thinking-dots > span:nth-child(4) { animation-delay: 240ms; }

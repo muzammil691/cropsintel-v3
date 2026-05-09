@@ -17,7 +17,7 @@ export function UpgradeToVerifiedInline({ pitch }: Props) {
   return (
     <div
       data-testid="upgrade-to-verified-inline"
-      className="mt-3 flex flex-wrap gap-2"
+      className="mt-3 flex flex-col sm:flex-row flex-wrap gap-2"
     >
       <Button asChild size="sm" data-testid="upgrade-to-verified-cta">
         <Link to={pitch.cta_url}>Request verification</Link>

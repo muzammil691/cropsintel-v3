@@ -34,7 +34,7 @@ export function StarterChips({ onSelect, disabled = false }: Props) {
           disabled={disabled}
           onClick={() => onSelect(s.prompt)}
           data-testid={`starter-chip-${slug(s.label)}`}
-          className="rounded-full border-emerald-200 dark:border-emerald-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 hover:border-emerald-400 transition-colors text-xs sm:text-sm"
+          className="rounded-full border-emerald-200 dark:border-emerald-900 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 hover:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2 transition-colors duration-200 text-xs sm:text-sm"
         >
           {s.label}
         </Button>

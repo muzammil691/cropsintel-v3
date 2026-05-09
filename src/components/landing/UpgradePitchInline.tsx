@@ -16,7 +16,7 @@ export function UpgradePitchInline({ pitch }: Props) {
   return (
     <div
       data-testid="upgrade-pitch-inline"
-      className="mt-3 flex flex-wrap gap-2"
+      className="mt-3 flex flex-col sm:flex-row flex-wrap gap-2"
     >
       <Button asChild size="sm" data-testid="upgrade-pitch-email">
         <Link to={pitch.email_url}>Email →</Link>

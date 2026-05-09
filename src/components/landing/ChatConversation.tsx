@@ -61,11 +61,16 @@ export function ChatConversation({ history, isThinking = false, greeting }: Prop
       {isThinking && (
         <div className="flex justify-start" data-testid="chat-thinking">
           <Bubble side="ai">
-            <div className="flex items-center gap-1.5 text-slate-500">
-              <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse" />
-              <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse [animation-delay:120ms]" />
-              <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse [animation-delay:240ms]" />
-              <span className="ml-1.5 text-xs">CropsIntel is thinking…</span>
+            <div
+              className="thinking-dots flex items-center gap-1.5 text-slate-500"
+              role="status"
+              aria-live="polite"
+            >
+              <span className="sr-only">CropsIntel is thinking</span>
+              <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse" aria-hidden="true" />
+              <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse" aria-hidden="true" />
+              <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse" aria-hidden="true" />
+              <span className="ml-1.5 text-xs" aria-hidden="true">CropsIntel is thinking…</span>
             </div>
           </Bubble>
         </div>
@@ -77,7 +82,7 @@ export function ChatConversation({ history, isThinking = false, greeting }: Prop
 }
 
 function Bubble({ side, children }: { side: 'user' | 'ai'; children: React.ReactNode }) {
-  const base = 'max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm shadow-sm'
+  const base = 'max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 text-sm shadow-sm'
   const tone =
     side === 'user'
       ? 'bg-emerald-600 text-white dark:bg-emerald-700'

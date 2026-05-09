@@ -108,7 +108,7 @@ export default function Landing() {
             Already a user?{' '}
             <Link
               to="/login"
-              className="text-emerald-700 dark:text-emerald-400 font-medium hover:underline"
+              className="text-emerald-700 dark:text-emerald-400 font-medium hover:underline transition-colors duration-200"
               data-testid="signin-link"
             >
               Sign in →
@@ -129,7 +129,7 @@ export default function Landing() {
             </Link>
             <Link
               to="/login"
-              className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline"
+              className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline transition-colors duration-200"
             >
               Sign in →
             </Link>
@@ -141,7 +141,7 @@ export default function Landing() {
             {tier !== 'guest' && (
               <Link
                 to="/dashboard"
-                className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline"
+                className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline transition-colors duration-200"
                 data-testid="saved-sessions-link"
               >
                 Saved sessions →
