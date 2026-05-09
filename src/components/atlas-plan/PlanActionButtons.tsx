@@ -68,7 +68,7 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
         disabled={isBuilding}
         data-cockpit-action="follow"
         className={cn(
-          'h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+          'h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200',
           isFollowing
             ? 'bg-emerald-600 text-white hover:bg-emerald-600/90 border-emerald-600'
             : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/40',
@@ -88,7 +88,7 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
         disabled={isBuilding}
         data-cockpit-action="revisit"
         className={cn(
-          'h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50',
+          'h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200',
           isRevisiting
             ? 'border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
             : 'border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-900 dark:text-amber-400 dark:hover:bg-amber-950/40',

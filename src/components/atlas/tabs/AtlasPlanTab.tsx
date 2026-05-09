@@ -508,7 +508,7 @@ export default function AtlasPlanTab() {
             type="button"
             onClick={toggleWorkshop}
             data-testid="workshop-strip-expand"
-            className="w-full flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
+            className="w-full flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded transition-colors duration-200"
             aria-expanded="false"
             aria-label="Expand planning workshop info"
           >
@@ -543,7 +543,7 @@ export default function AtlasPlanTab() {
               type="button"
               onClick={toggleWorkshop}
               data-testid="workshop-strip-collapse"
-              className="shrink-0 inline-flex items-center justify-center size-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+              className="shrink-0 inline-flex items-center justify-center size-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200"
               aria-label="Collapse workshop info"
             >
               <ChevronUp className="size-3.5" />
@@ -862,7 +862,7 @@ export default function AtlasPlanTab() {
                     setWizardOpen(true)
                     setPendingConceptForPhase(null)
                   }}
-                  className="w-full text-left px-2 py-1.5 text-[11px] text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-b border-slate-100 dark:border-slate-800 last:border-b-0"
+                  className="w-full text-left px-2 py-1.5 text-[11px] text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-b border-slate-100 dark:border-slate-800 last:border-b-0 transition-colors duration-200"
                 >
                   {n.title}
                 </button>

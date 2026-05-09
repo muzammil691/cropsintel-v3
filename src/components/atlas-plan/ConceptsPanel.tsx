@@ -405,7 +405,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
                   if (onUseInPhase) onUseInPhase(c)
                 }}
                 data-testid="concept-use-in-wizard"
-                className="text-[11px] h-6 w-full justify-start gap-1 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                className="text-[11px] h-6 w-full justify-start gap-1 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors duration-200"
                 aria-label={`Use ${c.title} in wizard`}
               >
                 <Wand2 className="size-3" /> Use in wizard
