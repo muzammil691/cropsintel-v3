@@ -134,11 +134,11 @@ export default function VerifiedReviewQueue() {
       <Helmet>
         <title>Verified review queue — CropsIntel admin</title>
       </Helmet>
-      <div className="space-y-4">
-        <header className="flex flex-wrap items-center justify-between gap-3">
+      <div className="space-y-3 sm:space-y-4">
+        <header className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold">Verified review queue</h1>
-            <p className="text-sm text-slate-500">
+            <h1 className="text-lg sm:text-xl font-semibold">Verified review queue</h1>
+            <p className="text-xs sm:text-sm text-slate-500">
               Run background checks on registered users and promote them to verified.
             </p>
           </div>
@@ -156,7 +156,7 @@ export default function VerifiedReviewQueue() {
         ) : rows.length === 0 ? (
           <div className="text-sm text-slate-500">No requests match this filter.</div>
         ) : (
-          <ul className="space-y-3">
+          <ul className="space-y-2 sm:space-y-3">
             {rows.map((row) => (
               <li key={row.id}>
                 <RequestCard
@@ -213,7 +213,7 @@ function FilterPills({ value, onChange }: { value: Filter; onChange: (f: Filter)
             onClick={() => onChange(o.id)}
             data-testid={`queue-filter-${o.id}`}
             className={
-              'rounded-full px-3 py-1 text-xs font-medium border transition-colors duration-150 ' +
+              'rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium border transition-colors duration-200 min-h-[36px] sm:min-h-[40px] ' +
               (active
                 ? 'bg-emerald-600 text-white border-emerald-600'
                 : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800')
@@ -349,8 +349,8 @@ function RequestCard({
       </CardHeader>
 
       {expanded && (
-        <CardContent className="space-y-4 border-t border-slate-200 dark:border-slate-800 pt-4">
-          <p className="text-sm text-slate-600 dark:text-slate-300">
+        <CardContent className="space-y-3 sm:space-y-4 border-t border-slate-200 dark:border-slate-800 pt-4">
+          <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300">
             <strong>Reason for verification:</strong> {row.reason}
           </p>
 
@@ -361,6 +361,7 @@ function RequestCard({
               onClick={assignToMe}
               disabled={working}
               data-testid={`assign-to-me-${row.id}`}
+              className="w-full sm:w-auto min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3 transition-colors duration-200"
             >
               Assign to me
             </Button>
@@ -375,18 +376,23 @@ function RequestCard({
 
           {!isClosed && (
             <div className="space-y-2 border-t border-slate-200 dark:border-slate-800 pt-4">
-              <label className="text-sm font-medium">Final decision notes (required)</label>
+              <label htmlFor={`decision-notes-${row.id}`} className="text-sm sm:text-base font-medium block">
+                Final decision notes (required)
+              </label>
               <Textarea
+                id={`decision-notes-${row.id}`}
                 value={decisionNotes}
                 onChange={(e) => setDecisionNotes(e.target.value)}
                 placeholder="Why are you approving / rejecting this request?"
+                className="w-full text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
               />
-              <div className="flex flex-wrap gap-2 pt-2">
+              <div className="grid grid-cols-1 sm:flex sm:flex-wrap gap-2 pt-2">
                 <Button
                   size="sm"
                   onClick={() => approveAs('verified_buyer')}
                   disabled={working}
                   data-testid={`approve-buyer-${row.id}`}
+                  className="w-full sm:w-auto min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3 transition-colors duration-200"
                 >
                   Approve as buyer
                 </Button>
@@ -395,6 +401,7 @@ function RequestCard({
                   variant="outline"
                   onClick={() => approveAs('verified_broker')}
                   disabled={working}
+                  className="w-full sm:w-auto min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3 transition-colors duration-200"
                 >
                   Approve as broker
                 </Button>
@@ -403,6 +410,7 @@ function RequestCard({
                   variant="outline"
                   onClick={() => approveAs('verified_supplier')}
                   disabled={working}
+                  className="w-full sm:w-auto min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3 transition-colors duration-200"
                 >
                   Approve as supplier
                 </Button>
@@ -412,6 +420,7 @@ function RequestCard({
                   onClick={reject}
                   disabled={working}
                   data-testid={`reject-${row.id}`}
+                  className="w-full sm:w-auto min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3 transition-colors duration-200"
                 >
                   Reject
                 </Button>
@@ -420,7 +429,7 @@ function RequestCard({
           )}
 
           {isClosed && row.final_decision_notes && (
-            <div className="rounded-lg bg-slate-50 dark:bg-slate-900 p-3 text-xs">
+            <div className="rounded-lg bg-slate-50 dark:bg-slate-900 p-3 text-xs sm:text-sm">
               <strong>Decision notes:</strong> {row.final_decision_notes}
               {row.decided_to_state && (
                 <p className="mt-1 text-slate-500">Outcome: {row.decided_to_state}</p>

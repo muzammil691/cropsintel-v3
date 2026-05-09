@@ -71,14 +71,14 @@ export function EmailOTPForm() {
 
   if (step === 'email') {
     return (
-      <form onSubmit={handleSendOtp} className="space-y-4">
+      <form onSubmit={handleSendOtp} className="space-y-3 sm:space-y-4">
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        <div className="space-y-2">
-          <Label htmlFor="eo-email">Email</Label>
+        <div className="space-y-1.5 sm:space-y-2">
+          <Label htmlFor="eo-email" className="text-sm sm:text-base">Email</Label>
           <Input
             id="eo-email"
             type="email"
@@ -87,10 +87,15 @@ export function EmailOTPForm() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={loading}
+            className="w-full text-sm sm:text-base min-h-[44px]"
           />
           <p className="text-xs text-slate-500">We'll email you a 6-digit code.</p>
         </div>
-        <Button type="submit" className="w-full" disabled={loading || !email}>
+        <Button
+          type="submit"
+          className="w-full min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3"
+          disabled={loading || !email}
+        >
           {loading ? 'Sending…' : 'Send code'}
         </Button>
       </form>
@@ -98,7 +103,7 @@ export function EmailOTPForm() {
   }
 
   return (
-    <form onSubmit={handleVerify} className="space-y-4">
+    <form onSubmit={handleVerify} className="space-y-3 sm:space-y-4">
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -109,8 +114,8 @@ export function EmailOTPForm() {
           A 6-digit code was sent to <strong>{email}</strong>. Codes expire in 10 minutes.
         </AlertDescription>
       </Alert>
-      <div className="space-y-2">
-        <Label htmlFor="eo-code">6-digit code</Label>
+      <div className="space-y-1.5 sm:space-y-2">
+        <Label htmlFor="eo-code" className="text-sm sm:text-base">6-digit code</Label>
         <Input
           id="eo-code"
           type="text"
@@ -123,9 +128,14 @@ export function EmailOTPForm() {
           value={code}
           onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
           disabled={loading}
+          className="w-full text-sm sm:text-base min-h-[44px]"
         />
       </div>
-      <Button type="submit" className="w-full" disabled={loading || code.length !== 6}>
+      <Button
+        type="submit"
+        className="w-full min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3"
+        disabled={loading || code.length !== 6}
+      >
         {loading ? 'Verifying…' : 'Verify and sign in'}
       </Button>
       <button
@@ -135,7 +145,7 @@ export function EmailOTPForm() {
           setCode('')
           setError(null)
         }}
-        className="w-full text-xs text-slate-500 hover:underline"
+        className="w-full text-xs sm:text-sm text-slate-500 hover:underline transition-colors duration-200 min-h-[44px]"
       >
         Use a different email
       </button>

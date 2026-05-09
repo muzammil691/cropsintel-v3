@@ -107,20 +107,22 @@ export function WhatsAppOtpForm() {
 
   if (step === 'phone') {
     return (
-      <form onSubmit={handleSend} className="space-y-4">
+      <form onSubmit={handleSend} className="space-y-3 sm:space-y-4">
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        <div className="space-y-2">
-          <Label htmlFor="wo-phone">WhatsApp number</Label>
-          <div className="flex gap-2">
+        <div className="space-y-1.5 sm:space-y-2">
+          <Label htmlFor="wo-phone" className="text-sm sm:text-base">WhatsApp number</Label>
+          <div className="flex flex-col sm:flex-row gap-2">
             <Select
+              id="wo-dialcode"
+              aria-label="Country dial code"
               value={dialCode}
               onChange={(e) => setDialCode(e.target.value)}
               disabled={loading}
-              className="w-28"
+              className="w-full sm:w-28 text-sm sm:text-base min-h-[44px]"
             >
               {COUNTRY_CODES.map((c) => (
                 <option key={c.code} value={c.dialCode}>
@@ -137,11 +139,15 @@ export function WhatsAppOtpForm() {
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               disabled={loading}
-              className="flex-1"
+              className="flex-1 w-full text-sm sm:text-base min-h-[44px]"
             />
           </div>
         </div>
-        <Button type="submit" className="w-full" disabled={loading || !phone}>
+        <Button
+          type="submit"
+          className="w-full min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3"
+          disabled={loading || !phone}
+        >
           {loading ? 'Sending…' : 'Send OTP via WhatsApp'}
         </Button>
       </form>
@@ -149,7 +155,7 @@ export function WhatsAppOtpForm() {
   }
 
   return (
-    <form onSubmit={handleVerify} className="space-y-4">
+    <form onSubmit={handleVerify} className="space-y-3 sm:space-y-4">
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -160,8 +166,8 @@ export function WhatsAppOtpForm() {
           A 6-digit code was sent to <strong>{fullPhone}</strong> on WhatsApp. Codes expire in 10 minutes.
         </AlertDescription>
       </Alert>
-      <div className="space-y-2">
-        <Label htmlFor="wo-code">6-digit code</Label>
+      <div className="space-y-1.5 sm:space-y-2">
+        <Label htmlFor="wo-code" className="text-sm sm:text-base">6-digit code</Label>
         <Input
           id="wo-code"
           type="text"
@@ -174,15 +180,20 @@ export function WhatsAppOtpForm() {
           value={code}
           onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
           disabled={loading}
+          className="w-full text-sm sm:text-base min-h-[44px]"
         />
       </div>
-      <Button type="submit" className="w-full" disabled={loading || code.length !== 6}>
+      <Button
+        type="submit"
+        className="w-full min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3"
+        disabled={loading || code.length !== 6}
+      >
         {loading ? 'Verifying…' : 'Verify'}
       </Button>
-      <div className="flex items-center justify-between text-xs">
+      <div className="flex items-center justify-between text-xs sm:text-sm gap-2">
         <button
           type="button"
-          className="text-slate-500 hover:underline disabled:opacity-50 disabled:no-underline"
+          className="text-slate-500 hover:underline transition-colors duration-200 disabled:opacity-50 disabled:no-underline min-h-[44px]"
           disabled={cooldown > 0 || loading}
           onClick={() => handleSend()}
         >
@@ -190,7 +201,7 @@ export function WhatsAppOtpForm() {
         </button>
         <button
           type="button"
-          className="text-slate-500 hover:underline"
+          className="text-slate-500 hover:underline transition-colors duration-200 min-h-[44px]"
           onClick={() => {
             setStep('phone')
             setCode('')

@@ -63,14 +63,14 @@ export function EmailPasswordForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      <div className="space-y-2">
-        <Label htmlFor="ep-email">Email</Label>
+      <div className="space-y-1.5 sm:space-y-2">
+        <Label htmlFor="ep-email" className="text-sm sm:text-base">Email</Label>
         <Input
           id="ep-email"
           type="email"
@@ -79,10 +79,11 @@ export function EmailPasswordForm() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           disabled={loading}
+          className="w-full text-sm sm:text-base min-h-[44px]"
         />
       </div>
-      <div className="space-y-2">
-        <Label htmlFor="ep-password">Password</Label>
+      <div className="space-y-1.5 sm:space-y-2">
+        <Label htmlFor="ep-password" className="text-sm sm:text-base">Password</Label>
         <Input
           id="ep-password"
           type="password"
@@ -92,9 +93,14 @@ export function EmailPasswordForm() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           disabled={loading}
+          className="w-full text-sm sm:text-base min-h-[44px]"
         />
       </div>
-      <Button type="submit" className="w-full" disabled={loading || !email || !password}>
+      <Button
+        type="submit"
+        className="w-full min-h-[44px] text-sm sm:text-base px-4 py-2 sm:px-6 sm:py-3"
+        disabled={loading || !email || !password}
+      >
         {loading ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create account'}
       </Button>
       <button
@@ -103,7 +109,7 @@ export function EmailPasswordForm() {
           setMode((m) => (m === 'signin' ? 'signup' : 'signin'))
           setError(null)
         }}
-        className="w-full text-xs text-slate-500 hover:underline"
+        className="w-full text-xs sm:text-sm text-slate-500 hover:underline transition-colors duration-200 min-h-[44px]"
       >
         {mode === 'signin' ? 'New here? Create an account' : 'Already have an account? Sign in'}
       </button>

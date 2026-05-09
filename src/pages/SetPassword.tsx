@@ -203,7 +203,7 @@ export default function SetPassword() {
               <ShieldCheck className="size-3" aria-hidden />
               We don't import V1/V2 passwords; you set a fresh one.
             </span>
-            <Link to="/auth" className="underline hover:no-underline">
+            <Link to="/auth" className="underline hover:no-underline transition-colors duration-200">
               ← Back to sign in
             </Link>
           </footer>

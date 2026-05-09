@@ -58,7 +58,7 @@ function MigrationBanner() {
           variant="ghost"
           size="sm"
           onClick={clearMigrationNotice}
-          aria-label="Dismiss notification"
+          aria-label="Close notification"
           className="shrink-0 min-h-[44px] min-w-[44px] h-11 w-11 p-0 text-green-700 hover:text-green-900 hover:bg-green-100 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-green-600/50"
         >
           <span aria-hidden="true">✕</span>

@@ -91,13 +91,13 @@ export default function Auth() {
           <div className="text-center text-xs text-slate-500 space-y-2">
             <p>
               First time? V1 or V2 user?{' '}
-              <Link to="/set-password" className="text-emerald-700 dark:text-emerald-400 hover:underline">
+              <Link to="/set-password" className="text-emerald-700 dark:text-emerald-400 hover:underline transition-colors duration-200">
                 Set a V3 password →
               </Link>
             </p>
             <Link
               to="/atlas/login"
-              className="inline-block text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:underline"
+              className="inline-block text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:underline transition-colors duration-200"
             >
               Atlas operators sign in here →
             </Link>
