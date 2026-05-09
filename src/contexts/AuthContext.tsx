@@ -16,6 +16,8 @@ export type AuthContextValue = {
   profile: Profile | null
   roles: AppRole[]
   tier: UserTier
+  /** Phase 1.3a — verification state from profiles.verification_state */
+  verificationState: string
   isAuthenticated: boolean
   isTeam: boolean
   isAdmin: boolean
@@ -24,6 +26,10 @@ export type AuthContextValue = {
   clearMigrationNotice: () => void
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
+  /** Phase 1.3a helpers */
+  hasTier: (t: UserTier) => boolean
+  hasRole: (r: AppRole) => boolean
+  isTeamOrAdmin: () => boolean
 }
 
 const defaultContext: AuthContextValue = {
@@ -33,6 +39,7 @@ const defaultContext: AuthContextValue = {
   profile: null,
   roles: [],
   tier: "guest",
+  verificationState: "unverified",
   isAuthenticated: false,
   isTeam: false,
   isAdmin: false,
@@ -40,6 +47,9 @@ const defaultContext: AuthContextValue = {
   clearMigrationNotice: () => {},
   signOut: async () => {},
   refreshProfile: async () => {},
+  hasTier: () => false,
+  hasRole: () => false,
+  isTeamOrAdmin: () => false,
 }
 
 export const AuthContext = createContext<AuthContextValue>(defaultContext)
@@ -125,6 +135,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = roles.includes("admin")
   const isTeam = isAdmin || roles.includes("team")
   const tier = profile?.tier ?? "guest"
+  const verificationState =
+    (profile as { verification_state?: string } | null)?.verification_state ?? "unverified"
+
+  const TIER_RANK: Record<UserTier, number> = {
+    guest: 0,
+    registered: 1,
+    verified: 2,
+    maxons_team: 3,
+  }
+  const hasTier = (t: UserTier) => (TIER_RANK[tier] ?? 0) >= (TIER_RANK[t] ?? 0)
+  const hasRole = (r: AppRole) => roles.includes(r)
+  const isTeamOrAdmin = () => isTeam
 
   return (
     <AuthContext.Provider
@@ -135,6 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         roles,
         tier,
+        verificationState,
         isAuthenticated,
         isTeam,
         isAdmin,
@@ -142,6 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearMigrationNotice,
         signOut,
         refreshProfile,
+        hasTier,
+        hasRole,
+        isTeamOrAdmin,
       }}
     >
       {children}

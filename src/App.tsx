@@ -36,8 +36,10 @@ const AtlasWorkflow = lazy(() => import("./pages/atlas/AtlasWorkflow"))
 const AtlasTeamPortal = lazy(() => import("./pages/atlas/AtlasTeamPortal"))
 const PositionReports = lazy(() => import("./pages/PositionReports"))
 const NotFound = lazy(() => import("./pages/NotFound"))
+const SetPassword = lazy(() => import("./pages/SetPassword"))
 const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"))
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"))
+const VerifiedReviewQueue = lazy(() => import("./pages/admin/VerifiedReviewQueue"))
 
 function MigrationBanner() {
   const { migrationNotice, clearMigrationNotice } = useAuth()
@@ -87,8 +89,9 @@ export default function App() {
           {/* Legacy /welcome alias kept for existing links */}
           <Route path="/welcome" element={<Navigate to="/" replace />} />
 
-          {/* Legacy /auth combined-form kept for backward compat */}
+          {/* Phase 1.3a — V3 four-method auth page */}
           <Route path="/auth" element={<Auth />} />
+          <Route path="/set-password" element={<SetPassword />} />
 
           {/* OAuth / magic-link callback — both auth states allowed */}
           <Route path="/auth/callback" element={<AuthCallback />} />
@@ -170,7 +173,9 @@ export default function App() {
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminDashboard />} />
             <Route path="users" element={<NotImplemented phase="Phase 2 — User management" />} />
-            <Route path="verifications" element={<NotImplemented phase="Phase 1.11b — Verification queue" />} />
+            {/* Phase 1.3a — verified-tier review queue */}
+            <Route path="verified-queue" element={<VerifiedReviewQueue />} />
+            <Route path="verifications" element={<VerifiedReviewQueue />} />
             <Route path="companies" element={<NotImplemented phase="Phase 2 — Company management" />} />
             <Route path="offers" element={<NotImplemented phase="Phase 2.3 — Offer management" />} />
             <Route path="settings" element={<NotImplemented phase="Phase 2 — Admin settings" />} />

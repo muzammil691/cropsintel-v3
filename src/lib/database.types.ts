@@ -416,6 +416,14 @@ export type Database = {
           updated_at: string
           whatsapp_number: string | null
           whatsapp_verified: boolean
+          verification_state: string
+          verification_state_changed_at: string | null
+          verification_assigned_to: string | null
+          geography_country: string | null
+          geography_city: string | null
+          business_type: string | null
+          annual_volume: string | null
+          referral_source: string | null
         }
         Insert: {
           company_id?: string | null
@@ -433,6 +441,14 @@ export type Database = {
           updated_at?: string
           whatsapp_number?: string | null
           whatsapp_verified?: boolean
+          verification_state?: string
+          verification_state_changed_at?: string | null
+          verification_assigned_to?: string | null
+          geography_country?: string | null
+          geography_city?: string | null
+          business_type?: string | null
+          annual_volume?: string | null
+          referral_source?: string | null
         }
         Update: {
           company_id?: string | null
@@ -450,6 +466,14 @@ export type Database = {
           updated_at?: string
           whatsapp_number?: string | null
           whatsapp_verified?: boolean
+          verification_state?: string
+          verification_state_changed_at?: string | null
+          verification_assigned_to?: string | null
+          geography_country?: string | null
+          geography_city?: string | null
+          business_type?: string | null
+          annual_volume?: string | null
+          referral_source?: string | null
         }
         Relationships: [
           {
@@ -731,6 +755,27 @@ export type Database = {
           reviewer_notes: string | null
           created_at: string
           updated_at: string
+          assigned_to: string | null
+          assigned_at: string | null
+          business_registration_verified: boolean | null
+          business_registration_notes: string | null
+          business_registration_url: string | null
+          linkedin_verified: boolean | null
+          linkedin_notes: string | null
+          linkedin_url: string | null
+          website_verified: boolean | null
+          website_notes: string | null
+          website_url: string | null
+          references_checked_count: number
+          references_notes: string | null
+          trade_history_reviewed: boolean | null
+          trade_history_notes: string | null
+          whatsapp_confirmation_done: boolean | null
+          whatsapp_confirmation_date: string | null
+          decided_at: string | null
+          decided_by: string | null
+          decided_to_state: string | null
+          final_decision_notes: string | null
         }
         Insert: {
           id?: string
@@ -747,6 +792,27 @@ export type Database = {
           reviewer_notes?: string | null
           created_at?: string
           updated_at?: string
+          assigned_to?: string | null
+          assigned_at?: string | null
+          business_registration_verified?: boolean | null
+          business_registration_notes?: string | null
+          business_registration_url?: string | null
+          linkedin_verified?: boolean | null
+          linkedin_notes?: string | null
+          linkedin_url?: string | null
+          website_verified?: boolean | null
+          website_notes?: string | null
+          website_url?: string | null
+          references_checked_count?: number
+          references_notes?: string | null
+          trade_history_reviewed?: boolean | null
+          trade_history_notes?: string | null
+          whatsapp_confirmation_done?: boolean | null
+          whatsapp_confirmation_date?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          decided_to_state?: string | null
+          final_decision_notes?: string | null
         }
         Update: {
           id?: string
@@ -763,6 +829,108 @@ export type Database = {
           reviewer_notes?: string | null
           created_at?: string
           updated_at?: string
+          assigned_to?: string | null
+          assigned_at?: string | null
+          business_registration_verified?: boolean | null
+          business_registration_notes?: string | null
+          business_registration_url?: string | null
+          linkedin_verified?: boolean | null
+          linkedin_notes?: string | null
+          linkedin_url?: string | null
+          website_verified?: boolean | null
+          website_notes?: string | null
+          website_url?: string | null
+          references_checked_count?: number
+          references_notes?: string | null
+          trade_history_reviewed?: boolean | null
+          trade_history_notes?: string | null
+          whatsapp_confirmation_done?: boolean | null
+          whatsapp_confirmation_date?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          decided_to_state?: string | null
+          final_decision_notes?: string | null
+        }
+        Relationships: []
+      }
+      auth_bridge_log: {
+        Row: {
+          id: string
+          user_id: string | null
+          v1_match_email: string | null
+          v1_match_phone: string | null
+          v2_match_email: string | null
+          v2_match_phone: string | null
+          bridge_method: string
+          set_password_required: boolean
+          set_password_completed_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string | null
+          v1_match_email?: string | null
+          v1_match_phone?: string | null
+          v2_match_email?: string | null
+          v2_match_phone?: string | null
+          bridge_method: string
+          set_password_required?: boolean
+          set_password_completed_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string | null
+          v1_match_email?: string | null
+          v1_match_phone?: string | null
+          v2_match_email?: string | null
+          v2_match_phone?: string | null
+          bridge_method?: string
+          set_password_required?: boolean
+          set_password_completed_at?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      guest_sessions: {
+        Row: {
+          id: string
+          client_fingerprint: string | null
+          started_at: string
+          last_seen_at: string
+          deep_outputs_count: number
+          basic_chat_count: number
+          role_inferred: string | null
+          geography_country_inferred: string | null
+          conversation_history: Json
+          converted_to_user: string | null
+          converted_at: string | null
+        }
+        Insert: {
+          id?: string
+          client_fingerprint?: string | null
+          started_at?: string
+          last_seen_at?: string
+          deep_outputs_count?: number
+          basic_chat_count?: number
+          role_inferred?: string | null
+          geography_country_inferred?: string | null
+          conversation_history?: Json
+          converted_to_user?: string | null
+          converted_at?: string | null
+        }
+        Update: {
+          id?: string
+          client_fingerprint?: string | null
+          started_at?: string
+          last_seen_at?: string
+          deep_outputs_count?: number
+          basic_chat_count?: number
+          role_inferred?: string | null
+          geography_country_inferred?: string | null
+          conversation_history?: Json
+          converted_to_user?: string | null
+          converted_at?: string | null
         }
         Relationships: []
       }
