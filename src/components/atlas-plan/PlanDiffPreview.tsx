@@ -117,7 +117,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
 
   return (
     <div className={cn('flex flex-col h-full overflow-hidden', className)}>
-      <header className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/30">
+      <header className="px-2 sm:px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/30">
         <div className="flex items-center gap-2 mb-1">
           <FileDiff className="size-4 text-amber-700 dark:text-amber-300" aria-hidden />
           <h2 className="text-sm font-semibold text-amber-900 dark:text-amber-100">
@@ -144,7 +144,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
         )}
       </header>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2">
         {planDiff.ops.length === 0 ? (
           <p className="text-xs text-slate-500 italic px-2 py-3">
             No ops in this diff. Atlas concluded that the current plan is correct as-is. Click Approve to record that judgment without changes, Reject to discard, or Revise to keep refining.
@@ -177,7 +177,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
         )}
       </div>
 
-      <footer className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2.5 space-y-2">
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-2 sm:px-3 py-2.5 space-y-2">
         {error && (
           <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-2.5 py-1.5 text-[11px] text-red-700 dark:text-red-300">
             {error}
@@ -205,7 +205,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
           </div>
         )}
         {!isResolved && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-1.5">
             <Button
               type="button"
               size="sm"
@@ -250,7 +250,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               size="sm"
               onClick={handleApprove}
               disabled={busy !== null}
-              className="text-xs h-8 ml-auto bg-amber-700 hover:bg-amber-800 text-white"
+              className="text-xs h-8 sm:ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
             >
               {busy === 'approve' ? (
                 <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />

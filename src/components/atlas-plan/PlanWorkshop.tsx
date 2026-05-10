@@ -143,7 +143,7 @@ function EmptyState({ onStartNew }: { onStartNew: () => void }) {
         type="button"
         size="sm"
         onClick={onStartNew}
-        className="mt-1 bg-amber-700 hover:bg-amber-800 text-white"
+        className="mt-1 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
       >
         Start new workshop
       </Button>
@@ -371,7 +371,7 @@ function StartSessionForm({ onStarted, onCancel }: StartSessionFormProps) {
           size="sm"
           onClick={handleStart}
           disabled={busy}
-          className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white"
+          className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
         >
           {busy ? (
             <>
@@ -603,7 +603,7 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
                   size="sm"
                   onClick={handleSubmitAnswer}
                   disabled={submitting || answer.trim().length === 0}
-                  className="text-xs h-8 ml-auto bg-amber-700 hover:bg-amber-800 text-white"
+                  className="text-xs h-8 ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
                 >
                   {submitting ? (
                     <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -626,7 +626,7 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
                 size="sm"
                 onClick={handleFinalize}
                 disabled={finalizing}
-                className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white"
+                className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
               >
                 {finalizing ? (
                   <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -740,7 +740,7 @@ function CitedSourcesChips({ sources }: { sources: WorkshopCitedSource[] }) {
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="text-[10px] text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 inline-flex items-center gap-1"
+        className="text-[10px] text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 inline-flex items-center gap-1 transition-colors duration-200"
       >
         <Quote className="size-3" aria-hidden />
         cited: {sources.length} source{sources.length === 1 ? '' : 's'}

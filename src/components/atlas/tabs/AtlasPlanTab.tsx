@@ -458,7 +458,7 @@ export default function AtlasPlanTab() {
           onClick={() => {
             window.dispatchEvent(new CustomEvent<string>('atlas:tab-navigate', { detail: 'workshop' }))
           }}
-          className="h-7 px-2 text-[11px] border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40"
+          className="h-7 px-2 text-[11px] border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40 transition-colors duration-200"
         >
           Open Workshop
         </Button>

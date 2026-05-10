@@ -96,10 +96,10 @@ export function WorkshopSessionList({
       )}
       aria-label="Workshop sessions"
     >
-      <header className="px-3 pt-3 pb-2 border-b border-amber-200/60 dark:border-amber-900/40">
+      <header className="px-2 sm:px-3 pt-3 pb-2 border-b border-amber-200/60 dark:border-amber-900/40">
         <div className="flex items-center gap-1.5 mb-2">
           <Sparkles className="size-3.5 text-amber-700 dark:text-amber-300" aria-hidden />
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200">
+          <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200">
             Workshop sessions
           </h3>
         </div>
@@ -107,7 +107,7 @@ export function WorkshopSessionList({
           type="button"
           size="sm"
           onClick={onStartNew}
-          className="w-full bg-amber-700 hover:bg-amber-800 text-white text-xs h-8"
+          className="w-full bg-amber-700 hover:bg-amber-800 text-white text-xs h-8 transition-colors duration-200"
         >
           <Plus className="size-3.5 mr-1" aria-hidden />
           Start new workshop
@@ -148,7 +148,7 @@ export function WorkshopSessionList({
                       onClick={() => onSelect(s.id)}
                       aria-pressed={isSelected}
                       className={cn(
-                        'w-full text-left rounded-md px-2 py-1.5 text-[11px] transition-colors duration-150',
+                        'w-full text-left rounded-md px-2 py-1.5 text-[10px] sm:text-[11px] min-h-[44px] sm:min-h-0 transition-colors duration-150',
                         'border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50',
                         isSelected
                           ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-400 dark:border-amber-700 text-amber-900 dark:text-amber-100'
