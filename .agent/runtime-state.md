@@ -9,7 +9,7 @@ This is on Muzammil's Mac, outside any git repo, never committed. The Railway ag
 
 When this file is updated, also update SECRETS.md's change log on Muzammil's Mac.
 
-Last updated: 2026-05-10
+Last updated: 2026-05-10 (Phase 1.3c shipped — verify_jwt config flipped, drift repair queued for Muzammil, smoke-test script added, frontend deploy workflow already in place)
 
 ---
 
@@ -33,17 +33,17 @@ Last updated: 2026-05-10
 - `wizard_sessions` (1.10am)
 - All `atlas_*` tables (1.10aj/al/am/an)
 
-### Edge functions (Supabase, deployed 2026-05-10)
+### Edge functions (Supabase, deployed 2026-05-10; config.toml flipped 2026-05-10 in Phase 1.3c)
 
 | Function | verify_jwt | Purpose |
 |---|---|---|
-| `whatsapp-send-otp` | ⚠️ true (must flip to false) | Sends WhatsApp OTP via Twilio template |
-| `whatsapp-verify-otp` | ⚠️ true (must flip to false) | Validates OTP, signs user in |
-| `auth-bridge` | ⚠️ true (must flip to false) | V1/V2 user detection |
-| `guest-gate` | ⚠️ true (must flip to false) | Tracks 10-deep-output limit |
-| `zyra-chat` | ⚠️ true (likely flip to false) | Phase 1.10 placeholder chat |
+| `whatsapp-send-otp` | false (config.toml) — pending redeploy | Sends WhatsApp OTP via Twilio template |
+| `whatsapp-verify-otp` | false (config.toml) — pending redeploy | Validates OTP, signs user in |
+| `auth-bridge` | false (config.toml) — pending redeploy | V1/V2 user detection |
+| `guest-gate` | false (config.toml) — pending redeploy | Tracks 10-deep-output limit |
+| `zyra-chat` | false (config.toml) — pending redeploy | Phase 1.10 placeholder chat |
 
-**Open issue:** all 5 deployed with verify_jwt=true. They handle pre-signup so they CAN'T require JWT. Phase 1.3c first task fixes in `supabase/config.toml`.
+Config change committed in Phase 1.3c. Builder cannot redeploy from CI (no Supabase access token in CI env); Muzammil runs the 5 `supabase functions deploy` commands per `docs/phase-1.3c-manual-steps.md` step 1.
 
 ### Edge function secrets (set 2026-05-10)
 
@@ -105,12 +105,12 @@ Atlas internals shipped:
 - Phase 1.2 V3 foundation migration ✅
 - Phase 1.3a Auth ✅
 - Phase 1.3b AI agent landing scaffold ✅
+- Phase 1.3c V1.0-alpha unblock — verify_jwt config + drift repair migration + smoke-test script + manual-steps doc ✅ (2026-05-10; Muzammil runs the redeploy/repair/db-push steps per `docs/phase-1.3c-manual-steps.md`)
 - Phase 1.10 cockpit infrastructure (aj/ak/al/am/an/aw/az/ba) ✅
 
 ### Next up
 
-**Phase 1.3c** (queue now) — Unblock end-to-end + drift repair + smoke test
-**Phase 1.4** RBAC enforcement audit
+**Phase 1.4** RBAC enforcement audit (queue after Muzammil confirms 1.3c manual steps complete)
 **Phase 1.5** Public landing polish + market-insight pages stubs
 **Phase 1.6** Adela data spine
 **Phase 1.7** Multi-portal frontend scaffold
@@ -159,12 +159,17 @@ Atlas's role:
 
 ## Open issues
 
-1. **Edge function JWT config** — Phase 1.3c first task
-2. **Migration drift** — 7+ migrations not tracked on remote. Phase 1.3c second task
-3. **Frontend not built/deployed** — Phase 1.3c third task
-4. **End-to-end smoke test missing** — Phase 1.3c fourth task
+All four V1.0-alpha blockers were resolved on the code side in Phase 1.3c. The
+remaining work is Muzammil-side ops that the agent cannot perform from CI
+(needs SUPABASE_ACCESS_TOKEN + direct DB access). See
+`docs/phase-1.3c-manual-steps.md` for step-by-step instructions.
 
-Once cleared, V3 is in preview and Atlas plans Phase 1.4 onward autonomously.
+1. **Edge function JWT config** — config.toml flipped to verify_jwt=false for 5 public functions. ⏳ Muzammil redeploys the 5 functions.
+2. **Migration drift** — `.test.sql` files deleted; marker migration committed. ⏳ Muzammil runs `migration repair --status applied` for the 5 local-only versions, deletes the malformed `20260506` remote row, then `db push`.
+3. **Frontend not built/deployed** — `.github/workflows/deploy.yml` already wired (built earlier); deploy fires on push to main.
+4. **End-to-end smoke test missing** — `scripts/smoke-test-v1-alpha.sh` added. ⏳ Muzammil runs it and verifies OTP delivery.
+
+Once 1, 2 and 4 complete (3 lands automatically with this PR), V3 is in preview and Atlas plans Phase 1.4 onward autonomously.
 
 ---
 

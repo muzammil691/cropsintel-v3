@@ -54,6 +54,24 @@ enable_confirmations = true
 enable_signup = true
 enable_confirmations = true
 
-# Edge Functions config — added per-function as we deploy them in Phase 1.10+
-# [functions.zyra-chat]
-# verify_jwt = false
+# Edge Functions config
+# Public-facing functions handle anonymous (pre-signup) traffic, so they CANNOT
+# require a JWT — Supabase would return 401 before the function runs. Each
+# function still validates inputs, rate-limits via agent_rate_limits, and
+# writes audit-log entries; verify_jwt only controls the gateway gate.
+# Set per Phase 1.3c (V1.0-alpha unblock).
+
+[functions.whatsapp-send-otp]
+verify_jwt = false
+
+[functions.whatsapp-verify-otp]
+verify_jwt = false
+
+[functions.auth-bridge]
+verify_jwt = false
+
+[functions.guest-gate]
+verify_jwt = false
+
+[functions.zyra-chat]
+verify_jwt = false
