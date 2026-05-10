@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils'
 // Lazy-load each tab so the initial cockpit bundle stays small (per spec
 // risk note — initial cockpit bundle stays under 100KB gzipped).
 const AtlasPlanTab = lazy(() => import('./tabs/AtlasPlanTab'))
+const PlanWorkshop = lazy(() => import('../atlas-plan/PlanWorkshop'))
 const AtlasQueueTab = lazy(() => import('./tabs/AtlasQueueTab'))
 const AtlasAgentsTab = lazy(() => import('./tabs/AtlasAgentsTab'))
 const AtlasAuditTab = lazy(() => import('./tabs/AtlasAuditTab'))
@@ -94,6 +95,7 @@ export function AtlasCockpit() {
       artifacts.openForks.length
     return {
       plan: 'mute' as const,
+      workshop: 'mute' as const,
       queue: queueCount,
       agents: failed24h > 0 ? ('dot' as const) : ('mute' as const),
       audit: failed24h,
@@ -275,6 +277,8 @@ function ActiveTab({
   switch (tab) {
     case 'plan':
       return <AtlasPlanTab />
+    case 'workshop':
+      return <PlanWorkshop />
     case 'queue':
       return <AtlasQueueTab heartbeats={heartbeats} />
     case 'agents':

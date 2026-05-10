@@ -1,9 +1,9 @@
-import { Pencil, PlusCircle, Flag, RotateCcw } from 'lucide-react'
+import { Flag, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { PlanNode } from '@/lib/atlas-client'
 
-export type PlanCockpitAction = 'add' | 'modify' | 'follow' | 'revisit'
+export type PlanCockpitAction = 'follow' | 'revisit'
 
 interface PlanActionButtonsProps {
   node: PlanNode
@@ -15,11 +15,13 @@ interface PlanActionButtonsProps {
 }
 
 /**
- * Phase 1.10ba — always-visible labeled cockpit action buttons. Add inserts a
- * sub-phase; Modify rewrites this one; Follow queues the spec for the build
- * runner; Revisit dims the node so the runner skips it. On screens narrower
- * than `lg` the labels collapse to icon-only with `title` tooltips so the
- * actions never go invisible (cockpit row density).
+ * Always-visible labeled cockpit action buttons. Follow queues the spec for the
+ * build runner; Revisit dims the node so the runner skips it. On screens
+ * narrower than `lg` the labels collapse to icon-only with `title` tooltips so
+ * the actions never go invisible (cockpit row density).
+ *
+ * 1.10bb-c Session 4 — Add + Modify removed; plan mutation now flows through
+ * the Workshop tab (decision-log driven, Verifier-audited).
  */
 export function PlanActionButtons(props: PlanActionButtonsProps) {
   const { node, onAction, isFollowing, isRevisiting, isBuilding, className } = props
@@ -29,34 +31,6 @@ export function PlanActionButtons(props: PlanActionButtonsProps) {
       data-testid="plan-action-buttons"
       className={cn('flex items-center gap-1 sm:gap-1.5', className)}
     >
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        title={`Add sub-phase under ${node.title}`}
-        aria-label={`Add sub-phase under ${node.title}`}
-        onClick={(e) => { e.stopPropagation(); onAction('add', node) }}
-        disabled={isBuilding}
-        data-cockpit-action="add"
-        className="h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50"
-      >
-        <PlusCircle className="size-3" />
-        <span className="hidden lg:inline">Add</span>
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        title={`Modify ${node.title}`}
-        aria-label={`Modify ${node.title}`}
-        onClick={(e) => { e.stopPropagation(); onAction('modify', node) }}
-        disabled={isBuilding}
-        data-cockpit-action="modify"
-        className="h-7 px-2 text-[11px] focus-visible:ring-2 focus-visible:ring-emerald-600/50"
-      >
-        <Pencil className="size-3" />
-        <span className="hidden lg:inline">Modify</span>
-      </Button>
       <Button
         type="button"
         size="sm"

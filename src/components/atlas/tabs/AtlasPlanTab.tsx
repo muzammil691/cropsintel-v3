@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Layers, RefreshCw, ListTree, Network, CheckSquare, X, Hammer, BookOpen, Compass, ChevronDown, ChevronUp } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Layers, RefreshCw, ListTree, Network, CheckSquare, X, Hammer, BookOpen, Sparkles } from 'lucide-react'
 import {
   fetchPlan,
   buildFromPlanNode,
@@ -10,14 +10,12 @@ import {
   addPlanNodeToQueue,
   revisitPlanNode,
   type PlanNode,
-  type CockpitConcept,
 } from '@/lib/atlas-client'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { PlanTree, type SpecStatus, type CockpitNodeStatus } from '@/components/atlas-plan/PlanTree'
 import { PlanGraphView } from '@/components/atlas-plan/PlanGraphView'
 import { ConceptsPanel } from '@/components/atlas-plan/ConceptsPanel'
-import { PhaseWizard } from '@/components/atlas-plan/PhaseWizard'
 import { BuildRunnerModal } from '@/components/atlas-plan/BuildRunnerModal'
 import { IdeaFileDrawer } from '@/components/atlas-plan/IdeaFileDrawer'
 import { PhaseApprovalBanner } from '@/components/atlas-plan/PhaseApprovalBanner'
@@ -131,25 +129,6 @@ export default function AtlasPlanTab() {
   const [followingIds, setFollowingIds] = useState<Set<string>>(new Set())
   const [revisitingIds, setRevisitingIds] = useState<Set<string>>(new Set())
   const [buildingIds] = useState<Set<string>>(new Set())
-  const [wizardOpen, setWizardOpen] = useState(false)
-  const [wizardMode, setWizardMode] = useState<'add' | 'modify'>('add')
-  const [wizardNode, setWizardNode] = useState<PlanNode | null>(null)
-  const [wizardSelectedConcepts, setWizardSelectedConcepts] = useState<CockpitConcept[]>([])
-  // Phase 1.10ba — Workshop strip: collapsible framing at top of Plan tab.
-  // Persist collapsed state per browser so the strip stays out of the way once
-  // the user has acknowledged it. Default expanded on first visit.
-  const WORKSHOP_STRIP_KEY = 'cockpit_workshop_strip_collapsed'
-  const [workshopCollapsed, setWorkshopCollapsed] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem(WORKSHOP_STRIP_KEY) === '1'
-  })
-  const toggleWorkshop = useCallback(() => {
-    setWorkshopCollapsed((prev) => {
-      const next = !prev
-      try { window.localStorage.setItem(WORKSHOP_STRIP_KEY, next ? '1' : '0') } catch { /* private mode */ }
-      return next
-    })
-  }, [])
   const [buildRunnerOpen, setBuildRunnerOpen] = useState(false)
   const [approvalBanner, setApprovalBanner] = useState<{ phaseId: string; title: string } | null>(null)
 
@@ -205,31 +184,17 @@ export default function AtlasPlanTab() {
     return () => window.removeEventListener('atlas:plan-refresh', handler as EventListener)
   }, [])
 
-  // Phase 1.10ba — concept-to-wizard handoff. ConceptsPanel dispatches
-  // `atlas:concept-to-wizard` with a CockpitConcept payload. If the wizard
-  // is already open, append the concept to wizardSelectedConcepts so the
-  // PhaseWizard renders an injected-context banner. If no wizard is open,
-  // surface a phase-picker prompt via bulkResult so the user knows the
-  // concept is parked and what to do next.
-  // Phase-picker UI for the "no wizard open" path.
-  const [pendingConceptForPhase, setPendingConceptForPhase] = useState<CockpitConcept | null>(null)
+  // 1.10bb-c Session 4 — concept handoff now routes to the Workshop tab via the
+  // cockpit's `atlas:tab-navigate` event. ConceptsPanel can still dispatch
+  // `atlas:concept-to-wizard`, but we redirect it to open the Workshop tab so
+  // users land where plan mutations actually happen.
   useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<CockpitConcept>
-      const concept = ev.detail
-      if (!concept) return
-      if (wizardOpen) {
-        setWizardSelectedConcepts((prev) =>
-          prev.some((c) => c.id === concept.id) ? prev : [...prev, concept],
-        )
-        setBulkResult(`Concept "${concept.title}" injected into the open wizard as context.`)
-      } else {
-        setPendingConceptForPhase(concept)
-      }
+    const handler = () => {
+      window.dispatchEvent(new CustomEvent<string>('atlas:tab-navigate', { detail: 'workshop' }))
     }
     window.addEventListener('atlas:concept-to-wizard', handler as EventListener)
     return () => window.removeEventListener('atlas:concept-to-wizard', handler as EventListener)
-  }, [wizardOpen])
+  }, [])
 
   const statusByTitle = useMemo(() => new Map<string, SpecStatus>(), [])
 
@@ -399,19 +364,15 @@ export default function AtlasPlanTab() {
     setBulkResult(`Discussion seeded with ${selectedNodes.length} nodes — open chat.`)
   }
 
-  // ─── Phase 1.10aj cockpit action handler ───────────────────────────────
+  // 1.10bb-c Session 4 cockpit action handler — only Follow + Revisit remain;
+  // plan mutation (Add / Modify) now lives in the Workshop tab.
   const onCockpitAction = (action: PlanCockpitAction, node: PlanNode) => {
-    if (action === 'add' || action === 'modify') {
-      setWizardMode(action)
-      setWizardNode(node)
-      setWizardOpen(true)
-      return
-    }
     if (action === 'follow') {
-      // Quick-follow: open wizard pre-filled (mode='modify' uses existing body).
-      setWizardMode('modify')
-      setWizardNode(node)
-      setWizardOpen(true)
+      void runWithBusy(node, async () => {
+        await addPlanNodeToQueue(node.id, node.title, node.body ?? '', 'plan')
+        setFollowingIds(prev => new Set(prev).add(node.id))
+        setQueuedIds(prev => new Set(prev).add(node.id))
+      })
       return
     }
     if (action === 'revisit') {
@@ -433,9 +394,8 @@ export default function AtlasPlanTab() {
     for (const id of revisitingIds) map.set(id, 'revisit')
     for (const id of followingIds) map.set(id, 'follow')
     for (const id of buildingIds) map.set(id, 'building')
-    if (wizardNode) map.set(wizardNode.id, 'wizard-active')
     return map
-  }, [revisitingIds, followingIds, buildingIds, wizardNode])
+  }, [revisitingIds, followingIds, buildingIds])
 
   const followedNodesForRunner = useMemo(() => {
     if (!tree) return []
@@ -476,80 +436,32 @@ export default function AtlasPlanTab() {
     }))
   }
 
-  // Phase 1.10ba — list of leaf-ish nodes for the concept-pick dialog.
-  // Flatten depth-first so users see plan order; cap at 60 entries to keep
-  // the dropdown manageable on a 1000-node plan.
-  const planNodesForPicker = useMemo(() => {
-    if (!tree) return [] as PlanNode[]
-    const out: PlanNode[] = []
-    const walk = (n: PlanNode) => {
-      out.push(n)
-      for (const c of n.children) walk(c)
-    }
-    for (const c of tree.children) walk(c)
-    return out.slice(0, 60)
-  }, [tree])
-
   return (
     <section className="flex flex-row h-full overflow-hidden" data-testid="atlas-plan-cockpit">
       <ConceptsPanel className="hidden md:flex" />
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
-      {/* Phase 1.10ba — Workshop framing strip. Collapsible (per-browser pref).
-          Tells the user this is a planning workshop, not a read-only viewer. */}
+      {/* 1.10bb-c Session 4 — pointer to the Workshop tab; per-phase wizard is
+          retired. Plan tab is now read + queue; Workshop is where plan
+          mutations are debated and audited. */}
       <div
-        data-testid="workshop-strip"
-        className={cn(
-          'shrink-0 border-b border-emerald-200 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/30 transition-all duration-200',
-          workshopCollapsed ? 'px-3 py-1' : 'px-3 sm:px-4 py-3',
-        )}
+        data-testid="workshop-pointer"
+        className="shrink-0 border-b border-amber-200 dark:border-amber-900 bg-amber-50/60 dark:bg-amber-950/20 px-3 sm:px-4 py-2 flex items-center justify-between gap-2"
       >
-        {workshopCollapsed ? (
-          <button
-            type="button"
-            onClick={toggleWorkshop}
-            data-testid="workshop-strip-expand"
-            className="w-full flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded transition-colors duration-200"
-            aria-expanded="false"
-            aria-label="Expand planning workshop info"
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              <Compass className="size-3" /> Planning Workshop — Concept → Wizard → Follow → Build
-            </span>
-            <ChevronDown className="size-3" />
-          </button>
-        ) : (
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-xs font-semibold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
-                <Compass className="size-3.5" /> Planning Workshop
-              </h2>
-              <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 mt-0.5">
-                Drop a concept, refine phases through the wizard, queue clean builds. Atlas reads idea file + master plan + repo.
-              </p>
-              <ol
-                className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-emerald-800 dark:text-emerald-300"
-                aria-label="Workshop steps"
-              >
-                <li className="flex items-center gap-1"><span className="font-mono font-semibold">①</span> Concept</li>
-                <li className="text-emerald-400">→</li>
-                <li className="flex items-center gap-1"><span className="font-mono font-semibold">②</span> Wizard</li>
-                <li className="text-emerald-400">→</li>
-                <li className="flex items-center gap-1"><span className="font-mono font-semibold">③</span> Follow</li>
-                <li className="text-emerald-400">→</li>
-                <li className="flex items-center gap-1"><span className="font-mono font-semibold">④</span> Build</li>
-              </ol>
-            </div>
-            <button
-              type="button"
-              onClick={toggleWorkshop}
-              data-testid="workshop-strip-collapse"
-              className="shrink-0 inline-flex items-center justify-center size-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200"
-              aria-label="Collapse workshop info"
-            >
-              <ChevronUp className="size-3.5" />
-            </button>
-          </div>
-        )}
+        <p className="text-[11px] text-amber-900 dark:text-amber-200 min-w-0 truncate">
+          <Sparkles className="inline size-3 mr-1 -mt-0.5" aria-hidden />
+          Need to change the plan? Open <span className="font-semibold">Workshop</span> — decision-logged, Verifier-audited.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent<string>('atlas:tab-navigate', { detail: 'workshop' }))
+          }}
+          className="h-7 px-2 text-[11px] border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40"
+        >
+          Open Workshop
+        </Button>
       </div>
       <div className="flex flex-col gap-2 px-3 sm:px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 shrink-0">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
@@ -825,94 +737,11 @@ export default function AtlasPlanTab() {
         </Button>
       </div>
 
-      {/* Phase 1.10ba — concept-to-wizard handoff (no-wizard-open path).
-          When a concept is dispatched without a wizard open, prompt the user
-          to pick a phase to start a wizard with the concept pre-injected. */}
-      {pendingConceptForPhase && (
-        <div
-          data-testid="concept-phase-picker"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Pick a phase to start the wizard with this concept"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setPendingConceptForPhase(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4 shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-              <Compass className="size-4 text-emerald-600" /> Use concept in wizard
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Pick a phase to open a wizard with <span className="font-medium text-slate-700 dark:text-slate-300">"{pendingConceptForPhase.title}"</span> pre-injected as context.
-            </p>
-            <div className="mt-3 max-h-64 overflow-y-auto rounded border border-slate-200 dark:border-slate-700">
-              {planNodesForPicker.length === 0 && (
-                <p className="text-[11px] text-slate-500 italic px-2 py-3">No phases available.</p>
-              )}
-              {planNodesForPicker.map((n) => (
-                <button
-                  key={n.id}
-                  type="button"
-                  onClick={() => {
-                    setWizardSelectedConcepts([pendingConceptForPhase])
-                    setWizardMode('modify')
-                    setWizardNode(n)
-                    setWizardOpen(true)
-                    setPendingConceptForPhase(null)
-                  }}
-                  className="w-full text-left px-2 py-1.5 text-[11px] text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-b border-slate-100 dark:border-slate-800 last:border-b-0 transition-colors duration-200"
-                >
-                  {n.title}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 flex justify-end">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setPendingConceptForPhase(null)}
-                className="text-[11px] h-7"
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {approvalBanner && (
         <PhaseApprovalBanner
           phaseId={approvalBanner.phaseId}
           title={approvalBanner.title}
           onDismiss={() => setApprovalBanner(null)}
-        />
-      )}
-
-      {wizardOpen && wizardNode && (
-        <PhaseWizard
-          open={wizardOpen}
-          onOpenChange={(o) => {
-            setWizardOpen(o)
-            if (!o) {
-              setWizardNode(null)
-              setWizardSelectedConcepts([])
-            }
-          }}
-          mode={wizardMode}
-          parentTitle={wizardNode.title}
-          parentBody={wizardNode.body ?? ''}
-          phaseId={wizardNode.id || '1.x'}
-          phaseHint="plan"
-          planNodeId={wizardNode.id}
-          existingSpec={wizardMode === 'modify' ? wizardNode.body : undefined}
-          isNewPhase={wizardMode === 'add'}
-          selectedConcepts={wizardSelectedConcepts}
-          onCompleted={() => {
-            setFollowingIds((prev) => new Set(prev).add(wizardNode.id))
-            load()
-          }}
         />
       )}
 

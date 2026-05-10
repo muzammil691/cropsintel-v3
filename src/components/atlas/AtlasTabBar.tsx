@@ -1,8 +1,8 @@
 import { useRef, type KeyboardEvent } from 'react'
-import { Layers, Inbox, Activity, FileSearch, Workflow, Boxes, Users, Monitor } from 'lucide-react'
+import { Layers, Inbox, Activity, FileSearch, Workflow, Boxes, Users, Monitor, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export type AtlasTabKey = 'plan' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team' | 'preview'
+export type AtlasTabKey = 'plan' | 'workshop' | 'queue' | 'agents' | 'audit' | 'workflows' | 'artifacts' | 'team' | 'preview'
 
 export interface TabSpec {
   key: AtlasTabKey
@@ -22,6 +22,7 @@ interface AtlasTabBarProps {
 
 export const ATLAS_TABS: TabSpec[] = [
   { key: 'plan', label: 'Plan', icon: Layers },
+  { key: 'workshop', label: 'Workshop', icon: Sparkles },
   { key: 'queue', label: 'Queue', icon: Inbox },
   { key: 'agents', label: 'Agents', icon: Activity },
   { key: 'audit', label: 'Audit', icon: FileSearch },

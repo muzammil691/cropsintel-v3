@@ -2423,3 +2423,276 @@ export async function removeAtlasProjectMember(
     },
   )
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Plan Workshop (1.10bb-c, Session 4)
+// ──────────────────────────────────────────────────────────────────────────
+//
+// HTTP surface for the standing planning intelligence. Server lives in
+// atlas/src/lib/workshop-engine.ts (Session 3); endpoints in atlas/src/server.ts.
+// Diff-and-confirm: drafts NEVER auto-write — the Workshop UI shows a
+// side-by-side preview + Approve/Reject/Revise gate before any plan mutation.
+
+export type WorkshopCitedSourceKind =
+  | 'concept'
+  | 'master_plan'
+  | 'idea'
+  | 'v1_file'
+  | 'v3_file'
+  | 'prior_decision'
+  | 'open_question'
+  | 'runtime_state'
+  | 'v3_conventions'
+
+export interface WorkshopCitedSource {
+  kind: WorkshopCitedSourceKind
+  ref: string
+  label: string
+  excerpt?: string
+}
+
+export interface WorkshopTurnQuestion {
+  kind: 'question'
+  question: string
+  options?: string[]
+  cited_sources: WorkshopCitedSource[]
+  confidence: number
+  rationale?: string
+}
+
+export interface WorkshopTurnReady {
+  kind: 'ready'
+  rationale: string
+  cited_sources: WorkshopCitedSource[]
+  confidence: number
+}
+
+export type WorkshopTurnResult = WorkshopTurnQuestion | WorkshopTurnReady
+
+export interface WorkshopTurnRecord {
+  index: number
+  question: string
+  options?: string[]
+  answer: string | null
+  cited_sources: WorkshopCitedSource[]
+  model_cost_usd: number
+  confidence_at_propose: number
+  proposed_at: string
+  answered_at: string | null
+}
+
+export interface WorkshopUpload {
+  filename: string
+  mime: string
+  body: string
+  bytes: number
+}
+
+export interface StartWorkshopSessionInput {
+  prompt: string
+  conceptIds?: readonly string[]
+  uploads?: readonly WorkshopUpload[]
+  v3Paths?: readonly string[]
+  v1Paths?: readonly string[]
+  v1SearchQueries?: readonly string[]
+  masterPlanVersion?: string
+}
+
+export interface StartWorkshopSessionResult {
+  ok: true
+  sessionId: string
+  firstTurn: WorkshopTurnResult
+  unavailableReasons: Record<string, string>
+  costUsd: number
+}
+
+export interface WorkshopDecision {
+  decided: string
+  over: string
+  because: string
+  phase_id?: string | null
+  timestamp: string
+  metadata?: Record<string, unknown>
+}
+
+export interface WorkshopOpenQuestion {
+  id: string
+  question: string
+  reason: string
+  phase_id?: string | null
+  raised_at: string
+  metadata?: Record<string, unknown>
+}
+
+export type WorkshopSessionStatus = 'active' | 'completed' | 'abandoned' | 'awaiting_approval'
+
+export interface WorkshopSessionDetail {
+  id: string
+  status: WorkshopSessionStatus
+  started_at: string
+  completed_at: string | null
+  decision_log: WorkshopDecision[]
+  open_questions: WorkshopOpenQuestion[]
+  concepts_referenced: string[]
+  master_plan_version: string | null
+  plan_diff_id: string | null
+  total_turns: number
+  total_cost_usd: number
+  workshop_state: {
+    turns: WorkshopTurnRecord[]
+    prompt: string
+    last_confidence: number
+    ready_signaled: boolean
+  } | null
+  metadata?: Record<string, unknown>
+}
+
+export interface WorkshopSessionSummary {
+  id: string
+  status: WorkshopSessionStatus
+  started_at: string
+  completed_at: string | null
+  total_turns: number
+  total_cost_usd: number
+  plan_diff_id: string | null
+  master_plan_version: string | null
+}
+
+export type PlanDiffOp =
+  | { op: 'add'; phase_id: string; parent_id?: string | null; title: string; body?: string; launch_tier?: string; metadata?: Record<string, unknown> }
+  | { op: 'remove'; phase_id: string; reason?: string }
+  | { op: 'reorder'; parent_id: string | null; ordered_phase_ids: string[] }
+  | { op: 'edit'; phase_id: string; title?: string; body?: string; launch_tier?: string; metadata?: Record<string, unknown> }
+
+export interface PlanDiff {
+  summary: string
+  ops: PlanDiffOp[]
+  risks: string[]
+  cited_decisions: WorkshopCitedSource[]
+}
+
+export interface PlanDiffRow {
+  id: string
+  session_id: string
+  diff_jsonb: PlanDiff
+  verifier_audit_jsonb: unknown
+  approved_by: string | null
+  approved_at: string | null
+  rejected_by: string | null
+  rejected_at: string | null
+  rejection_reason: string | null
+  applied_at: string | null
+  created_at: string
+}
+
+export async function startWorkshopSession(
+  input: StartWorkshopSessionInput,
+): Promise<StartWorkshopSessionResult> {
+  return fetchJson<StartWorkshopSessionResult>(`${ATLAS_URL}/atlas/workshop/sessions`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: input.prompt,
+      concept_ids: input.conceptIds,
+      uploads: input.uploads,
+      v3_paths: input.v3Paths,
+      v1_paths: input.v1Paths,
+      v1_search_queries: input.v1SearchQueries,
+      master_plan_version: input.masterPlanVersion,
+    }),
+  })
+}
+
+export async function listWorkshopSessions(): Promise<{ ok: true; sessions: WorkshopSessionSummary[] }> {
+  return fetchJson(`${ATLAS_URL}/atlas/workshop/sessions`, { headers: authHeaders() })
+}
+
+export async function getWorkshopSession(
+  sessionId: string,
+): Promise<{ ok: true; session: WorkshopSessionDetail }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/sessions/${encodeURIComponent(sessionId)}`,
+    { headers: authHeaders() },
+  )
+}
+
+export interface SubmitTurnAnswerResult {
+  ok: true
+  totalTurns: number
+  nextTurn: WorkshopTurnResult | null
+  costUsd: number
+}
+
+export async function submitTurnAnswer(
+  sessionId: string,
+  answer: string,
+  options?: { advance?: boolean },
+): Promise<SubmitTurnAnswerResult> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/sessions/${encodeURIComponent(sessionId)}/answer`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer, advance: options?.advance !== false }),
+    },
+  )
+}
+
+export interface FinalizeWorkshopSessionResult {
+  ok: true
+  diffId: string
+  diff: PlanDiff
+  costUsd: number
+}
+
+export async function finalizeWorkshopSession(
+  sessionId: string,
+): Promise<FinalizeWorkshopSessionResult> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/sessions/${encodeURIComponent(sessionId)}/finalize`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function getPlanDiff(diffId: string): Promise<{ ok: true; diff: PlanDiffRow }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}`,
+    { headers: authHeaders() },
+  )
+}
+
+export async function approvePlanDiff(diffId: string): Promise<{
+  ok: true
+  stub?: boolean
+  message?: string
+  diff_id: string
+  approved_at: string
+}> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}/approve`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function rejectPlanDiff(
+  diffId: string,
+  reason: string,
+): Promise<{ ok: true; diff_id: string; rejected_at: string; rejection_reason: string }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}/reject`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    },
+  )
+}
+
+export async function reviseWorkshopDiff(
+  diffId: string,
+): Promise<{ ok: true; diff_id: string; session_id: string; status: 'active' }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}/revise`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}

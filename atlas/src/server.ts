@@ -3711,6 +3711,307 @@ export async function startServer(): Promise<void> {
 
 
 
+    // ─── 1.10bb-c Session 4: Plan Workshop endpoints ────────────────────────
+    // 8 endpoints for the new Workshop UI (PlanWorkshop.tsx). All admin-gated.
+    // See workshop-engine.ts (Session 3) for the brain; this is the HTTP surface.
+
+    // POST /atlas/workshop/sessions — start a new session.
+    if (url === '/atlas/workshop/sessions' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const body = await readBody(req)
+      let payload: {
+        prompt?: string
+        concept_ids?: string[]
+        uploads?: Array<{ filename: string; mime: string; body: string; bytes: number }>
+        v3_paths?: string[]
+        v1_paths?: string[]
+        v1_search_queries?: string[]
+        master_plan_version?: string
+      }
+      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+      if (!payload.prompt || typeof payload.prompt !== 'string' || payload.prompt.trim().length < 3) {
+        json(res, 400, { error: 'prompt required (≥3 chars)' })
+        return
+      }
+      try {
+        const { startWorkshopSession } = await import('./lib/workshop-engine.js')
+        const result = await startWorkshopSession({
+          prompt: payload.prompt,
+          createdBy: principal.phone,
+          conceptIds: payload.concept_ids,
+          uploads: payload.uploads,
+          v3Paths: payload.v3_paths,
+          v1Paths: payload.v1_paths,
+          v1SearchQueries: payload.v1_search_queries,
+          masterPlanVersion: payload.master_plan_version,
+          anthropic,
+        })
+        json(res, 200, { ok: true, ...result })
+      } catch (err) {
+        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+      }
+      return
+    }
+
+    // GET /atlas/workshop/sessions — list sessions (newest first, capped 50).
+    if (url === '/atlas/workshop/sessions' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const { data, error } = await sb
+        .from('plan_workshop_sessions')
+        .select('id, status, started_at, completed_at, total_turns, total_cost_usd, plan_diff_id, master_plan_version')
+        .order('started_at', { ascending: false })
+        .limit(50)
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { ok: true, sessions: data ?? [] })
+      return
+    }
+
+    // POST /atlas/workshop/sessions/:id/answer — record turn answer + advance.
+    {
+      const m = url.match(/^\/atlas\/workshop\/sessions\/([^/]+)\/answer$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const sessionId = decodeURIComponent(m[1])
+        const body = await readBody(req)
+        let payload: { answer?: string; advance?: boolean }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        if (typeof payload.answer !== 'string') {
+          json(res, 400, { error: 'answer required' })
+          return
+        }
+        try {
+          const { recordTurnAnswer } = await import('./lib/workshop-engine.js')
+          const result = await recordTurnAnswer({
+            sessionId,
+            answer: payload.answer,
+            anthropic,
+            advance: payload.advance !== false,
+          })
+          json(res, 200, { ok: true, ...result })
+        } catch (err) {
+          json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // POST /atlas/workshop/sessions/:id/finalize — generate plan diff.
+    {
+      const m = url.match(/^\/atlas\/workshop\/sessions\/([^/]+)\/finalize$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const sessionId = decodeURIComponent(m[1])
+        try {
+          const { finalizePlanDiff } = await import('./lib/workshop-engine.js')
+          const result = await finalizePlanDiff({ sessionId, anthropic })
+          json(res, 200, { ok: true, ...result })
+        } catch (err) {
+          json(res, 500, { error: err instanceof Error ? err.message : String(err) })
+        }
+        return
+      }
+    }
+
+    // GET /atlas/workshop/sessions/:id — fetch a single session (status, turns, decisions).
+    {
+      const m = url.match(/^\/atlas\/workshop\/sessions\/([^/]+)$/)
+      if (m && method === 'GET') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const sessionId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { data, error } = await sb
+          .from('plan_workshop_sessions')
+          .select('id, status, started_at, completed_at, decision_log, open_questions, concepts_referenced, master_plan_version, plan_diff_id, total_turns, total_cost_usd, metadata')
+          .eq('id', sessionId)
+          .single()
+        if (error || !data) { json(res, 404, { error: 'session_not_found' }); return }
+        // Surface the workshop_state turns array under a top-level key so clients
+        // don't have to dig into metadata.
+        const meta = (data as { metadata?: Record<string, unknown> }).metadata ?? {}
+        const workshopState = (meta.workshop_state ?? null) as Record<string, unknown> | null
+        json(res, 200, { ok: true, session: { ...data, workshop_state: workshopState } })
+        return
+      }
+    }
+
+    // GET /atlas/workshop/diffs/:id — fetch a plan diff for preview.
+    {
+      const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)$/)
+      if (m && method === 'GET') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const diffId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { data, error } = await sb
+          .from('plan_diffs')
+          .select('id, session_id, diff_jsonb, verifier_audit_jsonb, approved_by, approved_at, rejected_by, rejected_at, rejection_reason, applied_at, created_at')
+          .eq('id', diffId)
+          .single()
+        if (error || !data) { json(res, 404, { error: 'diff_not_found' }); return }
+        json(res, 200, { ok: true, diff: data })
+        return
+      }
+    }
+
+    // POST /atlas/workshop/diffs/:id/approve — STUB (Session 6 wires real
+    // plan-mutator + autonomous queue trigger). For now: marks the row
+    // approved + flips session to 'completed' so the UI can show success.
+    {
+      const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)\/approve$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const diffId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const nowIso = new Date().toISOString()
+        const { data: diffRow, error: diffErr } = await sb
+          .from('plan_diffs')
+          .update({ approved_by: null, approved_at: nowIso })
+          .eq('id', diffId)
+          .is('approved_at', null)
+          .is('rejected_at', null)
+          .select('id, session_id')
+          .single()
+        if (diffErr || !diffRow) {
+          json(res, 409, { error: 'diff_not_found_or_already_resolved', detail: diffErr?.message })
+          return
+        }
+        if (diffRow.session_id) {
+          await sb.from('plan_workshop_sessions')
+            .update({ status: 'completed', completed_at: nowIso })
+            .eq('id', diffRow.session_id)
+        }
+        json(res, 200, {
+          ok: true,
+          stub: true,
+          message: 'approve recorded — Session 6 will wire plan-mutator + autonomous queue trigger',
+          diff_id: diffId,
+          approved_at: nowIso,
+        })
+        return
+      }
+    }
+
+    // POST /atlas/workshop/diffs/:id/reject — fully implemented; requires reason.
+    {
+      const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)\/reject$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const diffId = decodeURIComponent(m[1])
+        const body = await readBody(req)
+        let payload: { reason?: string }
+        try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
+        if (!payload.reason || typeof payload.reason !== 'string' || payload.reason.trim().length < 3) {
+          json(res, 400, { error: 'reason required (≥3 chars)' })
+          return
+        }
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const nowIso = new Date().toISOString()
+        const { data: diffRow, error: diffErr } = await sb
+          .from('plan_diffs')
+          .update({ rejected_by: null, rejected_at: nowIso, rejection_reason: payload.reason.trim() })
+          .eq('id', diffId)
+          .is('approved_at', null)
+          .is('rejected_at', null)
+          .select('id, session_id')
+          .single()
+        if (diffErr || !diffRow) {
+          json(res, 409, { error: 'diff_not_found_or_already_resolved', detail: diffErr?.message })
+          return
+        }
+        if (diffRow.session_id) {
+          await sb.from('plan_workshop_sessions')
+            .update({ status: 'abandoned', completed_at: nowIso })
+            .eq('id', diffRow.session_id)
+        }
+        json(res, 200, { ok: true, diff_id: diffId, rejected_at: nowIso, rejection_reason: payload.reason.trim() })
+        return
+      }
+    }
+
+    // POST /atlas/workshop/diffs/:id/revise — re-open the session to refine.
+    // Clears 'awaiting_approval' on the session, marks the diff as superseded
+    // (rejected with reason='revised').
+    {
+      const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)\/revise$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const diffId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const nowIso = new Date().toISOString()
+        const { data: diffRow, error: diffErr } = await sb
+          .from('plan_diffs')
+          .update({ rejected_by: null, rejected_at: nowIso, rejection_reason: 'revised — session re-opened' })
+          .eq('id', diffId)
+          .is('approved_at', null)
+          .is('rejected_at', null)
+          .select('id, session_id')
+          .single()
+        if (diffErr || !diffRow) {
+          json(res, 409, { error: 'diff_not_found_or_already_resolved', detail: diffErr?.message })
+          return
+        }
+        if (diffRow.session_id) {
+          await sb.from('plan_workshop_sessions')
+            .update({ status: 'active', plan_diff_id: null, completed_at: null })
+            .eq('id', diffRow.session_id)
+        }
+        json(res, 200, { ok: true, diff_id: diffId, session_id: diffRow.session_id, status: 'active' })
+        return
+      }
+    }
+
+
     // ─── 1.10bb-c Session 3: per-phase wizard endpoints DELETED ─────────────
     // The wizard is replaced by Plan Workshop. Session 6 ships
     // /atlas/workshop/* (start / answer / finalize / approve / reject / etc.).
