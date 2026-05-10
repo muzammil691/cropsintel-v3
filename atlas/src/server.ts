@@ -108,14 +108,11 @@ import {
 import { getWorkflowGraph, clearWorkflowCache } from './lib/workflow-parser'
 import { setPlanNodeState, clearPlanNodeState } from './lib/plan-state'
 import { startAddWizard, startModifyWizard, followPhase, toggleRevisit } from './lib/plan-action-handler'
-import { specFromWizard } from './lib/spec-from-wizard'
-import {
-  startSession as startWizardSession,
-  answerSession as answerWizardSession,
-  getSession as getWizardSession,
-  deleteSession as deleteWizardSession,
-  findResumableSession as findResumableWizardSession,
-} from './lib/wizard-session'
+// 1.10bb-c (Plan Workshop migration, Session 3): the spec-from-wizard +
+// wizard-session modules were deleted. The plan-action-handler exports
+// above are kept as stubs that throw — server-side wizard routes below
+// return 410 Gone. Session 4 replaces the cockpit Add/Modify UI; Session 6
+// ships the new /atlas/workshop/* endpoints.
 import { preflight as buildRunnerPreflight, runBuild as buildRunnerRun, type BuildRunnerNode } from './lib/build-runner'
 import { routeApproval, parseKeywordDecision, isApprovedWhatsAppSender } from './lib/approval-router'
 import { diagnose, type ArtifactInput, type ArtifactKind as DiagnoseArtifactKind, type DiagnosisBucket } from './lib/diagnose'
@@ -3714,231 +3711,63 @@ export async function startServer(): Promise<void> {
 
 
 
-    // POST /atlas/plan/wizard/propose — wizard question generator. Atlas
-    // (Claude Sonnet) proposes 3-7 multi-choice questions to resolve a vague
-    // phase into a concrete spec. Returns DEFAULT_QUESTIONS on Claude failure.
-    if (url === '/atlas/plan/wizard/propose' && method === 'POST') {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
-        return
-      }
-      const body = await readBody(req)
-      let payload: {
-        mode?: 'add' | 'modify'
-        parent_title?: string
-        parent_body?: string
-        phase_hint?: string
-        existing_spec?: string
-        concept_summaries?: string[]
-        recent_done_specs?: string[]
-      }
-      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
-      if (!payload.parent_title) { json(res, 400, { error: 'parent_title required' }); return }
-      try {
-        const result = payload.mode === 'modify'
-          ? await startModifyWizard({
-              parentTitle: payload.parent_title,
-              parentBody: payload.parent_body ?? '',
-              phaseHint: payload.phase_hint ?? 'plan',
-              existingSpec: payload.existing_spec ?? '',
-              conceptSummaries: payload.concept_summaries,
-              recentDoneSpecs: payload.recent_done_specs,
-            })
-          : await startAddWizard({
-              parentTitle: payload.parent_title,
-              parentBody: payload.parent_body ?? '',
-              phaseHint: payload.phase_hint ?? 'plan',
-              conceptSummaries: payload.concept_summaries,
-              recentDoneSpecs: payload.recent_done_specs,
-            })
-        json(res, 200, { ok: true, ...result })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
-    }
-
-    // POST /atlas/plan/wizard/finalize — turn wizard answers into a spec
-    // markdown preview. Doesn't write to disk — that's /follow.
-    if (url === '/atlas/plan/wizard/finalize' && method === 'POST') {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
-        return
-      }
-      const body = await readBody(req)
-      let payload: {
-        parent_title?: string
-        phase_id?: string
-        phase_hint?: string
-        mode?: 'add' | 'modify'
-        answers?: Array<{ question_id?: string; question_prompt?: string; answer?: string; free_text?: string }>
-        concept_summaries?: string[]
-        existing_spec?: string
-      }
-      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
-      if (!payload.parent_title || !payload.phase_id) {
-        json(res, 400, { error: 'parent_title and phase_id required' })
-        return
-      }
-      try {
-        const result = await specFromWizard({
-          parentTitle: payload.parent_title,
-          phaseId: payload.phase_id,
-          phaseHint: payload.phase_hint ?? 'plan',
-          mode: payload.mode ?? 'add',
-          answers: (payload.answers ?? []).map(a => ({
-            questionId: a.question_id ?? '',
-            questionPrompt: a.question_prompt ?? '',
-            answer: a.answer ?? '',
-            freeText: a.free_text,
-          })),
-          conceptSummaries: payload.concept_summaries,
-          existingSpec: payload.existing_spec,
+    // ─── 1.10bb-c Session 3: per-phase wizard endpoints DELETED ─────────────
+    // The wizard is replaced by Plan Workshop. Session 6 ships
+    // /atlas/workshop/* (start / answer / finalize / approve / reject / etc.).
+    // Until those land, every old wizard URL returns 410 Gone with a clear
+    // pointer so cockpit clients fail loudly instead of silently 404-ing.
+    //
+    // Affected URLs (all return 410):
+    //   POST /atlas/plan/wizard/propose
+    //   POST /atlas/plan/wizard/finalize
+    //   POST /atlas/wizard/start
+    //   POST /atlas/wizard/answer
+    //   GET  /atlas/wizard/session/:id
+    //   DELETE /atlas/wizard/session/:id
+    //   GET  /atlas/wizard/resumable
+    //
+    // The `/atlas/plan/follow` route a few blocks below also ends up 500-ing
+    // because plan-action-handler.followPhase is now a throwing stub — that's
+    // expected breakage during the Session 3 → Session 4 window. Session 4
+    // replaces the cockpit's Add/Modify/Follow surfaces with the Workshop tab,
+    // and Session 6 wires the new approve-and-queue path that supersedes
+    // /atlas/plan/follow entirely.
+    {
+      const isWizardPropose = url === '/atlas/plan/wizard/propose' && method === 'POST'
+      const isWizardFinalize = url === '/atlas/plan/wizard/finalize' && method === 'POST'
+      const isWizardStart = url === '/atlas/wizard/start' && method === 'POST'
+      const isWizardAnswer = url === '/atlas/wizard/answer' && method === 'POST'
+      const isWizardSessionGet = method === 'GET' && url.startsWith('/atlas/wizard/session/')
+      const isWizardSessionDelete = method === 'DELETE' && url.startsWith('/atlas/wizard/session/')
+      const isWizardResumable = method === 'GET' && url.startsWith('/atlas/wizard/resumable')
+      if (
+        isWizardPropose
+        || isWizardFinalize
+        || isWizardStart
+        || isWizardAnswer
+        || isWizardSessionGet
+        || isWizardSessionDelete
+        || isWizardResumable
+      ) {
+        json(res, 410, {
+          error: 'wizard_replaced_by_workshop',
+          message:
+            'The per-phase wizard was deleted in 1.10bb-c (Session 3). ' +
+            'Plan Workshop replaces it. Session 6 of the workshop migration ' +
+            'ships /atlas/workshop/* (start / answer / finalize / approve / reject). ' +
+            'Cockpit Add/Modify/Follow buttons stop working until Session 4 lands the Workshop tab.',
+          replacement_endpoints: [
+            'POST /atlas/workshop/sessions',
+            'POST /atlas/workshop/sessions/:id/answer',
+            'POST /atlas/workshop/sessions/:id/finalize',
+            'GET  /atlas/workshop/sessions/:id/diff',
+            'POST /atlas/workshop/diffs/:id/approve',
+            'POST /atlas/workshop/diffs/:id/reject',
+            'POST /atlas/workshop/diffs/:id/revise',
+          ],
         })
-        json(res, 200, { ok: true, ...result })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
-    }
-
-    // ─── Phase 1.10am — deep multi-turn wizard ─────────────────────────────
-    // POST /atlas/wizard/start — open a new session and return the first turn.
-    if (url === '/atlas/wizard/start' && method === 'POST') {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
         return
       }
-      const body = await readBody(req)
-      let payload: {
-        phase_id?: string
-        parent_title?: string
-        parent_body?: string
-        phase_hint?: string
-        mode?: 'add' | 'modify'
-        existing_spec?: string
-        concept_summaries?: string[]
-      }
-      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
-      if (!payload.phase_id || !payload.parent_title) {
-        json(res, 400, { error: 'phase_id and parent_title required' })
-        return
-      }
-      try {
-        const result = await startWizardSession({
-          phaseId: payload.phase_id,
-          parentTitle: payload.parent_title,
-          parentBody: payload.parent_body ?? '',
-          phaseHint: payload.phase_hint ?? 'plan',
-          mode: payload.mode ?? 'add',
-          existingSpec: payload.existing_spec,
-          conceptSummaries: payload.concept_summaries,
-          createdBy: principal.phone,
-        })
-        json(res, 200, { ok: true, ...result })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
-    }
-
-    // POST /atlas/wizard/answer — record the user's answer and fetch the next
-    // turn (or completion).
-    if (url === '/atlas/wizard/answer' && method === 'POST') {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
-        return
-      }
-      const body = await readBody(req)
-      let payload: { session_id?: string; answer?: string }
-      try { payload = JSON.parse(body) } catch { json(res, 400, { error: 'Invalid JSON' }); return }
-      if (!payload.session_id || typeof payload.answer !== 'string') {
-        json(res, 400, { error: 'session_id and answer required' })
-        return
-      }
-      try {
-        const result = await answerWizardSession({
-          sessionId: payload.session_id,
-          answer: payload.answer,
-        })
-        if ('ok' in result && result.ok === false) {
-          json(res, 409, { ok: false, reason: result.reason })
-          return
-        }
-        json(res, 200, { ok: true, ...(result as Record<string, unknown>) })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
-    }
-
-    // GET /atlas/wizard/session/:id — fetch a session for resume.
-    if (method === 'GET' && url.startsWith('/atlas/wizard/session/')) {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
-        return
-      }
-      const id = decodeURIComponent(url.replace('/atlas/wizard/session/', '').split('?')[0]).trim()
-      if (!id) { json(res, 400, { error: 'session id required' }); return }
-      try {
-        const session = await getWizardSession(id)
-        if (!session) { json(res, 404, { error: 'session_not_found' }); return }
-        json(res, 200, { ok: true, session })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
-    }
-
-    // DELETE /atlas/wizard/session/:id — abandon a session.
-    if (method === 'DELETE' && url.startsWith('/atlas/wizard/session/')) {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
-        return
-      }
-      const id = decodeURIComponent(url.replace('/atlas/wizard/session/', '').split('?')[0]).trim()
-      if (!id) { json(res, 400, { error: 'session id required' }); return }
-      try {
-        const result = await deleteWizardSession(id)
-        json(res, 200, { ok: result.ok })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
-    }
-
-    // GET /atlas/wizard/resumable?phase_id=… — find an in-progress session for
-    // a phase, so the cockpit can prompt "Resume?" when the user reopens.
-    if (method === 'GET' && url.startsWith('/atlas/wizard/resumable')) {
-      const principal = await requireAuth(req, res)
-      if (!principal) return
-      if (!roleAtLeast(principal.role, 'admin')) {
-        json(res, 403, { error: 'role_insufficient', required: 'admin' })
-        return
-      }
-      const qs = url.split('?')[1] ?? ''
-      const params = new URLSearchParams(qs)
-      const phaseId = params.get('phase_id')?.trim()
-      if (!phaseId) { json(res, 400, { error: 'phase_id required' }); return }
-      try {
-        const session = await findResumableWizardSession(phaseId)
-        json(res, 200, { ok: true, session })
-      } catch (err) {
-        json(res, 500, { error: err instanceof Error ? err.message : String(err) })
-      }
-      return
     }
 
     // POST /atlas/plan/follow — persist wizard-generated spec, set follow
