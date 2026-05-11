@@ -8,11 +8,11 @@
 //   list — folder uploads collapse under a parent row
 //   detail drawer (last selected concept)
 //
-// Folder upload uses <input webkitdirectory> (Chrome/Safari/Firefox). The
-// client walks the FileList, strips binary / vendor / build noise, batches
-// text files into /atlas/concepts/batch with parent_folder=<root>. The folder
-// parent row carries source_type='folder' so it renders as the collapsible
-// header in the list.
+// Folder upload uses the `webkitdirectory` file-input attribute
+// (Chrome/Safari/Firefox). The client walks the FileList, strips binary /
+// vendor / build noise, batches text files into /atlas/concepts/batch with
+// parent_folder=<root>. The folder parent row carries source_type='folder'
+// so it renders as the collapsible header in the list.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -943,7 +943,12 @@ function DeleteConfirmDialog({ target, childCount, onCancel, onConfirm, busy }: 
 
   return (
     <Dialog open={Boolean(target)} onOpenChange={(open) => { if (!open && !busy) onCancel() }}>
-      <DialogContent className="sm:max-w-md" showCloseButton={false}>
+      <DialogContent
+        className="sm:max-w-md"
+        showCloseButton={false}
+        onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}
+        onInteractOutside={(event) => { if (busy) event.preventDefault() }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="size-4 text-rose-600 dark:text-rose-400 shrink-0" aria-hidden />
@@ -968,7 +973,10 @@ function DeleteConfirmDialog({ target, childCount, onCancel, onConfirm, busy }: 
             size="sm"
             onClick={onConfirm}
             disabled={busy}
-            className="bg-rose-600 hover:bg-rose-700 text-white border-rose-600"
+            className={cn(
+              'bg-rose-600 hover:bg-rose-700 text-white border-rose-600 transition-colors duration-200',
+              busy && 'cursor-not-allowed',
+            )}
           >
             <Trash2 className="size-3 mr-1.5" aria-hidden />
             {confirmLabel}

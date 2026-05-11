@@ -665,7 +665,7 @@ function ConceptMultiSelect({
                             toggleFolder(p.title, state !== 'all')
                             setFolderDropdownOpen(false)
                           }}
-                          className="w-full text-left px-2.5 py-1.5 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5 focus:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800"
+                          className="w-full text-left px-2.5 py-1.5 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200 flex items-center gap-1.5 focus:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800"
                         >
                           <Folder className="size-3 text-amber-700 dark:text-amber-300 shrink-0" aria-hidden />
                           <span className="flex-1 truncate">{p.title}</span>
