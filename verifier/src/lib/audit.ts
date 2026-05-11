@@ -1,5 +1,5 @@
 import { VerificationResult } from '../types'
-import { getSupabaseClient } from './supabase'
+import { requireSupabaseClient } from './supabase'
 
 export type UnknownReason =
   | 'spec_not_found'
@@ -15,11 +15,10 @@ export async function writeVerifierRun(
   mode: 'audit-only' | 'gate',
   remediationTaskId?: string,
 ): Promise<void> {
-  const supabase = getSupabaseClient()
-  if (!supabase) {
-    console.warn('[verifier] Supabase not configured — skipping audit log write')
-    return
-  }
+  // Phase 1.10bb: write paths must fail loud if SERVICE_ROLE_KEY is missing.
+  // Skipping silently caused verdict=pass to be sent back to agent-loop
+  // without any row being persisted, corrupting the audit trail.
+  const supabase = requireSupabaseClient()
 
   const { error } = await supabase.from('verifier_runs').insert({
     task_id: result.taskId,
@@ -61,11 +60,8 @@ export async function writeUnknownVerifierRun(
   unknownReason: UnknownReason,
   durationMs: number,
 ): Promise<void> {
-  const supabase = getSupabaseClient()
-  if (!supabase) {
-    console.warn('[verifier] Supabase not configured — skipping unknown audit log write')
-    return
-  }
+  // Phase 1.10bb: see writeVerifierRun — write paths must fail loud.
+  const supabase = requireSupabaseClient()
 
   const { error } = await supabase.from('verifier_runs').insert({
     task_id: taskId,

@@ -49,13 +49,41 @@ If all programmatic checks pass, two AI models review independently:
 |---|---|---|
 | `OPENAI_API_KEY` | Yes | OpenAI API key (o3 judgment + GPT-4o council tiebreak) |
 | `GEMINI_API_KEY` | Yes | Google Gemini API key (Gemini 2.5 Pro large-context review) |
-| `SUPABASE_URL` | Yes | V3 Supabase project URL |
-| `SUPABASE_SERVICE_KEY` | Yes | Supabase service-role key (bypasses RLS for audit writes) |
+| `SUPABASE_URL` | Yes | V3 Supabase project URL (or `V3_SUPABASE_URL` — same value) |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Yes** | Supabase **service-role** key. **Never** the anon key — see warning below. |
 | `TWILIO_ACCOUNT_SID` | Optional | Twilio SID for WhatsApp gap notifications |
 | `TWILIO_AUTH_TOKEN` | Optional | Twilio auth token |
 | `TWILIO_WHATSAPP_FROM` | Optional | Twilio WhatsApp sender number (e.g. `+14155238886`) |
 | `NOTIFY_WHATSAPP_TO` | Optional | Recipient WhatsApp number (e.g. `+447700900000`) |
 | `REPO_ROOT` | Auto | Absolute path to the V3 repo root (default: parent of `verifier/`) |
+
+### Why the service-role key is mandatory (phase-1.10bb)
+
+The Verifier writes one row to `public.verifier_runs` per audit. That table
+has Row-Level Security enabled, and the post-1.4a hardening pass removed the
+permissive `INSERT` policy that would have allowed the anon key through. The
+service-role key is the **only** key that satisfies both the table's RLS
+policies and Supabase's default service-role bypass — using the anon key
+results in silent `db_write_failed` rows, which in turn makes
+`agent-loop.sh` think a commit was verified when in fact no row was ever
+written. That regression burned us in phase-1.10az; phase-1.10bb makes the
+service-role key requirement explicit at startup.
+
+The Verifier service refuses to fall back to the anon key under any
+circumstances. If only the anon key is set, `requireSupabaseClient()`
+throws a descriptive error at first call — the audit pipeline fails loud
+rather than silently dropping rows.
+
+**Accepted env var names** (priority order — first match wins):
+
+1. `V3_SUPABASE_SERVICE_ROLE_KEY`
+2. `SUPABASE_SERVICE_ROLE_KEY`
+3. `V3_SUPABASE_SECRET_KEY`
+4. `SUPABASE_SECRET_KEY`
+5. `SUPABASE_SERVICE_KEY` (legacy — kept for Railway services migrated before May 2026)
+
+**Never** set `SUPABASE_ANON_KEY` for the Verifier service. The Verifier
+will refuse to start its write path if `ANON_KEY` is the only configured key.
 
 ## Modes
 
@@ -96,4 +124,19 @@ npm test
 ```
 Each of the 7 programmatic checks has both a passing and failing test case.
 
+### Verifier_runs INSERT smoke test (phase-1.10bb)
+
+`smoke.test.ts` at the repo root of `verifier/` is the canonical DB-write
+smoke test. It inserts a synthetic row (task_id prefixed `smoke-test-`),
+asserts the row is readable, then DELETEs it in a `try/finally` so even an
+assertion failure leaves no orphan rows behind. CI must run this test
+against a real Supabase project — set `SMOKE_SKIP_IF_NO_CREDS=true` only
+for local dev environments that legitimately can't reach Supabase.
+
+```bash
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npx vitest run smoke.test.ts
+```
+
 <!-- smoke test phase-test-verifier-fix verified verifier audit path -->
+<!-- phase-1.10bb — env var contract enforced; see "Why the service-role key is mandatory" -->
+
