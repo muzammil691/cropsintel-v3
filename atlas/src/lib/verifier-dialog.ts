@@ -19,6 +19,7 @@
 
 import { getSupabaseClient } from './supabase'
 import { sendWhatsAppReply } from './twilio'
+import { transitionDispatchStatus } from './dispatch-state-machine'
 
 const DEFAULT_ALERT_PHONE = '+971562556592'
 
@@ -65,11 +66,26 @@ export async function pauseBuilder(
   }
 
   const pauseToken = makePauseToken()
-  const { error: writeErr } = await sb
-    .from('atlas_dispatches')
-    .update({ builder_pause_token: pauseToken })
-    .eq('id', dispatchId)
-  if (writeErr) return { ok: false, reason: `set pause token failed: ${writeErr.message}` }
+  // Session 6 state machine: building → paused. The state-machine call is the
+  // authoritative status writer; if the row isn't in 'building' the transition
+  // is rejected + a warning is logged, and we still set the token so the
+  // legacy reader-by-token paths (badge, /paused list) keep working — that
+  // way operational pauses on dispatches that haven't reached 'building' yet
+  // aren't silently dropped.
+  const transition = await transitionDispatchStatus(dispatchId, 'paused', {
+    extraUpdate: { builder_pause_token: pauseToken },
+    reason: 'verifier-dialog pause',
+  })
+  if (!transition.ok) {
+    // Fall back to setting just the token (preserves prior behaviour on
+    // non-build-state rows). The state-machine warning has already logged
+    // why the transition was rejected.
+    const { error: writeErr } = await sb
+      .from('atlas_dispatches')
+      .update({ builder_pause_token: pauseToken })
+      .eq('id', dispatchId)
+    if (writeErr) return { ok: false, reason: `set pause token failed: ${writeErr.message}` }
+  }
 
   const phone = process.env.VERIFIER_ALERT_PHONE
     ?? process.env.ATLAS_ALERT_PHONE
@@ -111,16 +127,30 @@ export async function pauseBuilder(
   return { ok: true, pauseToken, whatsappSid, whatsappError }
 }
 
-/** Clear the pause token. Status stays 'building' — the loop picks it up. */
+/**
+ * Clear the pause token and flip paused → building so the picker re-considers
+ * the row. The state-machine guard is best-effort: if the row is in a
+ * non-build status, only the token is cleared so legacy callers stay
+ * unblocked.
+ */
 export async function resumeBuilder(dispatchId: string): Promise<ResumeBuilderResult> {
   const sb = getSupabaseClient()
   if (!sb) return { ok: false, reason: 'supabase client unavailable' }
 
-  const { error } = await sb
-    .from('atlas_dispatches')
-    .update({ builder_pause_token: null })
-    .eq('id', dispatchId)
-  if (error) return { ok: false, reason: `clear pause token failed: ${error.message}` }
+  // Session 6 state machine: paused → building.
+  const transition = await transitionDispatchStatus(dispatchId, 'building', {
+    extraUpdate: { builder_pause_token: null },
+    reason: 'verifier-dialog resume',
+  })
+  if (!transition.ok) {
+    // Fall back to clearing only the token. The state-machine warning has
+    // already logged the rejected transition.
+    const { error } = await sb
+      .from('atlas_dispatches')
+      .update({ builder_pause_token: null })
+      .eq('id', dispatchId)
+    if (error) return { ok: false, reason: `clear pause token failed: ${error.message}` }
+  }
 
   try {
     await sb.from('atlas_events').insert({
@@ -138,20 +168,31 @@ export async function resumeBuilder(dispatchId: string): Promise<ResumeBuilderRe
   return { ok: true }
 }
 
-/** Clear the pause token AND mark the dispatch aborted. */
+/**
+ * Clear the pause token AND transition building → aborted via the state
+ * machine. Per Session 6's allowed transitions, abort from 'paused' is NOT
+ * permitted — the operator must resume first (paused → building → aborted).
+ * The dispatch-state-machine warning surfaces in console when that rule
+ * fires; this function returns ok:false so callers can show a UI hint.
+ */
 export async function abortBuilder(dispatchId: string, reason?: string): Promise<ResumeBuilderResult> {
   const sb = getSupabaseClient()
   if (!sb) return { ok: false, reason: 'supabase client unavailable' }
 
-  const { error } = await sb
-    .from('atlas_dispatches')
-    .update({
+  // Session 6 state machine: building → aborted.
+  const transition = await transitionDispatchStatus(dispatchId, 'aborted', {
+    extraUpdate: {
       builder_pause_token: null,
-      status: 'aborted',
       error_message: reason ?? 'Aborted via Verifier dialog',
-    })
-    .eq('id', dispatchId)
-  if (error) return { ok: false, reason: `abort failed: ${error.message}` }
+    },
+    reason: 'verifier-dialog abort',
+  })
+  if (!transition.ok) {
+    return {
+      ok: false,
+      reason: transition.warning ?? transition.error ?? 'abort transition rejected by state machine',
+    }
+  }
 
   try {
     await sb.from('atlas_events').insert({

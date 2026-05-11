@@ -87,9 +87,51 @@ export function AtlasCockpit() {
     }
   }, [chatCollapsedMobile])
 
-  // Tab badges live-update from existing 5s status + 15s artifact polls.
+  // 1.10bb-c Session 6 — live atlas_dispatches queued + building count.
+  // Drives the Queue tab badge so operators see the autonomous-build pipeline
+  // depth at a glance. Initial fetch + Postgres realtime keeps the number in
+  // sync without polling. The count includes both 'queued' (waiting to be
+  // picked up) and 'building' (actively running) rows — the operator cares
+  // about total in-flight work, not just rows still in queue.
+  const [dispatchQueueCount, setDispatchQueueCount] = useState(0)
+  const refreshDispatchQueueCount = useCallback(async () => {
+    try {
+      // Cast: atlas_dispatches ships in migration 20260430000000 — not in
+      // generated types until `supabase gen types` is rerun post-deploy.
+      const client = supabase as unknown as {
+        from: (t: string) => {
+          select: (cols: string, opts: { count: 'exact'; head: true }) => {
+            in: (col: string, vals: string[]) => Promise<{ count: number | null }>
+          }
+        }
+      }
+      const { count } = await client
+        .from('atlas_dispatches')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['queued', 'building'])
+      setDispatchQueueCount(count ?? 0)
+    } catch {
+      // Best-effort; realtime keeps it fresh.
+    }
+  }, [])
+  useEffect(() => { void refreshDispatchQueueCount() }, [refreshDispatchQueueCount])
+  useEffect(() => {
+    const channel = supabase
+      .channel('atlas-dispatches-queue-count')
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        'postgres_changes' as any,
+        { event: '*', schema: 'public', table: 'atlas_dispatches' },
+        () => { void refreshDispatchQueueCount() },
+      )
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [refreshDispatchQueueCount])
+
+  // Tab badges live-update from existing 5s status + 15s artifact polls,
+  // plus Session 6's realtime dispatch-queue count for the Queue tab.
   const badges = useMemo(() => {
-    const queueCount = artifacts.pendingSpecs.length
+    const pendingSpecsCount = artifacts.pendingSpecs.length
     const failed24h = status?.failed_24h ?? 0
     const pendingArtifacts =
       artifacts.pendingSpecs.length +
@@ -98,7 +140,7 @@ export function AtlasCockpit() {
     return {
       plan: 'mute' as const,
       workshop: 'mute' as const,
-      queue: queueCount,
+      queue: dispatchQueueCount + pendingSpecsCount,
       agents: failed24h > 0 ? ('dot' as const) : ('mute' as const),
       audit: failed24h,
       workflows: 'mute' as const,
@@ -106,7 +148,13 @@ export function AtlasCockpit() {
       team: 'mute' as const,
       preview: 'mute' as const,
     }
-  }, [artifacts.pendingSpecs.length, artifacts.designAudits.length, artifacts.openForks.length, status?.failed_24h])
+  }, [
+    artifacts.pendingSpecs.length,
+    artifacts.designAudits.length,
+    artifacts.openForks.length,
+    status?.failed_24h,
+    dispatchQueueCount,
+  ])
 
   // Handler invoked when a tool inside the chat needs to deep-link to a tab
   // (e.g. /plan, /workflow). The slash-menu routes navigation commands here.
