@@ -19,6 +19,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { lazy, Suspense, type ReactNode } from 'react'
 import { Toaster } from 'sonner'
+import { X } from 'lucide-react'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { DrAtlasAssistant } from '@/components/atlas/DrAtlasAssistant'
 import { AtlasAuthGuard } from '@/components/atlas/AtlasAuthGuard'
@@ -26,6 +27,7 @@ import { RootRedirect } from '@/components/RootRedirect'
 import { useAuth } from '@/contexts/AuthContext'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const AtlasCockpit = lazy(() =>
   import('@/components/atlas/AtlasCockpit').then((m) => ({ default: m.AtlasCockpit })),
@@ -38,11 +40,28 @@ function CockpitLoadingFallback() {
     <div
       role="status"
       aria-live="polite"
-      className="min-h-screen grid place-items-center bg-slate-50 dark:bg-slate-950"
+      aria-label="Atlas cockpit loading"
+      className="min-h-screen bg-slate-50 dark:bg-slate-950"
     >
-      <span className="text-sm text-slate-600 dark:text-slate-400">
-        Atlas — loading…
-      </span>
+      <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <Skeleton className="h-8 w-8 rounded-full" />
+          <Skeleton className="h-4 w-32" />
+          <div className="ml-auto flex items-center gap-2">
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+        </div>
+      </div>
+      <div className="mx-auto max-w-6xl px-4 py-6 space-y-4">
+        <Skeleton className="h-8 w-48" />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-32 w-full" />
+        </div>
+        <Skeleton className="h-64 w-full" />
+      </div>
     </div>
   )
 }
@@ -64,10 +83,10 @@ function MigrationBanner(): ReactNode {
           variant="ghost"
           size="sm"
           onClick={clearMigrationNotice}
-          aria-label="Close notification"
-          className="shrink-0 min-h-[44px] min-w-[44px] h-11 w-11 p-0 text-green-700 hover:text-green-900 hover:bg-green-100 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-green-600/50"
+          aria-label="Dismiss migration notice"
+          className="shrink-0 text-green-700 hover:text-green-900 hover:bg-green-100 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-green-600/50"
         >
-          <span aria-hidden="true">✕</span>
+          <X className="h-4 w-4" aria-hidden="true" />
         </Button>
       </Alert>
     </div>
