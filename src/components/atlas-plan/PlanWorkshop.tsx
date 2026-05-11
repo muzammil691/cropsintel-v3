@@ -158,10 +158,26 @@ interface StartSessionFormProps {
   onCancel: () => void
 }
 
+// 1.10bb-c Session 7 — pre-select from the localStorage list ConceptsPanel
+// writes when the user clicks "Use in Workshop". Keeping the key in sync with
+// ConceptsPanel.WORKSHOP_SELECTION_KEY (string literal duplicated here so
+// PlanWorkshop has no circular import on ConceptsPanel).
+const WORKSHOP_SELECTION_KEY = 'cockpit_workshop_selected_concept_ids'
+
+function readPreselectedConceptIds(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(WORKSHOP_SELECTION_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw) as unknown
+    return Array.isArray(arr) ? new Set(arr.filter((x): x is string => typeof x === 'string')) : new Set()
+  } catch { return new Set() }
+}
+
 function StartSessionForm({ onStarted, onCancel }: StartSessionFormProps) {
   const [prompt, setPrompt] = useState('')
   const [pasteContent, setPasteContent] = useState('')
-  const [conceptIds, setConceptIds] = useState<Set<string>>(new Set())
+  const [conceptIds, setConceptIds] = useState<Set<string>>(() => readPreselectedConceptIds())
   const [v3Paths, setV3Paths] = useState('')
   const [v1Paths, setV1Paths] = useState('')
   const [v1Search, setV1Search] = useState('')
@@ -186,6 +202,17 @@ function StartSessionForm({ onStarted, onCancel }: StartSessionFormProps) {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // Stay in sync if the user flags more concepts in the Concepts panel
+  // while the form is open.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string[]>).detail
+      if (Array.isArray(detail)) setConceptIds(new Set(detail))
+    }
+    window.addEventListener('atlas:workshop-selection-changed', handler as EventListener)
+    return () => window.removeEventListener('atlas:workshop-selection-changed', handler as EventListener)
   }, [])
 
   async function handleStart() {

@@ -3709,6 +3709,209 @@ export async function startServer(): Promise<void> {
       return
     }
 
+    // 1.10bb-c Session 7 — POST /atlas/concepts/batch
+    // Bulk-insert N concept rows in one round-trip. Used by the Concepts
+    // panel's folder upload (a 300-file checkout would otherwise be 300
+    // HTTP calls). Returns the inserted rows so the UI can drop them into
+    // the list without a refetch.
+    if (url === '/atlas/concepts/batch' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const rawBody = await readBody(req)
+      let payload: {
+        parent_folder?: string
+        concepts?: Array<{
+          title: string
+          content?: string
+          source_type?: 'paste' | 'upload' | 'voice' | 'past-chat' | 'folder'
+          source_ref?: string
+          theme?: string
+        }>
+      }
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+      const items = Array.isArray(payload.concepts) ? payload.concepts : []
+      if (items.length === 0) { json(res, 400, { error: 'concepts[] required (non-empty)' }); return }
+      if (items.length > 1000) { json(res, 400, { error: 'batch too large — cap is 1000 rows' }); return }
+      const parentFolder = typeof payload.parent_folder === 'string' && payload.parent_folder.length > 0
+        ? payload.parent_folder.slice(0, 200)
+        : null
+      const allowed = new Set(['paste', 'upload', 'voice', 'past-chat', 'folder'])
+      const rows = items.map((c) => ({
+        title: String(c.title ?? '').slice(0, 240),
+        content: typeof c.content === 'string' ? c.content : '',
+        source_type: allowed.has(c.source_type ?? '') ? c.source_type! : 'upload',
+        source_ref: typeof c.source_ref === 'string' ? c.source_ref.slice(0, 500) : null,
+        theme: typeof c.theme === 'string' ? c.theme.slice(0, 200) : null,
+        parent_folder: parentFolder,
+      })).filter((r) => r.title.length > 0)
+      if (rows.length === 0) { json(res, 400, { error: 'no valid rows after sanitization' }); return }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const { data, error } = await sb
+        .from('concepts')
+        .insert(rows)
+        .select('id, title, content, source_type, source_ref, theme, used_in_phases, created_at, parent_folder')
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { ok: true, inserted: data?.length ?? 0, concepts: data ?? [] })
+      return
+    }
+
+    // 1.10bb-c Session 7 — PATCH /atlas/concepts/:id — partial update.
+    // Lets the panel's Edit action rewrite title/content/theme.
+    {
+      const m = url.match(/^\/atlas\/concepts\/([^/]+)$/)
+      if (m && method === 'PATCH') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const conceptId = decodeURIComponent(m[1])
+        const rawBody = await readBody(req)
+        let payload: { title?: string; content?: string; theme?: string }
+        try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+        const update: Record<string, unknown> = {}
+        if (typeof payload.title === 'string') update.title = payload.title.slice(0, 240)
+        if (typeof payload.content === 'string') update.content = payload.content
+        if (typeof payload.theme === 'string') update.theme = payload.theme.slice(0, 200) || null
+        if (Object.keys(update).length === 0) {
+          json(res, 400, { error: 'no fields to update' })
+          return
+        }
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { data, error } = await sb
+          .from('concepts')
+          .update(update)
+          .eq('id', conceptId)
+          .select('id, title, content, source_type, source_ref, theme, used_in_phases, created_at, parent_folder')
+          .single()
+        if (error || !data) { json(res, 404, { error: error?.message ?? 'concept not found' }); return }
+        json(res, 200, { ok: true, concept: data })
+        return
+      }
+    }
+
+    // 1.10bb-c Session 7 — DELETE /atlas/concepts/:id
+    // If the concept is a 'folder' parent row, all rows with the same
+    // parent_folder are removed in the same call.
+    {
+      const m = url.match(/^\/atlas\/concepts\/([^/]+)$/)
+      if (m && method === 'DELETE') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const conceptId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { data: existing } = await sb
+          .from('concepts')
+          .select('id, source_type, title, parent_folder')
+          .eq('id', conceptId)
+          .maybeSingle()
+        let cascaded = 0
+        if (existing && (existing as { source_type?: string }).source_type === 'folder') {
+          const folderName = (existing as { title?: string }).title ?? ''
+          if (folderName) {
+            const { count } = await sb
+              .from('concepts')
+              .delete({ count: 'exact' })
+              .eq('parent_folder', folderName)
+            cascaded = count ?? 0
+          }
+        }
+        const { error } = await sb.from('concepts').delete().eq('id', conceptId)
+        if (error) { json(res, 500, { error: error.message }); return }
+        json(res, 200, { ok: true, cascaded })
+        return
+      }
+    }
+
+    // 1.10bb-c Session 7 — concept ↔ plan-node link CRUD.
+    // GET /atlas/concept-links?concept_id=… OR ?plan_node_id=…
+    if (url.split('?')[0] === '/atlas/concept-links' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { links: [] }); return }
+      const params = new URLSearchParams(url.includes('?') ? url.split('?')[1] : '')
+      const conceptId = params.get('concept_id')
+      const planNodeId = params.get('plan_node_id')
+      let q = sb
+        .from('atlas_concept_links')
+        .select('id, concept_id, plan_node_id, created_at')
+        .order('created_at', { ascending: false })
+        .limit(500)
+      if (conceptId) q = q.eq('concept_id', conceptId)
+      if (planNodeId) q = q.eq('plan_node_id', planNodeId)
+      const { data, error } = await q
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { links: data ?? [] })
+      return
+    }
+
+    // POST /atlas/concept-links — attach a concept to a plan node. Idempotent
+    // (UNIQUE (concept_id, plan_node_id) — 23505 returns the existing row).
+    if (url === '/atlas/concept-links' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const rawBody = await readBody(req)
+      let payload: { concept_id?: string; plan_node_id?: string }
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+      if (!payload.concept_id || !payload.plan_node_id) {
+        json(res, 400, { error: 'concept_id and plan_node_id required' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const { data, error } = await sb
+        .from('atlas_concept_links')
+        .upsert(
+          { concept_id: payload.concept_id, plan_node_id: payload.plan_node_id },
+          { onConflict: 'concept_id,plan_node_id' },
+        )
+        .select('id, concept_id, plan_node_id, created_at')
+        .single()
+      if (error || !data) { json(res, 500, { error: error?.message ?? 'link insert failed' }); return }
+      json(res, 200, { ok: true, link: data })
+      return
+    }
+
+    // DELETE /atlas/concept-links/:id — detach.
+    {
+      const m = url.match(/^\/atlas\/concept-links\/([^/]+)$/)
+      if (m && method === 'DELETE') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const linkId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { error } = await sb.from('atlas_concept_links').delete().eq('id', linkId)
+        if (error) { json(res, 500, { error: error.message }); return }
+        json(res, 200, { ok: true })
+        return
+      }
+    }
 
 
     // ─── 1.10bb-c Session 4: Plan Workshop endpoints ────────────────────────

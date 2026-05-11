@@ -9,6 +9,8 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { LiveModePanel } from './LiveModePanel'
 import { VerifierDialogPopup } from '@/components/atlas-plan/VerifierDialogPopup'
+import { WorkshopErrorBoundary } from '@/components/atlas-plan/WorkshopErrorBoundary'
+import { lazyWithRetry } from '@/lib/lazyWithRetry'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import { useArtifacts } from '@/hooks/useArtifacts'
 import { useTts } from '@/hooks/useTts'
@@ -21,7 +23,11 @@ import { cn } from '@/lib/utils'
 // Lazy-load each tab so the initial cockpit bundle stays small (per spec
 // risk note — initial cockpit bundle stays under 100KB gzipped).
 const AtlasPlanTab = lazy(() => import('./tabs/AtlasPlanTab'))
-const PlanWorkshop = lazy(() => import('../atlas-plan/PlanWorkshop'))
+// 1.10bb-c Session 7 — PlanWorkshop is the heaviest tab chunk (~36 kB
+// gzipped) AND the one that crashed in prod with "Importing a module script
+// failed" after a GitHub Pages deploy. lazyWithRetry reloads the page once on
+// chunk-load errors so a stale index.html → new asset hash mismatch self-heals.
+const PlanWorkshop = lazyWithRetry(() => import('../atlas-plan/PlanWorkshop'), 'plan-workshop')
 const AtlasQueueTab = lazy(() => import('./tabs/AtlasQueueTab'))
 const AtlasAgentsTab = lazy(() => import('./tabs/AtlasAgentsTab'))
 const AtlasAuditTab = lazy(() => import('./tabs/AtlasAuditTab'))
@@ -373,7 +379,13 @@ function ActiveTab({
     case 'plan':
       return <AtlasPlanTab />
     case 'workshop':
-      return <PlanWorkshop />
+      // Session 7: dedicated boundary so chunk-load failures or runtime
+      // crashes in PlanWorkshop don't poison the rest of the cockpit.
+      return (
+        <WorkshopErrorBoundary>
+          <PlanWorkshop />
+        </WorkshopErrorBoundary>
+      )
     case 'queue':
       return <AtlasQueueTab heartbeats={heartbeats} />
     case 'agents':

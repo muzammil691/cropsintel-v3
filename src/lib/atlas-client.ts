@@ -1244,15 +1244,21 @@ export async function buildFromPlanNode(
 
 // ── Phase 1.10aj — Plan cockpit client functions ────────────────────────────
 
+export type ConceptSourceType = 'paste' | 'upload' | 'voice' | 'past-chat' | 'folder'
+
 export interface CockpitConcept {
   id: string
   title: string
   content: string
-  source_type: 'paste' | 'upload' | 'voice' | 'past-chat'
+  source_type: ConceptSourceType
   source_ref: string | null
   theme: string | null
   used_in_phases: unknown
   created_at: string
+  /** 1.10bb-c Session 7 — non-null on rows that belong to a folder-upload
+   *  bundle. The folder's parent row has source_type='folder' and parent_folder
+   *  is also set (so the parent itself groups under its own folder name). */
+  parent_folder?: string | null
 }
 
 export async function fetchConcepts(theme?: string): Promise<CockpitConcept[]> {
@@ -1266,7 +1272,7 @@ export async function fetchConcepts(theme?: string): Promise<CockpitConcept[]> {
 export async function createConcept(input: {
   title: string
   content?: string
-  sourceType: 'paste' | 'upload' | 'voice' | 'past-chat'
+  sourceType: ConceptSourceType
   sourceRef?: string
   theme?: string
 }): Promise<CockpitConcept> {
@@ -1282,6 +1288,108 @@ export async function createConcept(input: {
     }),
   })
   return data.concept
+}
+
+// ── 1.10bb-c Session 7: concepts batch + edit/delete + plan-node links ──
+
+export interface CreateConceptBatchInput {
+  parentFolder?: string
+  concepts: Array<{
+    title: string
+    content?: string
+    sourceType: ConceptSourceType
+    sourceRef?: string
+    theme?: string
+  }>
+}
+
+export async function createConceptsBatch(
+  input: CreateConceptBatchInput,
+): Promise<{ ok: true; inserted: number; concepts: CockpitConcept[] }> {
+  return fetchJson(`${ATLAS_URL}/atlas/concepts/batch`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      parent_folder: input.parentFolder,
+      concepts: input.concepts.map((c) => ({
+        title: c.title,
+        content: c.content ?? '',
+        source_type: c.sourceType,
+        source_ref: c.sourceRef,
+        theme: c.theme,
+      })),
+    }),
+  })
+}
+
+export async function updateConcept(
+  conceptId: string,
+  patch: { title?: string; content?: string; theme?: string },
+): Promise<CockpitConcept> {
+  const data = await fetchJson<{ ok: true; concept: CockpitConcept }>(
+    `${ATLAS_URL}/atlas/concepts/${encodeURIComponent(conceptId)}`,
+    {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  )
+  return data.concept
+}
+
+export async function deleteConcept(
+  conceptId: string,
+): Promise<{ ok: true; cascaded: number }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/concepts/${encodeURIComponent(conceptId)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  )
+}
+
+export interface ConceptLink {
+  id: string
+  concept_id: string
+  plan_node_id: string
+  created_at: string
+}
+
+export async function listConceptLinks(filter: {
+  conceptId?: string
+  planNodeId?: string
+}): Promise<ConceptLink[]> {
+  const params = new URLSearchParams()
+  if (filter.conceptId) params.set('concept_id', filter.conceptId)
+  if (filter.planNodeId) params.set('plan_node_id', filter.planNodeId)
+  const qs = params.toString()
+  const data = await fetchJson<{ links?: ConceptLink[] }>(
+    `${ATLAS_URL}/atlas/concept-links${qs ? `?${qs}` : ''}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.links) ? data!.links! : []
+}
+
+export async function linkConceptToPhase(
+  conceptId: string,
+  planNodeId: string,
+): Promise<ConceptLink> {
+  const data = await fetchJson<{ ok: true; link: ConceptLink }>(
+    `${ATLAS_URL}/atlas/concept-links`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ concept_id: conceptId, plan_node_id: planNodeId }),
+    },
+  )
+  return data.link
+}
+
+export async function unlinkConceptLink(
+  linkId: string,
+): Promise<{ ok: true }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/concept-links/${encodeURIComponent(linkId)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  )
 }
 
 export interface WizardQuestion {
