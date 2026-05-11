@@ -15,6 +15,7 @@
 // header in the list.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import {
   Lightbulb,
   Mic,
@@ -39,9 +40,18 @@ import {
   Mic2,
   Clipboard,
   CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import {
   fetchConcepts,
@@ -202,6 +212,9 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<{ title: string; theme: string; content: string }>({ title: '', theme: '', content: '' })
   const [linkingConcept, setLinkingConcept] = useState<CockpitConcept | null>(null)
+  // 1.10bb-c Session 8C — pending Delete confirmation. Modal rendered at
+  // the bottom of <aside>; null means no modal.
+  const [confirmingDelete, setConfirmingDelete] = useState<CockpitConcept | null>(null)
   const [planNodes, setPlanNodes] = useState<PlanNode[]>([])
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const folderInputRef = useRef<HTMLInputElement | null>(null)
@@ -456,18 +469,53 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
     finally { setBusy(false) }
   }
 
-  const handleDelete = async (c: CockpitConcept) => {
-    const label = c.source_type === 'folder'
-      ? `the folder "${c.title}" AND all its children`
-      : `"${c.title}"`
-    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return
-    setBusy(true); setError(null); setOpenMenuId(null)
+  // 1.10bb-c Session 8C — Delete bug fix.
+  //
+  // Replaced window.confirm() (which sporadically no-ops inside GitHub Pages'
+  // service-worker-controlled context and can't be styled) with a proper
+  // Dialog. The kebab "Delete" item now opens a confirm modal; the actual
+  // mutation runs only when the user clicks the destructive Confirm button.
+  const requestDelete = (c: CockpitConcept) => {
+    setOpenMenuId(null)
+    setConfirmingDelete(c)
+  }
+
+  const executeDelete = async () => {
+    if (!confirmingDelete) return
+    const target = confirmingDelete
+    const childCount = target.source_type === 'folder'
+      ? concepts.filter((c) => c.parent_folder === target.title).length
+      : 0
+    setBusy(true)
+    setError(null)
+    setConfirmingDelete(null)
     try {
-      await deleteConcept(c.id)
+      await deleteConcept(target.id)
+      // Optimistic local update — drop the row (and any folder children)
+      // before the refetch so the UI feels instant even on a slow network.
+      setConcepts((prev) => prev.filter((c) => {
+        if (c.id === target.id) return false
+        if (target.source_type === 'folder' && c.parent_folder === target.title) return false
+        return true
+      }))
+      if (selectedConcept?.id === target.id) setSelectedConcept(null)
+      if (target.source_type === 'folder') {
+        toast.success(`Deleted folder '${target.title}' and ${childCount} ${childCount === 1 ? 'file' : 'files'}`, { duration: 4000 })
+      } else {
+        toast.success(`Deleted '${target.title}'`, { duration: 4000 })
+      }
+      // Authoritative refetch — folds in anything the optimistic update
+      // missed (server-side cascade counts can differ from client estimates).
       load()
-      if (selectedConcept?.id === c.id) setSelectedConcept(null)
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-    finally { setBusy(false) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
+      toast.error(`Failed to delete. ${msg}`, { duration: 6000 })
+      // Refetch on failure to undo any optimistic mutation.
+      load()
+    } finally {
+      setBusy(false)
+    }
   }
 
   const openLinkPicker = async (c: CockpitConcept) => {
@@ -743,7 +791,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
                   onOpenChange={(open) => setOpenMenuId(open ? parent.id : null)}
                   onView={() => { setSelectedConcept(parent); setOpenMenuId(null) }}
                   onEdit={() => startEdit(parent)}
-                  onDelete={() => handleDelete(parent)}
+                  onDelete={() => requestDelete(parent)}
                   onUseInWorkshop={() => toggleWorkshopSel(parent.id)}
                   onLinkToPhase={() => openLinkPicker(parent)}
                   flaggedForWorkshop={workshopSel.has(parent.id)}
@@ -765,7 +813,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
                         onEdit={() => startEdit(c)}
                         onSaveEdit={() => void saveEdit()}
                         onCancelEdit={() => setEditingId(null)}
-                        onDelete={() => handleDelete(c)}
+                        onDelete={() => requestDelete(c)}
                         onUseInWorkshop={() => toggleWorkshopSel(c.id)}
                         onLinkToPhase={() => openLinkPicker(c)}
                         onMenuOpenChange={(o) => setOpenMenuId(o ? c.id : null)}
@@ -792,7 +840,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             onEdit={() => startEdit(c)}
             onSaveEdit={() => void saveEdit()}
             onCancelEdit={() => setEditingId(null)}
-            onDelete={() => handleDelete(c)}
+            onDelete={() => requestDelete(c)}
             onUseInWorkshop={() => toggleWorkshopSel(c.id)}
             onLinkToPhase={() => openLinkPicker(c)}
             onMenuOpenChange={(o) => setOpenMenuId(o ? c.id : null)}
@@ -857,7 +905,77 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
           busy={busy}
         />
       )}
+
+      {/* Session 8C — Delete confirmation modal */}
+      <DeleteConfirmDialog
+        target={confirmingDelete}
+        childCount={confirmingDelete?.source_type === 'folder'
+          ? concepts.filter((c) => c.parent_folder === confirmingDelete.title).length
+          : 0}
+        onCancel={() => setConfirmingDelete(null)}
+        onConfirm={() => void executeDelete()}
+        busy={busy}
+      />
     </aside>
+  )
+}
+
+// ─── Delete confirm modal ────────────────────────────────────────────────
+
+interface DeleteConfirmDialogProps {
+  target: CockpitConcept | null
+  childCount: number
+  onCancel: () => void
+  onConfirm: () => void
+  busy: boolean
+}
+
+function DeleteConfirmDialog({ target, childCount, onCancel, onConfirm, busy }: DeleteConfirmDialogProps) {
+  const isFolder = target?.source_type === 'folder'
+  const title = isFolder ? 'Delete folder?' : 'Delete concept?'
+  const filename = target?.title ?? ''
+  const body = isFolder
+    ? `'${filename}' and all ${childCount} ${childCount === 1 ? 'file' : 'files'} inside will be permanently deleted. This cannot be undone.`
+    : `'${filename}' will be permanently deleted. This cannot be undone.`
+  const confirmLabel = isFolder
+    ? `Delete folder and ${childCount} ${childCount === 1 ? 'file' : 'files'}`
+    : 'Delete'
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={(open) => { if (!open && !busy) onCancel() }}>
+      <DialogContent className="sm:max-w-md" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="size-4 text-rose-600 dark:text-rose-400 shrink-0" aria-hidden />
+            {title}
+          </DialogTitle>
+          <DialogDescription className="text-sm text-slate-600 dark:text-slate-300 leading-snug">
+            {body}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onCancel}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={onConfirm}
+            disabled={busy}
+            className="bg-rose-600 hover:bg-rose-700 text-white border-rose-600"
+          >
+            <Trash2 className="size-3 mr-1.5" aria-hidden />
+            {confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
