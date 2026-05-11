@@ -783,39 +783,24 @@ export async function logOpenQuestionFromTurn(args: {
 }
 
 /**
- * Verifier mid-session audit — Session 5 wired. Delegates to the verifier
- * package's plan-diff-audit, which compares the session's most recently
- * generated (unapplied, unrejected) plan diff against the current baseline
- * — the latest applied plan_diffs row, falling back to .agent/master-plan.md.
+ * Verifier mid-session audit — Session 5 wired, Railway-fix rewired.
+ *
+ * Originally delegated to the verifier package via a dynamic cross-package
+ * import. That broke Railway's atlas-only build (TS2307 on both fallback
+ * paths) and would have broken runtime too (Railway deploys atlas/
+ * standalone, so neither verifier/dist nor a cropsintel-v3-verifier
+ * package is present). The audit logic is now owned directly by atlas
+ * (./plan-diff-audit) — see that file's header for the migration
+ * rationale.
  *
  * Flags surfaced (any → passed=false):
  *   • `remove` ops on phases that exist in the baseline (deleted phase)
  *   • `reorder` ops that change relative order of baseline phases
  *   • `edit` ops whose new body drops baseline-defined milestones
- *
- * The verifier package is a sibling workspace; we import lazily so the atlas
- * compile path doesn't pull in verifier-only deps. The import string is
- * resolved at runtime from REPO_ROOT (set by the dispatcher) or via Node's
- * default resolution when both packages share a parent.
  */
 export async function requestVerifierMidSessionAudit(sessionId: string): Promise<VerifierAuditResult> {
   try {
-    // Lazy + relative — verifier dist sits at ../../verifier/dist/checks/plan-diff-audit.js
-    // when both packages live under cropsintel-v3/. Falls back to a name-based
-    // import if a runner has linked the workspace.
-    type PlanDiffAuditFn = (input: { sessionId: string }) => Promise<{
-      pass: boolean
-      flags: string[]
-      summary: string
-    }>
-    let auditPlanDiff: PlanDiffAuditFn
-    try {
-      const mod = await import('../../../verifier/dist/checks/plan-diff-audit.js')
-      auditPlanDiff = mod.auditPlanDiff as PlanDiffAuditFn
-    } catch {
-      const mod = await import('cropsintel-v3-verifier/dist/checks/plan-diff-audit.js')
-      auditPlanDiff = mod.auditPlanDiff as PlanDiffAuditFn
-    }
+    const { auditPlanDiff } = await import('./plan-diff-audit.js')
     const result = await auditPlanDiff({ sessionId })
     return {
       passed: result.pass,
