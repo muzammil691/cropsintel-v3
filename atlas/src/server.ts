@@ -5585,3 +5585,5 @@ export async function startServer(): Promise<void> {
     console.log(`[atlas-server] Listening on :${PORT}`)
   })
 }
+
+// Deploy marker: 2026-05-12 — Session 8C frontend deployed
