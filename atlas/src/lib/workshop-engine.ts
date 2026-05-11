@@ -788,10 +788,9 @@ export async function logOpenQuestionFromTurn(args: {
  * Originally delegated to the verifier package via a dynamic cross-package
  * import. That broke Railway's atlas-only build (TS2307 on both fallback
  * paths) and would have broken runtime too (Railway deploys atlas/
- * standalone, so neither verifier/dist nor a cropsintel-v3-verifier
- * package is present). The audit logic is now owned directly by atlas
- * (./plan-diff-audit) — see that file's header for the migration
- * rationale.
+ * standalone, with no access to the sibling verifier workspace). The
+ * audit logic is now owned directly by atlas (./plan-diff-audit) — see
+ * that file's header for the migration rationale.
  *
  * Flags surfaced (any → passed=false):
  *   • `remove` ops on phases that exist in the baseline (deleted phase)

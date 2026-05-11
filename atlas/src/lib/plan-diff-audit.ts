@@ -2,12 +2,12 @@
 //
 // Originally lived in verifier/src/checks/plan-diff-audit.ts and was loaded
 // by workshop-engine.ts via a dynamic import. That cross-package dynamic
-// import broke on Railway: the atlas service is deployed standalone, so
-// neither `verifier/dist/` nor a `cropsintel-v3-verifier` npm package is
-// resolvable there. Static TS analysis on both branches of the fallback
-// failed with TS2307, and even when the static check passed locally, the
-// runtime import would have thrown — falling through to the catch and
-// blocking every Workshop plan-diff approval with "verifier_unreachable".
+// import broke on Railway: the atlas service is deployed standalone with
+// no access to the sibling verifier workspace. Static TS analysis on both
+// branches of the fallback failed with TS2307, and even when the static
+// check passed locally, the runtime import would have thrown — falling
+// through to the catch and blocking every Workshop plan-diff approval with
+// "verifier_unreachable".
 //
 // Inlining the audit into atlas removes the cross-package dependency
 // entirely. The verifier package keeps its own copy for its own service;
