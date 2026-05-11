@@ -23,6 +23,8 @@ import { readFile, writeFile, rename, mkdir, readdir, access, stat, rm } from 'f
 import { resolve, dirname } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { createHash } from 'crypto'
+import { requeueClusterInvestigation } from '../conductor/requeueClusterInvestigation'
 
 const execFileP = promisify(execFile)
 
@@ -535,20 +537,33 @@ Common root cause? Should we (a) pause Builder, (b) queue an investigation task,
     return 'paused-builder'
   }
   if (result.chosen === 'investigate') {
-    const filename = `phase-1-CLUSTER-investigation-${Date.now()}.md`
-    await dispatch({
-      tool: 'builder.queue_spec' as ToolName,
-      arguments: {
-        filename,
-        body: composeInvestigationSpec(recentFails, result),
+    // Deterministic cluster ID derived from the sorted task IDs so every
+    // re-queue attempt for the same failure cluster shares a filename
+    // prefix the cap-check can count (phase-1.10bc).
+    const clusterId = createHash('sha1').update(clusterKey).digest('hex').slice(0, 12)
+    const filename = `phase-1-CLUSTER-investigation-${clusterId}-${Date.now()}.md`
+    const outcome = await requeueClusterInvestigation({
+      repoRoot: REPO_ROOT,
+      clusterId,
+      enqueueSpec: async () => {
+        await dispatch({
+          tool: 'builder.queue_spec' as ToolName,
+          arguments: {
+            filename,
+            body: composeInvestigationSpec(recentFails, result),
+          },
+          initiatedBy: 'cron',
+          trustMode: 'auto',
+        })
+        await sendWhatsAppReply(
+          MUZAMMIL_WHATSAPP,
+          `🔍 Cluster investigation queued (${filename}): ${truncate(result.rationale ?? '', 200)}`,
+        )
       },
-      initiatedBy: 'cron',
-      trustMode: 'auto',
     })
-    await sendWhatsAppReply(
-      MUZAMMIL_WHATSAPP,
-      `🔍 Cluster investigation queued (${filename}): ${truncate(result.rationale ?? '', 200)}`,
-    )
+    if (outcome.status === 'capped') {
+      return 'cluster-investigation-capped'
+    }
     return 'queued-investigation'
   }
   return 'waiting'
