@@ -783,17 +783,56 @@ export async function logOpenQuestionFromTurn(args: {
 }
 
 /**
- * Verifier mid-session audit — STUB for Session 3. Session 5 wires the real
- * verifier/src/checks/in-build-watcher.ts implementation. The stub returns
- * passed=true so the engine doesn't block on a check that doesn't exist yet.
+ * Verifier mid-session audit — Session 5 wired. Delegates to the verifier
+ * package's plan-diff-audit, which compares the session's most recently
+ * generated (unapplied, unrejected) plan diff against the current baseline
+ * — the latest applied plan_diffs row, falling back to .agent/master-plan.md.
  *
- * The signature is finalized here so Session 5's swap is a one-file change.
+ * Flags surfaced (any → passed=false):
+ *   • `remove` ops on phases that exist in the baseline (deleted phase)
+ *   • `reorder` ops that change relative order of baseline phases
+ *   • `edit` ops whose new body drops baseline-defined milestones
+ *
+ * The verifier package is a sibling workspace; we import lazily so the atlas
+ * compile path doesn't pull in verifier-only deps. The import string is
+ * resolved at runtime from REPO_ROOT (set by the dispatcher) or via Node's
+ * default resolution when both packages share a parent.
  */
-export async function requestVerifierMidSessionAudit(_sessionId: string): Promise<VerifierAuditResult> {
-  return {
-    passed: true,
-    gaps: [],
-    rationale: 'Verifier mid-session audit not yet wired (Session 5 will replace this stub).',
+export async function requestVerifierMidSessionAudit(sessionId: string): Promise<VerifierAuditResult> {
+  try {
+    // Lazy + relative — verifier dist sits at ../../verifier/dist/checks/plan-diff-audit.js
+    // when both packages live under cropsintel-v3/. Falls back to a name-based
+    // import if a runner has linked the workspace.
+    type PlanDiffAuditFn = (input: { sessionId: string }) => Promise<{
+      pass: boolean
+      flags: string[]
+      summary: string
+    }>
+    let auditPlanDiff: PlanDiffAuditFn
+    try {
+      const mod = await import('../../../verifier/dist/checks/plan-diff-audit.js')
+      auditPlanDiff = mod.auditPlanDiff as PlanDiffAuditFn
+    } catch {
+      const mod = await import('cropsintel-v3-verifier/dist/checks/plan-diff-audit.js')
+      auditPlanDiff = mod.auditPlanDiff as PlanDiffAuditFn
+    }
+    const result = await auditPlanDiff({ sessionId })
+    return {
+      passed: result.pass,
+      gaps: result.flags.map((f) => ({
+        kind: f.split(':')[0] ?? 'unknown',
+        description: f,
+        severity: result.pass ? 'info' : 'critical',
+      })),
+      rationale: result.summary,
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      passed: false,
+      gaps: [{ kind: 'audit_unreachable', description: message, severity: 'critical' }],
+      rationale: `Verifier mid-session audit failed to run: ${message}. Blocking by default (null=FAIL convention).`,
+    }
   }
 }
 

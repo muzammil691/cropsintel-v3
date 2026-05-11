@@ -2696,3 +2696,48 @@ export async function reviseWorkshopDiff(
     { method: 'POST', headers: authHeaders() },
   )
 }
+
+// ─── 1.10bb-c Session 5: Verifier-dialog pause/resume ─────────────────────
+
+export interface PausedDispatch {
+  id: string
+  tool: string
+  initiated_at: string
+  status: string
+  builder_pause_token: string
+  error_message: string | null
+}
+
+export interface ListPausedDispatchesResult {
+  paused: PausedDispatch[]
+}
+
+export async function listPausedDispatches(): Promise<ListPausedDispatchesResult> {
+  return fetchJson(`${ATLAS_URL}/atlas/verifier-dialog/paused`, {
+    method: 'GET',
+    headers: authHeaders(),
+  })
+}
+
+export async function resumePausedDispatch(
+  dispatchId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/verifier-dialog/${encodeURIComponent(dispatchId)}/resume`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function abortPausedDispatch(
+  dispatchId: string,
+  reason?: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/verifier-dialog/${encodeURIComponent(dispatchId)}/abort`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    },
+  )
+}

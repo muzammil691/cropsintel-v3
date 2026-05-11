@@ -4011,6 +4011,97 @@ export async function startServer(): Promise<void> {
       }
     }
 
+    // ─── 1.10bb-c Session 5: verifier-dialog (pause/resume/abort) ─────────
+    // POST /atlas/verifier-dialog/pause — set builder_pause_token + alert.
+    if (url === '/atlas/verifier-dialog/pause' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const rawBody = await readBody(req)
+      let body: Record<string, unknown> = {}
+      try { body = JSON.parse(rawBody) as Record<string, unknown> } catch { json(res, 400, { error: 'invalid_json' }); return }
+      const dispatchId = String((body as { dispatch_id?: unknown }).dispatch_id ?? '')
+      const reason = String((body as { reason?: unknown }).reason ?? '')
+      const rawPaths = (body as { paths?: unknown }).paths
+      const paths = Array.isArray(rawPaths) ? rawPaths.map((p) => String(p)).slice(0, 4) : []
+      if (!dispatchId || !reason) {
+        json(res, 400, { error: 'missing_fields', required: ['dispatch_id', 'reason'] })
+        return
+      }
+      const { pauseBuilder } = await import('./lib/verifier-dialog.js')
+      const result = await pauseBuilder(dispatchId, reason, paths)
+      json(res, result.ok ? 200 : 500, result)
+      return
+    }
+
+    // POST /atlas/verifier-dialog/:dispatchId/resume — clear the token.
+    {
+      const m = url.match(/^\/atlas\/verifier-dialog\/([^/]+)\/resume$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const dispatchId = decodeURIComponent(m[1])
+        const { resumeBuilder } = await import('./lib/verifier-dialog.js')
+        const result = await resumeBuilder(dispatchId)
+        json(res, result.ok ? 200 : 500, result)
+        return
+      }
+    }
+
+    // POST /atlas/verifier-dialog/:dispatchId/abort — clear token + set
+    // status='aborted'.
+    {
+      const m = url.match(/^\/atlas\/verifier-dialog\/([^/]+)\/abort$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const dispatchId = decodeURIComponent(m[1])
+        const rawBody = await readBody(req).catch(() => '{}')
+        let body: Record<string, unknown> = {}
+        try { body = JSON.parse(rawBody || '{}') as Record<string, unknown> } catch { body = {} }
+        const reason = typeof (body as { reason?: unknown }).reason === 'string'
+          ? (body as { reason: string }).reason : undefined
+        const { abortBuilder } = await import('./lib/verifier-dialog.js')
+        const result = await abortBuilder(dispatchId, reason)
+        json(res, result.ok ? 200 : 500, result)
+        return
+      }
+    }
+
+    // GET /atlas/verifier-dialog/paused — list currently-paused dispatches.
+    // Used by the cockpit's VerifierDialogPopup on mount before realtime
+    // subscriptions take over.
+    if (url === '/atlas/verifier-dialog/paused' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const { data, error } = await sb
+        .from('atlas_dispatches')
+        .select('id, tool, initiated_at, status, builder_pause_token, error_message')
+        .not('builder_pause_token', 'is', null)
+        .order('initiated_at', { ascending: false })
+        .limit(20)
+      if (error) { json(res, 500, { error: 'query_failed', detail: error.message }); return }
+      json(res, 200, { paused: data ?? [] })
+      return
+    }
+
 
     // ─── 1.10bb-c Session 3: per-phase wizard endpoints DELETED ─────────────
     // The wizard is replaced by Plan Workshop. Session 6 ships

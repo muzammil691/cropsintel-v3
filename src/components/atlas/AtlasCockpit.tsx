@@ -8,12 +8,14 @@ import { CockpitChat } from './CockpitChat'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { LiveModePanel } from './LiveModePanel'
+import { VerifierDialogPopup } from '@/components/atlas-plan/VerifierDialogPopup'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
 import { useArtifacts } from '@/hooks/useArtifacts'
 import { useTts } from '@/hooks/useTts'
 import { useLiveMode } from '@/hooks/useLiveMode'
 import { useAgentHeartbeats } from '@/hooks/useAgentHeartbeats'
-import type { TrustMode } from '@/lib/atlas-client'
+import { listPausedDispatches, type PausedDispatch, type TrustMode } from '@/lib/atlas-client'
+import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 
 // Lazy-load each tab so the initial cockpit bundle stays small (per spec
@@ -129,6 +131,38 @@ export function AtlasCockpit() {
     return () => window.removeEventListener('atlas:tab-navigate', handler as EventListener)
   }, [setActiveTab])
 
+  // 1.10bb-c Session 5 — Verifier-dialog paused-dispatch surveillance.
+  // Initial fetch + Postgres realtime subscription on atlas_dispatches. Any
+  // row carrying a non-null builder_pause_token surfaces the popup; once the
+  // operator resumes / aborts, the token clears and the popup hides.
+  const [pausedDispatches, setPausedDispatches] = useState<PausedDispatch[]>([])
+  const refreshPaused = useCallback(async () => {
+    try {
+      const r = await listPausedDispatches()
+      setPausedDispatches(r.paused)
+    } catch {
+      // Polling is best-effort; the realtime subscription is the live signal.
+    }
+  }, [])
+  useEffect(() => {
+    void refreshPaused()
+  }, [refreshPaused])
+  useEffect(() => {
+    const channel = supabase
+      .channel('atlas-dispatches-paused')
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        'postgres_changes' as any,
+        { event: '*', schema: 'public', table: 'atlas_dispatches' },
+        () => { void refreshPaused() },
+      )
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [refreshPaused])
+  const currentPaused = pausedDispatches[0] ?? null
+  const [popupDismissedId, setPopupDismissedId] = useState<string | null>(null)
+  const popupTarget = currentPaused && currentPaused.id !== popupDismissedId ? currentPaused : null
+
   // Handler for the header's agent-dot click → open Agents tab.
   const openAgentsTab = useCallback(() => setActiveTab('agents'), [setActiveTab])
   // Phase 1.10as — Preview tab's "Inspect commit" jumps to the Audit tab.
@@ -243,6 +277,19 @@ export function AtlasCockpit() {
           />
         </ErrorBoundary>
       )}
+
+      <ErrorBoundary>
+        <VerifierDialogPopup
+          paused={popupTarget}
+          onResolved={() => {
+            setPopupDismissedId(null)
+            void refreshPaused()
+          }}
+          onClose={() => {
+            if (popupTarget) setPopupDismissedId(popupTarget.id)
+          }}
+        />
+      </ErrorBoundary>
     </div>
   )
 }
