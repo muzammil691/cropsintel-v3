@@ -12,6 +12,13 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, X, ShieldAlert, RotateCcw, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import {
   resumePausedDispatch,
@@ -24,7 +31,7 @@ interface VerifierDialogPopupProps {
   paused: PausedDispatch | null
   /** Called after any terminal action (resume/abort) so the parent can refetch. */
   onResolved: () => void
-  /** Optional explicit close (X button). Defaults to onResolved. */
+  /** Optional explicit close (X / overlay / ESC). Parent decides whether to clear pause. */
   onClose?: () => void
   className?: string
 }
@@ -92,63 +99,58 @@ export function VerifierDialogPopup({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="verifier-dialog-title"
-      className={cn(
-        'fixed inset-0 z-50 flex items-center justify-center p-4',
-        'bg-black/40 backdrop-blur-sm',
-        className,
-      )}
-      onClick={(e) => {
-        // Click-outside closes the popup but does NOT resolve the pause —
-        // the operator must explicitly resume or abort.
-        if (e.target === e.currentTarget) onClose?.()
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        // Block overlay / ESC dismissal while an action is in flight.
+        if (!next && busy === null) onClose?.()
       }}
     >
-      <section
+      <DialogContent
+        showCloseButton={false}
         className={cn(
-          'w-full max-w-lg rounded-lg shadow-xl overflow-hidden',
+          'p-0 gap-0 overflow-hidden',
+          'w-full max-w-[calc(100%-1rem)] sm:max-w-xl md:max-w-2xl',
           'bg-amber-50/95 dark:bg-amber-950/90',
           'border border-amber-300/80 dark:border-amber-800/80',
+          className,
         )}
-        onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center gap-2 px-3 py-2.5 border-b border-amber-200/60 dark:border-amber-900/40 bg-amber-100/60 dark:bg-amber-950/50">
+        <header className="flex items-center gap-2 px-3 py-2.5 sm:px-4 sm:py-3 border-b border-amber-200/60 dark:border-amber-900/40 bg-amber-100/60 dark:bg-amber-950/50">
           <ShieldAlert className="size-4 text-amber-700 dark:text-amber-300 shrink-0" aria-hidden />
-          <h2
-            id="verifier-dialog-title"
-            className="text-[11px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200 truncate"
+          <DialogTitle
+            className="text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200 truncate font-sans"
           >
             Verifier paused this build
-          </h2>
-          <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-amber-700/80 dark:text-amber-300/80 tabular-nums">
+          </DialogTitle>
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] sm:text-[11px] text-amber-700/80 dark:text-amber-300/80 tabular-nums">
             <Clock className="size-3" aria-hidden />
             {minutesRunning}m
           </span>
           {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="ml-1 rounded p-0.5 text-amber-700 dark:text-amber-300 hover:bg-amber-200/60 dark:hover:bg-amber-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50"
-              aria-label="Close"
-            >
-              <X className="size-3.5" />
-            </button>
+            <DialogClose asChild>
+              <button
+                type="button"
+                disabled={busy !== null}
+                className="ml-1 rounded p-0.5 text-amber-700 dark:text-amber-300 transition-colors duration-200 hover:bg-amber-200/60 dark:hover:bg-amber-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Close"
+              >
+                <X className="size-3.5" />
+              </button>
+            </DialogClose>
           )}
         </header>
 
-        <div className="px-3 py-3 space-y-3">
-          <section className="rounded-md border border-amber-200 dark:border-amber-900 bg-white/60 dark:bg-amber-950/40 px-2.5 py-2">
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1.5 mb-1">
+        <div className="px-3 py-3 sm:px-4 sm:py-4 space-y-3">
+          <section className="rounded-md border border-amber-200 dark:border-amber-900 bg-white/60 dark:bg-amber-950/40 px-2.5 py-2 sm:px-3 sm:py-2.5">
+            <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200 flex items-center gap-1.5 mb-1">
               <AlertTriangle className="size-3 text-amber-700 dark:text-amber-300" aria-hidden />
               Situation
             </h3>
-            <p className="text-[11px] text-slate-700 dark:text-slate-200 leading-snug">
+            <p className="text-[11px] sm:text-xs text-slate-700 dark:text-slate-200 leading-snug">
               {situation || 'Verifier paused the build but did not record a reason.'}
             </p>
-            <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[10px] text-slate-500 dark:text-slate-400">
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400">
               <span>
                 <span className="text-slate-400">tool</span>{' '}
                 <code className="font-mono text-slate-700 dark:text-slate-200">{paused.tool}</code>
@@ -163,17 +165,17 @@ export function VerifierDialogPopup({
           </section>
 
           {paths.length > 0 && (
-            <section className="rounded-md border border-amber-200 dark:border-amber-900 bg-white/60 dark:bg-amber-950/40 px-2.5 py-2">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200 mb-1">
+            <section className="rounded-md border border-amber-200 dark:border-amber-900 bg-white/60 dark:bg-amber-950/40 px-2.5 py-2 sm:px-3 sm:py-2.5">
+              <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200 mb-1">
                 Options ({paths.length})
               </h3>
               <ul className="space-y-1">
                 {paths.slice(0, 4).map((p, i) => (
                   <li
                     key={`${i}-${p.slice(0, 16)}`}
-                    className="text-[11px] text-slate-700 dark:text-slate-200 leading-snug flex items-baseline gap-1.5"
+                    className="text-[11px] sm:text-xs text-slate-700 dark:text-slate-200 leading-snug flex items-baseline gap-1.5"
                   >
-                    <span className="font-mono text-[10px] text-amber-700 dark:text-amber-300 shrink-0">
+                    <span className="font-mono text-[10px] sm:text-[11px] text-amber-700 dark:text-amber-300 shrink-0">
                       {i + 1}.
                     </span>
                     <span>{p}</span>
@@ -184,20 +186,21 @@ export function VerifierDialogPopup({
           )}
 
           {confirmAbort && (
-            <section className="rounded-md border border-rose-200 dark:border-rose-900 bg-rose-50/60 dark:bg-rose-950/30 px-2.5 py-2">
-              <label
+            <section className="rounded-md border border-rose-200 dark:border-rose-900 bg-rose-50/60 dark:bg-rose-950/30 px-2.5 py-2 sm:px-3 sm:py-2.5">
+              <Label
                 htmlFor="verifier-abort-reason"
-                className="text-[10px] font-semibold uppercase tracking-wider text-rose-900 dark:text-rose-200 block mb-1"
+                className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-rose-900 dark:text-rose-200 block mb-1"
               >
                 Abort reason (logged)
-              </label>
+              </Label>
               <Textarea
                 id="verifier-abort-reason"
                 value={abortReason}
                 onChange={(e) => setAbortReason(e.target.value)}
                 placeholder="e.g. spec was wrong; cancel and re-plan"
                 rows={2}
-                className="text-[11px] bg-white/80 dark:bg-slate-950/40 border-rose-200 dark:border-rose-800"
+                disabled={busy !== null}
+                className="text-[11px] sm:text-xs bg-white/80 dark:bg-slate-950/40 border-rose-200 dark:border-rose-800"
               />
             </section>
           )}
@@ -205,21 +208,21 @@ export function VerifierDialogPopup({
           {error && (
             <p
               role="alert"
-              className="rounded border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-2 py-1.5 text-[11px] text-rose-700 dark:text-rose-300"
+              className="rounded border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-2 py-1.5 text-[11px] sm:text-xs text-rose-700 dark:text-rose-300"
             >
               {error}
             </p>
           )}
         </div>
 
-        <footer className="flex items-center justify-end gap-1.5 px-3 py-2 border-t border-amber-200/60 dark:border-amber-900/40 bg-amber-100/40 dark:bg-amber-950/40">
+        <footer className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-1.5 px-3 py-2 sm:px-4 sm:py-2.5 border-t border-amber-200/60 dark:border-amber-900/40 bg-amber-100/40 dark:bg-amber-950/40">
           <Button
             type="button"
             size="sm"
             variant="outline"
             disabled={busy !== null}
             onClick={handleResume}
-            className="h-7 px-2 text-[11px] border-emerald-300 text-emerald-800 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-950/40"
+            className="h-7 px-2 text-[11px] sm:text-xs border-emerald-300 text-emerald-800 transition-colors duration-200 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-950/40 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RotateCcw className="size-3 mr-1" aria-hidden />
             {busy === 'resume' ? 'Resuming…' : 'Resume'}
@@ -230,14 +233,14 @@ export function VerifierDialogPopup({
             variant="outline"
             disabled={busy !== null}
             onClick={handleAbort}
-            className="h-7 px-2 text-[11px] border-rose-300 text-rose-800 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-200 dark:hover:bg-rose-950/40"
+            className="h-7 px-2 text-[11px] sm:text-xs border-rose-300 text-rose-800 transition-colors duration-200 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-200 dark:hover:bg-rose-950/40 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="size-3 mr-1" aria-hidden />
             {busy === 'abort' ? 'Aborting…' : confirmAbort ? 'Confirm abort' : 'Abort'}
           </Button>
         </footer>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
