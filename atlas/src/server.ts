@@ -3677,7 +3677,10 @@ export async function startServer(): Promise<void> {
       let payload: {
         title?: string
         content?: string
-        source_type?: 'paste' | 'upload' | 'voice' | 'past-chat'
+        // 1.10bb-c Session 7 hotfix — 'folder' was added to the DB CHECK
+        // constraint + ConceptSourceType but missed in this single-row
+        // route. Batch route already accepted 'folder'; this matches.
+        source_type?: 'paste' | 'upload' | 'voice' | 'past-chat' | 'folder'
         source_ref?: string
         theme?: string
       }
@@ -3686,7 +3689,7 @@ export async function startServer(): Promise<void> {
         json(res, 400, { error: 'title and source_type required' })
         return
       }
-      const allowed = ['paste', 'upload', 'voice', 'past-chat']
+      const allowed = ['paste', 'upload', 'voice', 'past-chat', 'folder']
       if (!allowed.includes(payload.source_type)) {
         json(res, 400, { error: 'invalid source_type' })
         return
