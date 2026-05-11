@@ -5586,4 +5586,4 @@ export async function startServer(): Promise<void> {
   })
 }
 
-// Deploy marker: 2026-05-12 — Session 8C frontend deployed
+// Deploy marker: 2026-05-12 02:30 — trigger Railway redeploy
