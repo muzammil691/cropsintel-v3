@@ -41,6 +41,7 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import {
   fetchConcepts,
@@ -557,7 +558,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             setIntake('upload-folder')
             folderInputRef.current?.click()
           }}
-          className="text-[11px] h-7 col-span-2 border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40"
+          className="text-[11px] h-7 col-span-2 border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40 transition-colors duration-200"
           aria-pressed={intake === 'upload-folder'}
           title="Pick a folder. Vendor dirs (node_modules, .git, dist) + binaries auto-stripped."
         >
@@ -581,9 +582,14 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
         >
           <Search className="size-3" /> Past chat
         </Button>
+        <Label htmlFor="concepts-file-upload-input" className="sr-only">
+          Upload a single file (text, markdown, PDF, image, JSON, YAML, or CSV)
+        </Label>
         <input
+          id="concepts-file-upload-input"
           type="file"
           ref={fileInputRef}
+          aria-label="Upload a single file as a concept"
           accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.docx,.json,.yaml,.yml,.csv"
           onChange={(e) => {
             const f = e.target.files?.[0]
@@ -591,12 +597,16 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             e.target.value = ''
           }}
           className="sr-only"
-          aria-hidden="true"
           tabIndex={-1}
         />
+        <Label htmlFor="folder-upload-input" className="sr-only">
+          Upload folder (will process text files only)
+        </Label>
         <input
+          id="folder-upload-input"
           type="file"
           ref={folderInputRef}
+          aria-label="Upload folder (will process text files only)"
           // @ts-expect-error — webkitdirectory is non-standard but supported in Chrome/Safari/Firefox.
           webkitdirectory=""
           directory=""
@@ -607,7 +617,6 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             e.target.value = ''
           }}
           className="sr-only"
-          aria-hidden="true"
           tabIndex={-1}
         />
       </div>
@@ -630,24 +639,29 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
       {/* Intake forms */}
       {intake === 'paste' && (
         <div className="px-3 py-2 border-b border-amber-200/60 dark:border-amber-900/40 space-y-1.5 shrink-0">
-          <input type="text" value={pasteTitle} onChange={(e) => setPasteTitle(e.target.value)} placeholder="Title"
+          <Label htmlFor="concept-paste-title" className="sr-only">Title</Label>
+          <input id="concept-paste-title" type="text" value={pasteTitle} onChange={(e) => setPasteTitle(e.target.value)} placeholder="Title" aria-label="Concept title"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
-          <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} placeholder="Paste a concept…" rows={4}
+          <Label htmlFor="concept-paste-content" className="sr-only">Concept content</Label>
+          <textarea id="concept-paste-content" value={pasteText} onChange={(e) => setPasteText(e.target.value)} placeholder="Paste a concept…" rows={4} aria-label="Concept content"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
-          <input type="text" value={pasteTheme} onChange={(e) => setPasteTheme(e.target.value)} placeholder="Theme (auth, ui polish, …)"
+          <Label htmlFor="concept-paste-theme" className="sr-only">Theme</Label>
+          <input id="concept-paste-theme" type="text" value={pasteTheme} onChange={(e) => setPasteTheme(e.target.value)} placeholder="Theme (auth, ui polish, …)" aria-label="Concept theme"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
           <div className="flex justify-end gap-1">
             <Button size="sm" variant="ghost" onClick={() => setIntake(null)} className="text-[11px] h-7">Cancel</Button>
-            <Button size="sm" onClick={handlePasteSubmit} disabled={busy} className="text-[11px] h-7 bg-amber-700 hover:bg-amber-800 text-white">Save</Button>
+            <Button size="sm" onClick={handlePasteSubmit} disabled={busy} className="text-[11px] h-7 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200">Save</Button>
           </div>
         </div>
       )}
 
       {intake === 'voice' && (
         <div className="px-3 py-2 border-b border-amber-200/60 dark:border-amber-900/40 space-y-1.5 shrink-0">
-          <input type="text" value={voiceTitle} onChange={(e) => setVoiceTitle(e.target.value)} placeholder="Voice memo title"
+          <Label htmlFor="concept-voice-title" className="sr-only">Voice memo title</Label>
+          <input id="concept-voice-title" type="text" value={voiceTitle} onChange={(e) => setVoiceTitle(e.target.value)} placeholder="Voice memo title" aria-label="Voice memo title"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
-          <textarea value={voiceTranscript} onChange={(e) => setVoiceTranscript(e.target.value)} placeholder="Transcript (recording → transcribed text)" rows={3}
+          <Label htmlFor="concept-voice-transcript" className="sr-only">Voice transcript</Label>
+          <textarea id="concept-voice-transcript" value={voiceTranscript} onChange={(e) => setVoiceTranscript(e.target.value)} placeholder="Transcript (recording → transcribed text)" rows={3} aria-label="Voice transcript"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
           <div className="flex justify-between items-center gap-1">
             <Button size="sm" variant={recording ? 'destructive' : 'outline'} onClick={() => setRecording((r) => !r)} className="text-[11px] h-7" aria-pressed={recording}>
@@ -655,7 +669,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
             </Button>
             <div className="flex gap-1">
               <Button size="sm" variant="ghost" onClick={() => setIntake(null)} className="text-[11px] h-7">Cancel</Button>
-              <Button size="sm" onClick={handleVoiceSubmit} disabled={busy} className="text-[11px] h-7 bg-amber-700 hover:bg-amber-800 text-white">Save</Button>
+              <Button size="sm" onClick={handleVoiceSubmit} disabled={busy} className="text-[11px] h-7 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200">Save</Button>
             </div>
           </div>
         </div>
@@ -663,18 +677,20 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
 
       {intake === 'past-chat' && (
         <div className="px-3 py-2 border-b border-amber-200/60 dark:border-amber-900/40 space-y-1.5 shrink-0">
-          <input type="text" value={chatQuery} onChange={(e) => setChatQuery(e.target.value)} placeholder="Find concept from past Cowork or Atlas chat"
+          <Label htmlFor="concept-past-chat-query" className="sr-only">Past chat search</Label>
+          <input id="concept-past-chat-query" type="text" value={chatQuery} onChange={(e) => setChatQuery(e.target.value)} placeholder="Find concept from past Cowork or Atlas chat" aria-label="Past chat search query"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
           <div className="flex justify-end gap-1">
             <Button size="sm" variant="ghost" onClick={() => setIntake(null)} className="text-[11px] h-7">Cancel</Button>
-            <Button size="sm" onClick={handlePastChatSubmit} disabled={busy} className="text-[11px] h-7 bg-amber-700 hover:bg-amber-800 text-white">Link</Button>
+            <Button size="sm" onClick={handlePastChatSubmit} disabled={busy} className="text-[11px] h-7 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200">Link</Button>
           </div>
         </div>
       )}
 
       {/* Filter */}
       <div className="px-3 py-2 border-b border-amber-200/60 dark:border-amber-900/40 shrink-0">
-        <input type="text" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter concepts…"
+        <Label htmlFor="concept-filter" className="sr-only">Filter concepts</Label>
+        <input id="concept-filter" type="text" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter concepts…" aria-label="Filter concepts"
           className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40" />
       </div>
 
@@ -713,8 +729,9 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
                     return next
                   })
                 }}
-                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50"
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left hover:bg-amber-50 dark:hover:bg-amber-950/40 active:bg-amber-100 dark:active:bg-amber-900/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
                 aria-expanded={isExpanded}
+                aria-label={`${isExpanded ? 'Collapse' : 'Expand'} folder ${parent.title}`}
               >
                 {isExpanded ? <ChevronDown className="size-3 text-amber-700 dark:text-amber-300 shrink-0" aria-hidden /> : <ChevronRight className="size-3 text-amber-700 dark:text-amber-300 shrink-0" aria-hidden />}
                 <TypeBadge kind="folder" />
@@ -804,7 +821,7 @@ export function ConceptsPanel({ onUseInPhase, className }: ConceptsPanelProps) {
               size="sm"
               onClick={() => toggleWorkshopSel(selectedConcept.id)}
               className={cn(
-                'text-[11px] h-7 flex-1 gap-1',
+                'text-[11px] h-7 flex-1 gap-1 transition-colors duration-200',
                 workshopSel.has(selectedConcept.id)
                   ? 'bg-amber-700 hover:bg-amber-800 text-white'
                   : 'bg-amber-100 hover:bg-amber-200 text-amber-900 dark:bg-amber-900/40 dark:hover:bg-amber-900/60 dark:text-amber-200',
@@ -873,30 +890,40 @@ function ConceptRow(props: ConceptRowProps) {
     : concept.title
 
   if (editing) {
+    const editIdPrefix = `concept-edit-${concept.id}`
     return (
       <div className="px-2 py-1.5 space-y-1 bg-amber-50/60 dark:bg-amber-950/40">
+        <Label htmlFor={`${editIdPrefix}-title`} className="sr-only">Edit concept title</Label>
         <input
+          id={`${editIdPrefix}-title`}
           type="text"
           value={editDraft.title}
           onChange={(e) => setEditDraft({ ...editDraft, title: e.target.value })}
+          aria-label="Edit concept title"
           className="w-full text-[11px] px-2 py-1 rounded border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
         />
+        <Label htmlFor={`${editIdPrefix}-theme`} className="sr-only">Edit concept theme</Label>
         <input
+          id={`${editIdPrefix}-theme`}
           type="text"
           value={editDraft.theme}
           onChange={(e) => setEditDraft({ ...editDraft, theme: e.target.value })}
           placeholder="Theme"
+          aria-label="Edit concept theme"
           className="w-full text-[11px] px-2 py-1 rounded border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
         />
+        <Label htmlFor={`${editIdPrefix}-content`} className="sr-only">Edit concept content</Label>
         <textarea
+          id={`${editIdPrefix}-content`}
           value={editDraft.content}
           onChange={(e) => setEditDraft({ ...editDraft, content: e.target.value })}
           rows={3}
+          aria-label="Edit concept content"
           className="w-full text-[11px] px-2 py-1 rounded border border-amber-300 dark:border-amber-800 bg-white dark:bg-slate-950 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/40"
         />
         <div className="flex justify-end gap-1">
           <Button size="sm" variant="ghost" onClick={props.onCancelEdit} className="text-[11px] h-6">Cancel</Button>
-          <Button size="sm" onClick={props.onSaveEdit} className="text-[11px] h-6 bg-amber-700 hover:bg-amber-800 text-white">Save</Button>
+          <Button size="sm" onClick={props.onSaveEdit} className="text-[11px] h-6 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200">Save</Button>
         </div>
       </div>
     )
@@ -967,7 +994,7 @@ function ConceptRowMenu(props: ConceptRowMenuProps) {
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); props.onOpenChange(!props.open) }}
-        className="rounded p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50"
+        className="rounded p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 active:bg-amber-200 dark:active:bg-amber-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
         aria-label={`Actions for ${props.concept.title}`}
         aria-haspopup="menu"
         aria-expanded={props.open}
@@ -1068,11 +1095,14 @@ function LinkToPhasePicker({ concept, nodes, onPick, onCancel, busy }: LinkToPha
           <p className="text-[10px] text-slate-500 mb-1">
             Concept: <span className="font-medium text-slate-700 dark:text-slate-300">{concept.title}</span>
           </p>
+          <Label htmlFor="link-phase-filter" className="sr-only">Filter plan nodes</Label>
           <input
+            id="link-phase-filter"
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter plan nodes by id or title…"
+            aria-label="Filter plan nodes by id or title"
             className="w-full text-[11px] px-2 py-1 rounded border border-amber-200 dark:border-amber-900 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
             autoFocus
           />

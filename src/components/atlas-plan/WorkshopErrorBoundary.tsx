@@ -149,7 +149,7 @@ export class WorkshopErrorBoundary extends Component<Props, State> {
               type="button"
               size="sm"
               onClick={this.handleReload}
-              className="h-7 px-3 text-[11px] sm:text-xs bg-amber-700 text-white hover:bg-amber-800"
+              className="h-7 px-3 text-[11px] sm:text-xs bg-amber-700 text-white hover:bg-amber-800 transition-colors duration-200"
             >
               <RefreshCcw className="size-3 mr-1.5" aria-hidden />
               Reload page
