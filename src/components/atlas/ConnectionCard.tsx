@@ -26,6 +26,12 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
+import {
   testConnection,
   revealConnection,
   deleteConnection,
@@ -95,7 +101,6 @@ function statusLabel(status: AtlasConnection['last_verify_status']): string {
 
 export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
   const [busy, setBusy] = useState<'test' | 'reveal' | 'delete' | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [revealed, setRevealed] = useState<string | null>(null)
 
   const meta = PROVIDER_META[connection.provider]
@@ -103,7 +108,6 @@ export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
 
   async function handleTest() {
     setBusy('test')
-    setMenuOpen(false)
     try {
       const result = await testConnection(connection.id)
       if (result.ok) {
@@ -126,11 +130,9 @@ export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
     }
     if (connection.sensitivity === 'production_sensitive') {
       toast.error('Reveal blocked for production-sensitive secrets. Rotate to issue a new key.')
-      setMenuOpen(false)
       return
     }
     setBusy('reveal')
-    setMenuOpen(false)
     try {
       const r = await revealConnection(connection.id)
       setRevealed(r.secret)
@@ -142,7 +144,6 @@ export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
   }
 
   async function handleDelete() {
-    setMenuOpen(false)
     const confirmed = window.confirm(
       `Delete the ${meta.label} connection${connection.label ? ` "${connection.label}"` : ''}? This cannot be undone.`,
     )
@@ -177,16 +178,39 @@ export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
           title={statusLabel(connection.last_verify_status)}
           aria-label={statusLabel(connection.last_verify_status)}
         />
-        <button
-          type="button"
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-label="Connection actions"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          className="rounded p-0.5 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
-        >
-          <MoreHorizontal className="size-3.5" aria-hidden />
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label="Connection options"
+            className="rounded p-0.5 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+          >
+            <MoreHorizontal className="size-3.5" aria-hidden />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-36">
+            <DropdownMenuItem onSelect={handleTest} disabled={busy !== null}>
+              {busy === 'test' ? (
+                <span className="inline-flex items-center gap-2"><Loader2 className="size-3 animate-spin" aria-hidden />Testing…</span>
+              ) : (
+                <><RefreshCw className="size-3" aria-hidden /><span>Test connection</span></>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={handleReveal}
+              disabled={busy !== null || connection.sensitivity === 'production_sensitive'}
+            >
+              {revealed ? (
+                <><EyeOff className="size-3" aria-hidden /><span>Hide value</span></>
+              ) : busy === 'reveal' ? (
+                <span className="inline-flex items-center gap-2"><Loader2 className="size-3 animate-spin" aria-hidden />Revealing…</span>
+              ) : (
+                <><Eye className="size-3" aria-hidden /><span>Reveal</span></>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={handleDelete} disabled={busy !== null} variant="destructive">
+              <Trash2 className="size-3" aria-hidden />
+              <span>{busy === 'delete' ? 'Deleting…' : 'Delete'}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Middle: masked value (or revealed value if toggled) */}
@@ -223,58 +247,7 @@ export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
           {connection.last_verify_error}
         </p>
       )}
-
-      {/* Kebab menu */}
-      {menuOpen && (
-        <div
-          role="menu"
-          className="absolute right-2 top-9 z-20 w-36 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-lg overflow-hidden"
-          onMouseLeave={() => setMenuOpen(false)}
-        >
-          <MenuItem icon={<RefreshCw className="size-3" />} onClick={handleTest} disabled={busy !== null}>
-            {busy === 'test' ? <span className="inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" aria-hidden />Testing…</span> : 'Test connection'}
-          </MenuItem>
-          <MenuItem
-            icon={revealed ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
-            onClick={handleReveal}
-            disabled={busy !== null || connection.sensitivity === 'production_sensitive'}
-          >
-            {revealed ? 'Hide value' : busy === 'reveal' ? 'Revealing…' : 'Reveal'}
-          </MenuItem>
-          <MenuItem icon={<Trash2 className="size-3 text-rose-600" />} onClick={handleDelete} disabled={busy !== null} danger>
-            {busy === 'delete' ? 'Deleting…' : 'Delete'}
-          </MenuItem>
-        </div>
-      )}
     </div>
-  )
-}
-
-function MenuItem({
-  icon, onClick, children, disabled, danger,
-}: {
-  icon: React.ReactNode
-  onClick: () => void
-  children: React.ReactNode
-  disabled?: boolean
-  danger?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        'flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left transition-colors duration-150 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
-        danger
-          ? 'text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/40'
-          : 'text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800',
-      )}
-    >
-      {icon}
-      <span>{children}</span>
-    </button>
   )
 }
 

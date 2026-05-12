@@ -7,6 +7,13 @@
 import { useEffect, useState } from 'react'
 import { ScrollText, RefreshCw, AlertTriangle, ShieldCheck, ShieldX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { listAuditEvents, type AtlasAuditEvent, type AtlasAuditAction } from '@/lib/atlas-client'
 import { cn } from '@/lib/utils'
 
@@ -51,16 +58,25 @@ export function AuditPage() {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <select
+          <Select
             value={action}
-            onChange={(e) => setAction(e.target.value as AtlasAuditAction | 'all')}
-            className="text-xs h-8 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
-            aria-label="Filter by action"
+            onValueChange={(v) => setAction(v as AtlasAuditAction | 'all')}
           >
-            {ACTION_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+            <SelectTrigger
+              size="default"
+              aria-label="Filter by action"
+              className="w-36"
+            >
+              <SelectValue placeholder="All actions" />
+            </SelectTrigger>
+            <SelectContent>
+              {ACTION_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             size="sm"
