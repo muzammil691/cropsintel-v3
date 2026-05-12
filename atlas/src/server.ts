@@ -4126,11 +4126,84 @@ export async function startServer(): Promise<void> {
           json(res, 500, { error: error?.message ?? 'insert failed' })
           return
         }
-        const row = data as ConnectionRow
+        const insertedRow = data as ConnectionRow
         const { maskSecret } = await import('./lib/vault.js')
         const { last4 } = maskSecret(payload.secret)
-        await logAuditEvent({ memberId, connectionId: row.id, action: 'create', result: 'success', meta: { provider: payload.provider }, req })
-        json(res, 200, { ok: true, connection: maskedRow(row, last4) })
+
+        // 1.10bb-c Session 9B-FIX — verify-after-insert.
+        //
+        // The 9A code path returned the just-inserted row with NULL
+        // verify columns, which left the wizard's stepper stuck on
+        // "needs test" even after a successful Save. The dry_run path
+        // already validates against the provider, but the *create*
+        // path didn't — so the persisted row never reached
+        // last_verify_status='verified' until the user manually
+        // clicked Test from Settings.
+        //
+        // Now we always run the provider test against the freshly
+        // encrypted credentials and write the result back. The row is
+        // returned to the client with last_verify_status populated, so
+        // the wizard can advance immediately. Failures persist as
+        // last_verify_status='failing' / 'unknown' so the user can
+        // retry from Settings without re-entering the secret.
+        const { runProviderTest } = await import('./lib/providers/index.js')
+        const nowIso = new Date().toISOString()
+        let testStatus: 'verified' | 'failing' | 'unknown' = 'unknown'
+        let testError: string | null = null
+        let testIdentity: string | undefined
+        let testScopes: string[] | undefined
+        let testHttpStatus: number | undefined
+        try {
+          const testResult = await runProviderTest(payload.provider, {
+            apiKey: payload.secret,
+            meta: (payload.meta_json ?? {}) as Record<string, string>,
+          })
+          testStatus = testResult.ok ? 'verified' : 'failing'
+          testError = testResult.ok ? null : (testResult.error ?? 'failed').slice(0, 1000)
+          testIdentity = testResult.identity
+          testScopes = testResult.scopes
+          testHttpStatus = testResult.status
+        } catch (err) {
+          // Network / unexpected throw — keep the row so the user can
+          // retry. last_verify_status='unknown' signals "we couldn't
+          // ask the provider, not that the provider rejected us".
+          testStatus = 'unknown'
+          testError = (err instanceof Error ? err.message : String(err)).slice(0, 1000)
+        }
+
+        const { data: updated, error: updateErr } = await sb
+          .from('atlas_connections')
+          .update({
+            last_verify_status: testStatus,
+            last_verify_error: testError,
+            last_verified_at: nowIso,
+            updated_at: nowIso,
+          })
+          .eq('id', insertedRow.id)
+          .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+          .single()
+        // If the update query itself fails, fall back to the inserted
+        // row — the connection still exists; verify status just won't
+        // surface until the next manual Test.
+        const finalRow = (updated as ConnectionRow | null) ?? insertedRow
+
+        await logAuditEvent({
+          memberId,
+          connectionId: finalRow.id,
+          action: 'create',
+          result: testStatus === 'verified' ? 'success' : 'failure',
+          meta: {
+            provider: payload.provider,
+            verify_status: testStatus,
+            verify_identity: testIdentity,
+            verify_scopes: testScopes,
+            verify_http_status: testHttpStatus,
+            verify_error: testError,
+            update_error: updateErr?.message ?? null,
+          },
+          req,
+        })
+        json(res, 200, { ok: true, connection: maskedRow(finalRow, last4) })
         return
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
