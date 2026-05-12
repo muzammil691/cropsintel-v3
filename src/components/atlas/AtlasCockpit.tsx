@@ -9,6 +9,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { PwaInstallPrompt } from '@/components/PwaInstallPrompt'
 import { LiveModePanel } from './LiveModePanel'
 import { VerifierDialogPopup } from '@/components/atlas-plan/VerifierDialogPopup'
+import { FailingConnectionBanner } from '@/components/atlas/FailingConnectionBanner'
 import { WorkshopErrorBoundary } from '@/components/atlas-plan/WorkshopErrorBoundary'
 import { lazyWithRetry } from '@/lib/lazyWithRetry'
 import { useAtlasStatus } from '@/hooks/useAtlasStatus'
@@ -229,6 +230,8 @@ export function AtlasCockpit() {
       </div>
 
       <AtlasTopNav />
+
+      <FailingConnectionBanner />
 
       <AtlasHeader
         status={status}

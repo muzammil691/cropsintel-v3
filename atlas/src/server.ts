@@ -4049,7 +4049,11 @@ export async function startServer(): Promise<void> {
       return
     }
 
-    // POST /atlas/connections — create.
+    // POST /atlas/connections — create (or dry_run test).
+    // Session 9B: when dry_run=true, runs the provider test against the
+    // submitted creds WITHOUT writing to atlas_connections. Used by the
+    // AddConnectionSheet's "Test connection" button so the user can
+    // validate before committing. Audit log captures it as action='test'.
     if (url === '/atlas/connections' && method === 'POST') {
       const principal = await requireAuth(req, res)
       if (!principal) return
@@ -4058,12 +4062,41 @@ export async function startServer(): Promise<void> {
         return
       }
       const rawBody = await readBody(req)
-      let payload: { provider?: string; label?: string; sensitivity?: string; secret?: string; meta_json?: Record<string, unknown> } = {}
+      let payload: { provider?: string; label?: string; sensitivity?: string; secret?: string; meta_json?: Record<string, unknown>; dry_run?: boolean } = {}
       try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
       if (!payload.provider || !payload.secret) {
         json(res, 400, { error: 'provider + secret required' })
         return
       }
+
+      // Session 9B — dry_run short-circuits the vault + insert. No row
+      // persists, no last_verify_* update. Pure read-side check on the
+      // upstream provider.
+      if (payload.dry_run === true) {
+        const memberId = memberScopeForPrincipal(principal)
+        const { runProviderTest } = await import('./lib/providers/index.js')
+        const result = await runProviderTest(payload.provider, {
+          apiKey: payload.secret,
+          meta: (payload.meta_json ?? {}) as Record<string, string>,
+        })
+        await logAuditEvent({
+          memberId,
+          action: 'test',
+          result: result.ok ? 'success' : 'failure',
+          meta: { provider: payload.provider, dry_run: true, status: result.status, identity: result.identity },
+          req,
+        })
+        json(res, 200, {
+          ok: result.ok,
+          dry_run: true,
+          identity: result.identity,
+          scopes: result.scopes,
+          error: result.error,
+          status: result.status,
+        })
+        return
+      }
+
       const { vaultIsReady, vaultEncrypt } = await import('./lib/vault.js')
       const ready = await vaultIsReady()
       if (!ready.ok) {

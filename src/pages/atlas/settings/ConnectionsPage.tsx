@@ -6,9 +6,11 @@
 // Comms, Billing, Custom.
 
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Plug, AlertTriangle, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConnectionCard } from '@/components/atlas/ConnectionCard'
+import { AddConnectionSheet } from '@/components/atlas/AddConnectionSheet'
 import { listConnections, type AtlasConnection, type ConnectionProvider } from '@/lib/atlas-client'
 import { cn } from '@/lib/utils'
 
@@ -30,6 +32,8 @@ export function ConnectionsPage() {
   const [connections, setConnections] = useState<AtlasConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const refresh = () => {
     setLoading(true)
@@ -41,6 +45,24 @@ export function ConnectionsPage() {
   }
 
   useEffect(() => { refresh() }, [])
+
+  // 9B — FailingConnectionBanner deep-links here with ?reconnect=<id>. We
+  // surface the affected card via a brief highlight; the kebab menu pop is
+  // a 9C polish item. For now we just scroll the card into view.
+  const reconnectId = searchParams.get('reconnect')
+  useEffect(() => {
+    if (!reconnectId) return
+    const el = document.querySelector(`[data-connection-id="${reconnectId}"]`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('ring-2', 'ring-amber-400')
+      setTimeout(() => el.classList.remove('ring-2', 'ring-amber-400'), 4000)
+    }
+    // Clear the query param so a refresh doesn't re-trigger.
+    const next = new URLSearchParams(searchParams)
+    next.delete('reconnect')
+    setSearchParams(next, { replace: true })
+  }, [reconnectId, connections, searchParams, setSearchParams])
 
   const byCategory: Record<Category, AtlasConnection[]> = {
     'AI Models': [], Code: [], Hosting: [], Database: [], Comms: [], Billing: [], Custom: [],
@@ -77,8 +99,7 @@ export function ConnectionsPage() {
           <Button
             type="button"
             size="sm"
-            disabled
-            title="Add connection lands in Session 9B"
+            onClick={() => setSheetOpen(true)}
             className="text-xs h-8 bg-emerald-700 hover:bg-emerald-800 text-white transition-colors duration-200"
           >
             <Plus className="size-3 mr-1" aria-hidden />
@@ -126,12 +147,20 @@ export function ConnectionsPage() {
             </h2>
             <div className="flex flex-wrap gap-3">
               {list.map((c) => (
-                <ConnectionCard key={c.id} connection={c} onChanged={refresh} />
+                <div key={c.id} data-connection-id={c.id} className="transition-shadow duration-200">
+                  <ConnectionCard connection={c} onChanged={refresh} />
+                </div>
               ))}
             </div>
           </section>
         )
       })}
+
+      <AddConnectionSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        onSaved={() => refresh()}
+      />
     </div>
   )
 }

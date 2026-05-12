@@ -23,6 +23,7 @@ import { X } from 'lucide-react'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { DrAtlasAssistant } from '@/components/atlas/DrAtlasAssistant'
 import { AtlasAuthGuard } from '@/components/atlas/AtlasAuthGuard'
+import { OnboardingGuard } from '@/components/atlas/OnboardingGuard'
 import { RootRedirect } from '@/components/RootRedirect'
 import { useAuth } from '@/contexts/AuthContext'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -42,6 +43,9 @@ const ConnectionsPage = lazy(() => import('./pages/atlas/settings/ConnectionsPag
 const NotificationsPage = lazy(() => import('./pages/atlas/settings/NotificationsPage'))
 const AuditPage = lazy(() => import('./pages/atlas/settings/AuditPage'))
 const DangerZonePage = lazy(() => import('./pages/atlas/settings/DangerZonePage'))
+
+// 1.10bb-c Session 9B — Onboarding wizard.
+const OnboardingWizard = lazy(() => import('./pages/atlas/onboarding/OnboardingWizard'))
 
 function CockpitLoadingFallback() {
   return (
@@ -115,9 +119,22 @@ export default function App() {
           <Route path="/atlas/login" element={<AtlasLogin />} />
           <Route path="/atlas/invite" element={<AtlasInviteAccept />} />
 
+          {/* 1.10bb-c Session 9B — onboarding wizard. Auth-gated but NOT
+              onboarding-gated (the wizard's whole job is to drive onboarding
+              to complete). */}
+          <Route
+            path="/atlas/onboarding"
+            element={
+              <AtlasAuthGuard>
+                <OnboardingWizard />
+              </AtlasAuthGuard>
+            }
+          />
+
           {/* 1.10bb-c Session 9A — Settings sub-tree. Declared BEFORE the
-              /atlas/* wildcard so React Router resolves it first; the
-              wildcard catch-all routes everything else to AtlasCockpit. */}
+              /atlas/* wildcard so React Router resolves it first. Auth-gated
+              but NOT onboarding-gated so the user can fix a broken connection
+              mid-wizard from Settings. */}
           <Route
             path="/atlas/settings"
             element={
@@ -137,12 +154,16 @@ export default function App() {
           {/* Everything else under /atlas/* renders the cockpit. The cockpit's
               own URL-search-params router handles tab state (?tab=plan,
               ?tab=workshop, etc.) so the wildcard is sufficient — no
-              per-tab Routes needed. */}
+              per-tab Routes needed. 1.10bb-c Session 9B — wrapped in
+              OnboardingGuard so a user who hasn't completed the Stack Gate
+              gets redirected to the wizard. */}
           <Route
             path="/atlas/*"
             element={
               <AtlasAuthGuard>
-                <AtlasCockpit />
+                <OnboardingGuard>
+                  <AtlasCockpit />
+                </OnboardingGuard>
               </AtlasAuthGuard>
             }
           />

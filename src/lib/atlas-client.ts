@@ -2897,6 +2897,30 @@ export async function createConnection(input: {
   })
 }
 
+// Session 9B — dry_run test (no DB write). Same shape as createConnection
+// minus the `secret` storage side-effect. Used by AddConnectionSheet so the
+// user can validate creds before committing.
+export interface DryRunTestResult {
+  ok: boolean
+  dry_run: true
+  identity?: string
+  scopes?: string[]
+  error?: string
+  status?: number
+}
+
+export async function testConnectionDryRun(input: {
+  provider: ConnectionProvider
+  secret: string
+  meta_json?: Record<string, unknown>
+}): Promise<DryRunTestResult> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, dry_run: true }),
+  })
+}
+
 export async function updateConnection(
   connectionId: string,
   patch: { label?: string; sensitivity?: 'regular' | 'production_sensitive'; meta_json?: Record<string, unknown> },
