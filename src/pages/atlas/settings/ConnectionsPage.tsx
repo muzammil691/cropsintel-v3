@@ -79,7 +79,7 @@ export function ConnectionsPage() {
             size="sm"
             disabled
             title="Add connection lands in Session 9B"
-            className="text-xs h-8 bg-emerald-700 hover:bg-emerald-800 text-white"
+            className="text-xs h-8 bg-emerald-700 hover:bg-emerald-800 text-white transition-colors duration-200"
           >
             <Plus className="size-3 mr-1" aria-hidden />
             Add connection

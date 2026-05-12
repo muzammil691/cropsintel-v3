@@ -54,7 +54,7 @@ export function AuditPage() {
           <select
             value={action}
             onChange={(e) => setAction(e.target.value as AtlasAuditAction | 'all')}
-            className="text-xs h-8 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+            className="text-xs h-8 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
             aria-label="Filter by action"
           >
             {ACTION_OPTIONS.map((opt) => (
@@ -106,7 +106,7 @@ export function AuditPage() {
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
               {events.map((ev) => (
-                <tr key={ev.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                <tr key={ev.id} className="transition-colors duration-200 hover:bg-slate-50 dark:hover:bg-slate-900/50">
                   <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 whitespace-nowrap tabular-nums">
                     {new Date(ev.created_at).toLocaleString()}
                   </td>

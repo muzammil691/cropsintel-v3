@@ -183,7 +183,7 @@ export function ConnectionCard({ connection, onChanged }: ConnectionCardProps) {
           aria-label="Connection actions"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
-          className="rounded p-0.5 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+          className="rounded p-0.5 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
         >
           <MoreHorizontal className="size-3.5" aria-hidden />
         </button>
