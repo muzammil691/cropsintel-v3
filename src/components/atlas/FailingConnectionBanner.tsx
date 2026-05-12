@@ -83,7 +83,8 @@ export function FailingConnectionBanner() {
               size="sm"
               variant="outline"
               onClick={() => navigate(`/atlas/settings/connections?reconnect=${encodeURIComponent(c.id)}`)}
-              className="h-7 px-2 text-[11px] border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40"
+              aria-label={`Reconnect ${c.provider}`}
+              className="h-7 px-2 text-[11px] border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40 transition-colors duration-200"
             >
               <RefreshCw className="size-3 mr-1" aria-hidden />
               Reconnect
@@ -93,7 +94,7 @@ export function FailingConnectionBanner() {
               onClick={() => { dismiss(c.id); setDismissedTick((t) => t + 1) }}
               aria-label={`Dismiss ${c.provider} alert until next session`}
               title="Dismiss until next session"
-              className="rounded p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
+              className="rounded p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200"
             >
               <X className="size-3" aria-hidden />
             </button>
@@ -105,7 +106,8 @@ export function FailingConnectionBanner() {
             <button
               type="button"
               onClick={() => navigate('/atlas/settings/connections')}
-              className="underline hover:text-amber-900 dark:hover:text-amber-100"
+              aria-label="Open Settings → Connections"
+              className="underline hover:text-amber-900 dark:hover:text-amber-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
             >
               Settings → Connections
             </button>

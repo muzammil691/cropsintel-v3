@@ -207,7 +207,8 @@ export function AddConnectionSheet({ open, onClose, initialProvider, onSaved }: 
     >
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" aria-hidden />
       <aside
-        className="relative ml-auto h-full w-full sm:w-[520px] bg-white dark:bg-slate-950 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col"
+        className="relative ml-auto h-full w-full bg-white dark:bg-slate-950 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col"
+        style={{ maxWidth: '520px' }}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-200 dark:border-slate-800">
@@ -217,8 +218,8 @@ export function AddConnectionSheet({ open, onClose, initialProvider, onSaved }: 
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
-            className="rounded p-1 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50"
+            aria-label="Close connection sheet"
+            className="rounded p-1 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200"
           >
             <X className="size-4" aria-hidden />
           </button>
@@ -281,7 +282,8 @@ function CatalogCard({ form, onPick }: { form: ProviderForm; onPick: () => void 
     <button
       type="button"
       onClick={onPick}
-      className="text-left rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2.5 hover:border-emerald-300 dark:hover:border-emerald-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-150"
+      aria-label={`Connect ${form.display}`}
+      className="text-left rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2.5 hover:border-emerald-300 dark:hover:border-emerald-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200"
     >
       <div className="flex items-center gap-2 mb-1">
         <Icon className="size-4 text-slate-700 dark:text-slate-300" aria-hidden />
@@ -410,7 +412,8 @@ function ProviderFormView({ form, onBack, onSaved, hideBack }: ProviderFormViewP
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
+            aria-label="Back to provider catalog"
+            className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
           >
             <ArrowLeft className="size-3" aria-hidden /> Back to catalog
           </button>
@@ -431,7 +434,7 @@ function ProviderFormView({ form, onBack, onSaved, hideBack }: ProviderFormViewP
                 href={form.helpUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-0.5 underline hover:text-amber-700 dark:hover:text-amber-100"
+                className="inline-flex items-center gap-0.5 underline hover:text-amber-700 dark:hover:text-amber-100 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
               >
                 Open <ExternalLink className="size-2.5" aria-hidden />
               </a>
@@ -486,8 +489,8 @@ function ProviderFormView({ form, onBack, onSaved, hideBack }: ProviderFormViewP
                   <button
                     type="button"
                     onClick={() => setSecretsVisible((v) => ({ ...v, [field.name]: !visible }))}
-                    aria-label={visible ? 'Hide secret' : 'Show secret'}
-                    className="absolute right-1.5 top-1.5 rounded p-0.5 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                    aria-label={visible ? 'Hide secret value' : 'Show secret value'}
+                    className="absolute right-1.5 top-1.5 rounded p-0.5 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 transition-colors duration-200"
                   >
                     {visible ? <EyeOff className="size-3.5" aria-hidden /> : <Eye className="size-3.5" aria-hidden />}
                   </button>
@@ -519,7 +522,7 @@ function ProviderFormView({ form, onBack, onSaved, hideBack }: ProviderFormViewP
           size="sm"
           onClick={handleSave}
           disabled={!saveEnabled}
-          className="text-xs h-8 bg-emerald-700 hover:bg-emerald-800 text-white"
+          className="text-xs h-8 bg-emerald-700 hover:bg-emerald-800 text-white transition-colors duration-200"
           title={!saveEnabled && !overrideEnabled ? 'Test connection first.' : undefined}
         >
           {saving ? <><Loader2 className="size-3 mr-1 animate-spin" aria-hidden /> Saving…</> : 'Save'}
@@ -531,7 +534,7 @@ function ProviderFormView({ form, onBack, onSaved, hideBack }: ProviderFormViewP
               setOverrideEnabled(true)
               toast.warning('Save-without-test enabled. The connection will be persisted but its status will read "unknown" until you test it.', { duration: 5000 })
             }}
-            className="ml-auto text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 underline transition-colors duration-150"
+            className="ml-auto text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 underline transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 rounded"
           >
             Save anyway without test (advanced)
           </button>

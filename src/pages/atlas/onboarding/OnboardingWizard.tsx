@@ -225,7 +225,7 @@ function WelcomeStep({ onStart }: { onStart: () => void }) {
         <Button
           type="button"
           onClick={onStart}
-          className="bg-emerald-700 hover:bg-emerald-800 text-white gap-2"
+          className="bg-emerald-700 hover:bg-emerald-800 text-white gap-2 transition-colors duration-200"
         >
           Get started <ArrowRight className="size-3.5" aria-hidden />
         </Button>
@@ -308,7 +308,7 @@ function ConnectStep({ connections, stack, onPick, allFive, verifiedCount, onCon
           size="sm"
           onClick={onSkip}
           disabled={completing}
-          className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+          className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors duration-200"
         >
           Skip for now
         </Button>
@@ -317,7 +317,7 @@ function ConnectStep({ connections, stack, onPick, allFive, verifiedCount, onCon
           onClick={onContinue}
           disabled={!allFive || completing}
           title={!allFive ? `${STACK.length - verifiedCount} more to go.` : undefined}
-          className="bg-emerald-700 hover:bg-emerald-800 text-white gap-2"
+          className="bg-emerald-700 hover:bg-emerald-800 text-white gap-2 transition-colors duration-200"
         >
           {completing ? <><Loader2 className="size-3.5 animate-spin" aria-hidden /> Finalizing…</> : <>Continue <ArrowRight className="size-3.5" aria-hidden /></>}
         </Button>
@@ -366,14 +366,14 @@ function DoneStep({ connections, onOpen }: { connections: AtlasConnection[]; onO
           variant="ghost"
           size="sm"
           onClick={() => window.history.back()}
-          className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+          className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors duration-200"
         >
           <ChevronLeft className="size-3.5 mr-1" aria-hidden /> Back
         </Button>
         <Button
           type="button"
           onClick={onOpen}
-          className="ml-auto bg-emerald-700 hover:bg-emerald-800 text-white gap-2"
+          className="ml-auto bg-emerald-700 hover:bg-emerald-800 text-white gap-2 transition-colors duration-200"
         >
           Open cockpit <ArrowRight className="size-3.5" aria-hidden />
         </Button>
