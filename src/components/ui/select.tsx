@@ -35,8 +35,8 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "flex w-full items-center justify-between gap-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 text-xs transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-3 [&_svg]:shrink-0 [&_svg]:text-slate-500",
-        size === "sm" ? "h-7" : "h-8",
+        "flex w-full items-center justify-between gap-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 sm:px-2.5 text-xs sm:text-[13px] transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-3 [&_svg]:shrink-0 [&_svg]:text-slate-500",
+        size === "sm" ? "h-8 sm:h-7" : "h-9 sm:h-8",
         className
       )}
       {...props}
@@ -61,7 +61,7 @@ function SelectContent({
         data-slot="select-content"
         position={position}
         className={cn(
-          "relative z-50 min-w-32 overflow-hidden rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "relative z-50 min-w-32 sm:min-w-40 overflow-hidden rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-700 dark:text-slate-300 shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           position === "popper" &&
             "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
           className
@@ -91,7 +91,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm py-1.5 pl-2 pr-7 text-xs text-slate-700 dark:text-slate-300 outline-none transition-colors duration-150",
+        "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm py-2 sm:py-1.5 pl-2 pr-7 text-xs sm:text-[13px] text-slate-700 dark:text-slate-300 outline-none transition-colors duration-150",
         "focus:bg-slate-50 dark:focus:bg-slate-800",
         "data-disabled:pointer-events-none data-disabled:opacity-50",
         className
