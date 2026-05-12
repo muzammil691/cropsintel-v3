@@ -3916,6 +3916,481 @@ export async function startServer(): Promise<void> {
       }
     }
 
+    // ─── 1.10bb-c Session 9A: Settings — Connections vault + Audit ──────────
+    // All admin-gated. Member id comes from requireAuth() — atlas_members.id
+    // when present, otherwise the session id (so single-member bootstrap
+    // works too). The vault holds the actual secret value; this surface only
+    // reads metadata + last4. Provider test endpoints live under
+    // atlas/src/lib/providers/. See atlas/src/lib/vault.ts for crypto.
+
+    // Resolve a stable member-scope id for the current principal. Used as
+    // atlas_connections.member_id. Falls back to the sessionId so a fresh
+    // tenant with no atlas_members row can still write connections.
+    function memberScopeForPrincipal(p: AuthPrincipal): string {
+      return p.memberId ?? p.sessionId
+    }
+
+    async function logAuditEvent(args: {
+      memberId: string | null
+      connectionId?: string | null
+      action: 'create' | 'update' | 'rotate' | 'test' | 'reveal' | 'delete' | 'wizard_complete'
+      result: 'success' | 'failure'
+      meta?: Record<string, unknown>
+      req: IncomingMessage
+    }): Promise<void> {
+      const sb = getSupabaseClient()
+      if (!sb) return
+      const ip = (args.req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
+        ?? args.req.socket.remoteAddress
+        ?? null
+      const ua = (args.req.headers['user-agent'] as string | undefined) ?? null
+      try {
+        await sb.from('atlas_audit_events').insert({
+          member_id: args.memberId,
+          connection_id: args.connectionId ?? null,
+          action: args.action,
+          result: args.result,
+          ip,
+          user_agent: ua,
+          meta_json: args.meta ?? null,
+        })
+      } catch { /* audit failure must never break the control path */ }
+    }
+
+    interface ConnectionRow {
+      id: string
+      member_id: string
+      provider: string
+      label: string
+      sensitivity: string
+      encrypted_value: string  // base64 / bytea-from-postgres
+      encryption_nonce: string
+      meta_json: Record<string, unknown> | null
+      last_verified_at: string | null
+      last_verify_status: string | null
+      last_verify_error: string | null
+      created_at: string
+      updated_at: string
+    }
+
+    // bytea from Supabase comes back as "\\x..." hex by default. Provide both
+    // directions so callers stay readable.
+    function byteaToBuffer(input: unknown): Uint8Array {
+      if (input instanceof Uint8Array) return input
+      if (typeof input === 'string' && input.startsWith('\\x')) {
+        return Uint8Array.from(Buffer.from(input.slice(2), 'hex'))
+      }
+      if (typeof input === 'string') {
+        // Fallback: base64.
+        return Uint8Array.from(Buffer.from(input, 'base64'))
+      }
+      return new Uint8Array()
+    }
+
+    function bufferToBytea(input: Uint8Array): string {
+      return '\\x' + Buffer.from(input).toString('hex')
+    }
+
+    function maskedRow(row: ConnectionRow, last4: string): Record<string, unknown> {
+      return {
+        id: row.id,
+        provider: row.provider,
+        label: row.label,
+        sensitivity: row.sensitivity,
+        meta_json: row.meta_json ?? {},
+        last_verified_at: row.last_verified_at,
+        last_verify_status: row.last_verify_status,
+        last_verify_error: row.last_verify_error,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        last4,
+        masked: last4 ? `••••••••${last4}` : '••••',
+      }
+    }
+
+    async function decryptRow(row: ConnectionRow): Promise<string> {
+      const { vaultDecrypt } = await import('./lib/vault.js')
+      const ciphertext = byteaToBuffer(row.encrypted_value)
+      const nonce = byteaToBuffer(row.encryption_nonce)
+      return vaultDecrypt(ciphertext, nonce)
+    }
+
+    // GET /atlas/connections — list (masked).
+    if (url === '/atlas/connections' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { connections: [] }); return }
+      const memberId = memberScopeForPrincipal(principal)
+      const { data, error } = await sb
+        .from('atlas_connections')
+        .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+        .eq('member_id', memberId)
+        .order('updated_at', { ascending: false })
+        .limit(200)
+      if (error) { json(res, 500, { error: error.message }); return }
+      // Best-effort decrypt to surface last4 — failures fall back to empty.
+      const rows = (data ?? []) as ConnectionRow[]
+      const masked = await Promise.all(rows.map(async (row) => {
+        try {
+          const { maskSecret } = await import('./lib/vault.js')
+          const plain = await decryptRow(row)
+          const { last4 } = maskSecret(plain)
+          return maskedRow(row, last4)
+        } catch {
+          return maskedRow(row, '')
+        }
+      }))
+      json(res, 200, { connections: masked })
+      return
+    }
+
+    // POST /atlas/connections — create.
+    if (url === '/atlas/connections' && method === 'POST') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const rawBody = await readBody(req)
+      let payload: { provider?: string; label?: string; sensitivity?: string; secret?: string; meta_json?: Record<string, unknown> } = {}
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+      if (!payload.provider || !payload.secret) {
+        json(res, 400, { error: 'provider + secret required' })
+        return
+      }
+      const { vaultIsReady, vaultEncrypt } = await import('./lib/vault.js')
+      const ready = await vaultIsReady()
+      if (!ready.ok) {
+        json(res, 503, { error: 'vault_unconfigured', detail: ready.error })
+        return
+      }
+      try {
+        const encrypted = await vaultEncrypt(payload.secret)
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const memberId = memberScopeForPrincipal(principal)
+        const { data, error } = await sb
+          .from('atlas_connections')
+          .insert({
+            member_id: memberId,
+            provider: payload.provider,
+            label: payload.label ?? '',
+            sensitivity: payload.sensitivity === 'production_sensitive' ? 'production_sensitive' : 'regular',
+            encrypted_value: bufferToBytea(encrypted.ciphertext),
+            encryption_nonce: bufferToBytea(encrypted.nonce),
+            meta_json: payload.meta_json ?? {},
+          })
+          .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+          .single()
+        if (error || !data) {
+          await logAuditEvent({ memberId, action: 'create', result: 'failure', meta: { provider: payload.provider, error: error?.message }, req })
+          json(res, 500, { error: error?.message ?? 'insert failed' })
+          return
+        }
+        const row = data as ConnectionRow
+        const { maskSecret } = await import('./lib/vault.js')
+        const { last4 } = maskSecret(payload.secret)
+        await logAuditEvent({ memberId, connectionId: row.id, action: 'create', result: 'success', meta: { provider: payload.provider }, req })
+        json(res, 200, { ok: true, connection: maskedRow(row, last4) })
+        return
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        json(res, 500, { error: msg })
+        return
+      }
+    }
+
+    // PATCH /atlas/connections/:id — label / meta only (not secret).
+    {
+      const m = url.match(/^\/atlas\/connections\/([^/]+)$/)
+      if (m && method === 'PATCH') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const connectionId = decodeURIComponent(m[1])
+        const rawBody = await readBody(req)
+        let payload: { label?: string; meta_json?: Record<string, unknown>; sensitivity?: string } = {}
+        try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+        const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
+        if (typeof payload.label === 'string') update.label = payload.label.slice(0, 200)
+        if (payload.meta_json && typeof payload.meta_json === 'object') update.meta_json = payload.meta_json
+        if (payload.sensitivity === 'regular' || payload.sensitivity === 'production_sensitive') update.sensitivity = payload.sensitivity
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const memberId = memberScopeForPrincipal(principal)
+        const { data, error } = await sb
+          .from('atlas_connections')
+          .update(update)
+          .eq('id', connectionId)
+          .eq('member_id', memberId)
+          .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+          .maybeSingle()
+        if (error || !data) { json(res, 404, { error: error?.message ?? 'connection not found' }); return }
+        const row = data as ConnectionRow
+        let last4 = ''
+        try { const { maskSecret } = await import('./lib/vault.js'); const plain = await decryptRow(row); last4 = maskSecret(plain).last4 } catch { /* ignore */ }
+        await logAuditEvent({ memberId, connectionId: row.id, action: 'update', result: 'success', req })
+        json(res, 200, { ok: true, connection: maskedRow(row, last4) })
+        return
+      }
+    }
+
+    // POST /atlas/connections/:id/rotate — replace the secret value.
+    {
+      const m = url.match(/^\/atlas\/connections\/([^/]+)\/rotate$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const connectionId = decodeURIComponent(m[1])
+        const rawBody = await readBody(req)
+        let payload: { secret?: string } = {}
+        try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+        if (!payload.secret) { json(res, 400, { error: 'secret required' }); return }
+        const { vaultIsReady, vaultEncrypt, maskSecret } = await import('./lib/vault.js')
+        const ready = await vaultIsReady()
+        if (!ready.ok) { json(res, 503, { error: 'vault_unconfigured', detail: ready.error }); return }
+        const encrypted = await vaultEncrypt(payload.secret)
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const memberId = memberScopeForPrincipal(principal)
+        const { data, error } = await sb
+          .from('atlas_connections')
+          .update({
+            encrypted_value: bufferToBytea(encrypted.ciphertext),
+            encryption_nonce: bufferToBytea(encrypted.nonce),
+            last_verify_status: 'unknown',
+            last_verify_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', connectionId)
+          .eq('member_id', memberId)
+          .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+          .maybeSingle()
+        if (error || !data) { json(res, 404, { error: error?.message ?? 'connection not found' }); return }
+        const row = data as ConnectionRow
+        const { last4 } = maskSecret(payload.secret)
+        await logAuditEvent({ memberId, connectionId: row.id, action: 'rotate', result: 'success', meta: { provider: row.provider }, req })
+        json(res, 200, { ok: true, connection: maskedRow(row, last4) })
+        return
+      }
+    }
+
+    // POST /atlas/connections/:id/test — provider-specific live check.
+    {
+      const m = url.match(/^\/atlas\/connections\/([^/]+)\/test$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const connectionId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const memberId = memberScopeForPrincipal(principal)
+        const { data, error } = await sb
+          .from('atlas_connections')
+          .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+          .eq('id', connectionId)
+          .eq('member_id', memberId)
+          .maybeSingle()
+        if (error || !data) { json(res, 404, { error: error?.message ?? 'connection not found' }); return }
+        const row = data as ConnectionRow
+        let plain: string
+        try { plain = await decryptRow(row) } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          await sb.from('atlas_connections').update({ last_verify_status: 'failing', last_verify_error: `decrypt_failed: ${msg}`, last_verified_at: new Date().toISOString() }).eq('id', connectionId)
+          await logAuditEvent({ memberId, connectionId: row.id, action: 'test', result: 'failure', meta: { reason: 'decrypt_failed' }, req })
+          json(res, 503, { ok: false, error: `vault decrypt failed: ${msg}` })
+          return
+        }
+        const { runProviderTest } = await import('./lib/providers/index.js')
+        const testResult = await runProviderTest(row.provider, {
+          apiKey: plain,
+          meta: (row.meta_json ?? {}) as Record<string, string>,
+        })
+        const nowIso = new Date().toISOString()
+        await sb.from('atlas_connections').update({
+          last_verify_status: testResult.ok ? 'verified' : 'failing',
+          last_verify_error: testResult.ok ? null : (testResult.error ?? 'failed').slice(0, 1000),
+          last_verified_at: nowIso,
+        }).eq('id', connectionId)
+        await logAuditEvent({ memberId, connectionId: row.id, action: 'test', result: testResult.ok ? 'success' : 'failure', meta: { provider: row.provider, status: testResult.status, identity: testResult.identity }, req })
+        json(res, 200, { ok: testResult.ok, identity: testResult.identity, scopes: testResult.scopes, error: testResult.error, status: testResult.status, verified_at: nowIso })
+        return
+      }
+    }
+
+    // POST /atlas/connections/:id/reveal — return plaintext once.
+    {
+      const m = url.match(/^\/atlas\/connections\/([^/]+)\/reveal$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const connectionId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const memberId = memberScopeForPrincipal(principal)
+        const { data, error } = await sb
+          .from('atlas_connections')
+          .select('id, member_id, provider, label, sensitivity, encrypted_value, encryption_nonce, meta_json, last_verified_at, last_verify_status, last_verify_error, created_at, updated_at')
+          .eq('id', connectionId)
+          .eq('member_id', memberId)
+          .maybeSingle()
+        if (error || !data) { json(res, 404, { error: error?.message ?? 'connection not found' }); return }
+        const row = data as ConnectionRow
+        if (row.sensitivity === 'production_sensitive') {
+          await logAuditEvent({ memberId, connectionId: row.id, action: 'reveal', result: 'failure', meta: { reason: 'production_sensitive' }, req })
+          json(res, 403, { error: 'reveal blocked for production_sensitive secrets — rotate instead' })
+          return
+        }
+        try {
+          const plain = await decryptRow(row)
+          await logAuditEvent({ memberId, connectionId: row.id, action: 'reveal', result: 'success', meta: { provider: row.provider }, req })
+          json(res, 200, { ok: true, secret: plain })
+          return
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          await logAuditEvent({ memberId, connectionId: row.id, action: 'reveal', result: 'failure', meta: { reason: 'decrypt_failed' }, req })
+          json(res, 503, { error: `vault decrypt failed: ${msg}` })
+          return
+        }
+      }
+    }
+
+    // DELETE /atlas/connections/:id — hard delete.
+    {
+      const m = url.match(/^\/atlas\/connections\/([^/]+)$/)
+      if (m && method === 'DELETE') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const connectionId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const memberId = memberScopeForPrincipal(principal)
+        const { data: existing } = await sb
+          .from('atlas_connections')
+          .select('id, provider')
+          .eq('id', connectionId)
+          .eq('member_id', memberId)
+          .maybeSingle()
+        if (!existing) { json(res, 404, { error: 'connection not found' }); return }
+        const { error } = await sb.from('atlas_connections').delete().eq('id', connectionId).eq('member_id', memberId)
+        if (error) {
+          await logAuditEvent({ memberId, connectionId, action: 'delete', result: 'failure', req })
+          json(res, 500, { error: error.message })
+          return
+        }
+        await logAuditEvent({ memberId, connectionId, action: 'delete', result: 'success', meta: { provider: (existing as { provider?: string }).provider }, req })
+        json(res, 200, { ok: true })
+        return
+      }
+    }
+
+    // GET /atlas/audit — list audit events for this member (most recent first).
+    if (url.split('?')[0] === '/atlas/audit' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      if (!roleAtLeast(principal.role, 'admin')) {
+        json(res, 403, { error: 'role_insufficient', required: 'admin' })
+        return
+      }
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 200, { events: [] }); return }
+      const memberId = memberScopeForPrincipal(principal)
+      const params = new URLSearchParams(url.includes('?') ? url.split('?')[1] : '')
+      const action = params.get('action')
+      const connectionId = params.get('connection_id')
+      const limit = Math.min(500, Math.max(1, Number(params.get('limit') ?? '100')))
+      let q = sb
+        .from('atlas_audit_events')
+        .select('id, member_id, connection_id, action, result, ip, user_agent, meta_json, created_at')
+        .eq('member_id', memberId)
+        .order('created_at', { ascending: false })
+        .limit(limit)
+      if (action) q = q.eq('action', action)
+      if (connectionId) q = q.eq('connection_id', connectionId)
+      const { data, error } = await q
+      if (error) { json(res, 500, { error: error.message }); return }
+      json(res, 200, { events: data ?? [] })
+      return
+    }
+
+    // GET /atlas/user-state — current member's atlas_user_state row (auto-creates).
+    if (url === '/atlas/user-state' && method === 'GET') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const memberId = memberScopeForPrincipal(principal)
+      const { data, error } = await sb
+        .from('atlas_user_state')
+        .select('member_id, onboarding_complete, whatsapp_number, updated_at')
+        .eq('member_id', memberId)
+        .maybeSingle()
+      if (error) { json(res, 500, { error: error.message }); return }
+      if (!data) {
+        const { data: inserted, error: insErr } = await sb
+          .from('atlas_user_state')
+          .insert({ member_id: memberId, whatsapp_number: principal.phone })
+          .select('member_id, onboarding_complete, whatsapp_number, updated_at')
+          .single()
+        if (insErr || !inserted) { json(res, 500, { error: insErr?.message ?? 'insert failed' }); return }
+        json(res, 200, { state: inserted })
+        return
+      }
+      json(res, 200, { state: data })
+      return
+    }
+
+    // PATCH /atlas/user-state — update onboarding_complete + whatsapp_number.
+    if (url === '/atlas/user-state' && method === 'PATCH') {
+      const principal = await requireAuth(req, res)
+      if (!principal) return
+      const rawBody = await readBody(req)
+      let payload: { onboarding_complete?: boolean; whatsapp_number?: string } = {}
+      try { payload = JSON.parse(rawBody) } catch { json(res, 400, { error: 'invalid_json' }); return }
+      const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
+      if (typeof payload.onboarding_complete === 'boolean') update.onboarding_complete = payload.onboarding_complete
+      if (typeof payload.whatsapp_number === 'string') update.whatsapp_number = payload.whatsapp_number.slice(0, 32)
+      const sb = getSupabaseClient()
+      if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+      const memberId = memberScopeForPrincipal(principal)
+      const { data, error } = await sb
+        .from('atlas_user_state')
+        .upsert({ member_id: memberId, ...update }, { onConflict: 'member_id' })
+        .select('member_id, onboarding_complete, whatsapp_number, updated_at')
+        .single()
+      if (error || !data) { json(res, 500, { error: error?.message ?? 'upsert failed' }); return }
+      if (payload.onboarding_complete === true) {
+        await logAuditEvent({ memberId, action: 'wizard_complete', result: 'success', req })
+      }
+      json(res, 200, { state: data })
+      return
+    }
+
 
     // ─── 1.10bb-c Session 4: Plan Workshop endpoints ────────────────────────
     // 8 endpoints for the new Workshop UI (PlanWorkshop.tsx). All admin-gated.

@@ -15,8 +15,10 @@
     "@octokit/rest": "^19.0.13",
     "@supabase/supabase-js": "^2.45.0",
     "@types/bcryptjs": "^2.4.6",
+    "@types/libsodium-wrappers": "^0.7.14",
     "bcryptjs": "^3.0.3",
     "commander": "^12.1.0",
+    "libsodium-wrappers": "^0.8.4",
     "openai": "^4.76.0",
     "ws": "^8.18.0"
   },

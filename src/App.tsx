@@ -35,6 +35,14 @@ const AtlasCockpit = lazy(() =>
 const AtlasLogin = lazy(() => import('./pages/atlas/AtlasLogin'))
 const AtlasInviteAccept = lazy(() => import('./pages/atlas/AtlasInviteAccept'))
 
+// 1.10bb-c Session 9A — Settings sub-tree.
+const SettingsLayout = lazy(() => import('./pages/atlas/settings/SettingsLayout'))
+const AccountPage = lazy(() => import('./pages/atlas/settings/AccountPage'))
+const ConnectionsPage = lazy(() => import('./pages/atlas/settings/ConnectionsPage'))
+const NotificationsPage = lazy(() => import('./pages/atlas/settings/NotificationsPage'))
+const AuditPage = lazy(() => import('./pages/atlas/settings/AuditPage'))
+const DangerZonePage = lazy(() => import('./pages/atlas/settings/DangerZonePage'))
+
 function CockpitLoadingFallback() {
   return (
     <div
@@ -106,6 +114,25 @@ export default function App() {
           {/* Atlas auth-flow pages — public (no AtlasAuthGuard). */}
           <Route path="/atlas/login" element={<AtlasLogin />} />
           <Route path="/atlas/invite" element={<AtlasInviteAccept />} />
+
+          {/* 1.10bb-c Session 9A — Settings sub-tree. Declared BEFORE the
+              /atlas/* wildcard so React Router resolves it first; the
+              wildcard catch-all routes everything else to AtlasCockpit. */}
+          <Route
+            path="/atlas/settings"
+            element={
+              <AtlasAuthGuard>
+                <SettingsLayout />
+              </AtlasAuthGuard>
+            }
+          >
+            <Route index element={<Navigate to="connections" replace />} />
+            <Route path="account" element={<AccountPage />} />
+            <Route path="connections" element={<ConnectionsPage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="audit" element={<AuditPage />} />
+            <Route path="danger" element={<DangerZonePage />} />
+          </Route>
 
           {/* Everything else under /atlas/* renders the cockpit. The cockpit's
               own URL-search-params router handles tab state (?tab=plan,

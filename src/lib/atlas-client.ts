@@ -2849,3 +2849,165 @@ export async function abortPausedDispatch(
     },
   )
 }
+
+// ─── 1.10bb-c Session 9A: Settings — Connections + Audit + UserState ────
+
+export type ConnectionProvider =
+  | 'anthropic' | 'openai' | 'gemini'
+  | 'github' | 'vercel' | 'netlify' | 'railway'
+  | 'supabase' | 'neon'
+  | 'twilio' | 'stripe' | 'custom'
+
+export type ConnectionVerifyStatus = 'verified' | 'expired' | 'failing' | 'unknown' | null
+
+export interface AtlasConnection {
+  id: string
+  provider: ConnectionProvider
+  label: string
+  sensitivity: 'regular' | 'production_sensitive'
+  meta_json: Record<string, unknown>
+  last_verified_at: string | null
+  last_verify_status: ConnectionVerifyStatus
+  last_verify_error: string | null
+  created_at: string
+  updated_at: string
+  last4: string
+  masked: string
+}
+
+export async function listConnections(): Promise<AtlasConnection[]> {
+  const data = await fetchJson<{ connections?: AtlasConnection[] }>(
+    `${ATLAS_URL}/atlas/connections`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.connections) ? data!.connections! : []
+}
+
+export async function createConnection(input: {
+  provider: ConnectionProvider
+  label?: string
+  sensitivity?: 'regular' | 'production_sensitive'
+  secret: string
+  meta_json?: Record<string, unknown>
+}): Promise<{ ok: true; connection: AtlasConnection }> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updateConnection(
+  connectionId: string,
+  patch: { label?: string; sensitivity?: 'regular' | 'production_sensitive'; meta_json?: Record<string, unknown> },
+): Promise<{ ok: true; connection: AtlasConnection }> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections/${encodeURIComponent(connectionId)}`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function rotateConnection(
+  connectionId: string,
+  secret: string,
+): Promise<{ ok: true; connection: AtlasConnection }> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections/${encodeURIComponent(connectionId)}/rotate`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret }),
+  })
+}
+
+export interface ConnectionTestResult {
+  ok: boolean
+  identity?: string
+  scopes?: string[]
+  error?: string
+  status?: number
+  verified_at: string
+}
+
+export async function testConnection(connectionId: string): Promise<ConnectionTestResult> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections/${encodeURIComponent(connectionId)}/test`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+}
+
+export async function revealConnection(
+  connectionId: string,
+): Promise<{ ok: true; secret: string }> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections/${encodeURIComponent(connectionId)}/reveal`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+}
+
+export async function deleteConnection(connectionId: string): Promise<{ ok: true }> {
+  return fetchJson(`${ATLAS_URL}/atlas/connections/${encodeURIComponent(connectionId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+}
+
+export type AtlasAuditAction =
+  | 'create' | 'update' | 'rotate' | 'test' | 'reveal' | 'delete' | 'wizard_complete'
+
+export interface AtlasAuditEvent {
+  id: number
+  member_id: string | null
+  connection_id: string | null
+  action: AtlasAuditAction
+  result: 'success' | 'failure' | null
+  ip: string | null
+  user_agent: string | null
+  meta_json: Record<string, unknown> | null
+  created_at: string
+}
+
+export async function listAuditEvents(filter?: {
+  action?: AtlasAuditAction
+  connectionId?: string
+  limit?: number
+}): Promise<AtlasAuditEvent[]> {
+  const params = new URLSearchParams()
+  if (filter?.action) params.set('action', filter.action)
+  if (filter?.connectionId) params.set('connection_id', filter.connectionId)
+  if (filter?.limit) params.set('limit', String(filter.limit))
+  const qs = params.toString()
+  const data = await fetchJson<{ events?: AtlasAuditEvent[] }>(
+    `${ATLAS_URL}/atlas/audit${qs ? `?${qs}` : ''}`,
+    { headers: authHeaders() },
+  )
+  return Array.isArray(data?.events) ? data!.events! : []
+}
+
+export interface AtlasUserState {
+  member_id: string
+  onboarding_complete: boolean
+  whatsapp_number: string | null
+  updated_at: string
+}
+
+export async function getUserState(): Promise<AtlasUserState> {
+  const data = await fetchJson<{ state: AtlasUserState }>(
+    `${ATLAS_URL}/atlas/user-state`,
+    { headers: authHeaders() },
+  )
+  return data.state
+}
+
+export async function updateUserState(
+  patch: { onboarding_complete?: boolean; whatsapp_number?: string },
+): Promise<AtlasUserState> {
+  const data = await fetchJson<{ state: AtlasUserState }>(
+    `${ATLAS_URL}/atlas/user-state`,
+    {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    },
+  )
+  return data.state
+}
