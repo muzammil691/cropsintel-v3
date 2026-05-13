@@ -8,6 +8,8 @@ import { AuthProvider } from "@/contexts/AuthContext"
 import App from "./App"
 import "./index.css"
 
+console.log("atlas-alive");
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
