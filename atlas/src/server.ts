@@ -2115,7 +2115,7 @@ export async function startServer(): Promise<void> {
 
     // ─── CORS — allow browser clients (Atlas dashboard at github.io) to reach this API
     res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, PUT, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With')
     res.setHeader('Access-Control-Max-Age', '86400')
     if (method === 'OPTIONS') {
