@@ -4529,7 +4529,7 @@ export async function startServer(): Promise<void> {
         const { startWorkshopSession } = await import('./lib/workshop-engine.js')
         const result = await startWorkshopSession({
           prompt: payload.prompt,
-          createdBy: principal.phone,
+          createdBy: principal.memberId,
           conceptIds: payload.concept_ids,
           uploads: payload.uploads,
           v3Paths: payload.v3_paths,
