@@ -24,6 +24,14 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import {
   approvePlanDiff,
@@ -71,8 +79,13 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
   const [error, setError] = useState<string | null>(null)
   const [showRejectInput, setShowRejectInput] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  // 1.10bd — approve now requires an explicit confirm dialog before
+  // firing the mutation, since approving applies the diff to the
+  // master plan (Session 6 wires the autonomous queue trigger too).
+  const [confirmingApprove, setConfirmingApprove] = useState(false)
 
   async function handleApprove() {
+    setConfirmingApprove(false)
     setBusy('approve')
     setError(null)
     try {
@@ -86,14 +99,17 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
   }
 
   async function handleReject() {
-    if (rejectReason.trim().length < 3) {
-      setError('Reason required (≥3 characters).')
+    // Reason is optional per the server contract; only enforce a
+    // minimum length when the user has typed *something* short.
+    const trimmed = rejectReason.trim()
+    if (trimmed.length > 0 && trimmed.length < 3) {
+      setError('If you want to record a reason, give at least 3 characters. Otherwise leave it blank.')
       return
     }
     setBusy('reject')
     setError(null)
     try {
-      await rejectPlanDiff(diff.id, rejectReason.trim())
+      await rejectPlanDiff(diff.id, trimmed)
       onResolved('rejected')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -193,7 +209,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
         {showRejectInput && !isResolved && (
           <div className="space-y-1.5">
             <label className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">
-              Why reject? (required)
+              Why reject? (optional)
             </label>
             <Textarea
               value={rejectReason}
@@ -219,7 +235,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               ) : (
                 <RotateCcw className="size-3 mr-1" aria-hidden />
               )}
-              Revise
+              Request edits
             </Button>
             <Button
               type="button"
@@ -248,7 +264,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
             <Button
               type="button"
               size="sm"
-              onClick={handleApprove}
+              onClick={() => setConfirmingApprove(true)}
               disabled={busy !== null}
               className="text-xs h-8 sm:ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
             >
@@ -262,6 +278,46 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
           </div>
         )}
       </footer>
+
+      <Dialog
+        open={confirmingApprove}
+        onOpenChange={(open) => { if (!open && busy === null) setConfirmingApprove(false) }}
+      >
+        <DialogContent className="sm:max-w-md" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Check className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden />
+              Approve this plan diff?
+            </DialogTitle>
+            <DialogDescription className="text-sm text-slate-600 dark:text-slate-300 leading-snug">
+              {planDiff.ops.length === 0
+                ? 'No ops are proposed — approving records that judgment without mutating the master plan.'
+                : `Atlas will apply ${planDiff.ops.length} op${planDiff.ops.length === 1 ? '' : 's'} to the master plan. This is reversible from the Plan tab's history, but the autonomous queue will start picking up new specs immediately.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmingApprove(false)}
+              disabled={busy !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleApprove}
+              disabled={busy !== null}
+              className="bg-amber-700 hover:bg-amber-800 text-white"
+            >
+              {busy === 'approve' ? <Loader2 className="size-3 mr-1.5 animate-spin" aria-hidden /> : <Check className="size-3 mr-1.5" aria-hidden />}
+              Confirm approve
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

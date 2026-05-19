@@ -100,7 +100,7 @@ export function PlanWorkshop() {
           className="hidden md:flex"
         />
 
-        <main className="flex flex-col min-w-0 overflow-hidden">
+        <main className="flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
           {showStartForm ? (
             <StartSessionForm
               onStarted={(id) => {
