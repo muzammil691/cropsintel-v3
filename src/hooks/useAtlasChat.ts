@@ -80,9 +80,36 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
   // user's phone via WhatsApp, another open tab, the live-mode session)
   // appear here within ~1–2 s. We dedup against optimistic local rows so the
   // sender's own message doesn't appear twice.
+  //
+  // 1.10bd-rt-fix — supabase-js refuses .on() calls after the channel has
+  // been .subscribe()'d. Two scenarios in this app re-triggered the effect
+  // body against a still-subscribed channel and threw:
+  //   (a) React 19 StrictMode in dev → mount → cleanup → mount. The cleanup
+  //       removeChannel() is async/fire-and-forget; the second mount fires
+  //       .channel(<same-name>) → .on() → .subscribe() while the prior
+  //       channel is still being torn down.
+  //   (b) AtlasCockpit renders both a desktop <aside> CockpitChat AND a
+  //       mobile MobileChatSheet CockpitChat (hidden by Tailwind's md:
+  //       breakpoint). Both are mounted; both call useAtlasChat with
+  //       threadId='web-default'. Two channels with the same name race.
+  //
+  // Defences:
+  //   • channelRef tracks the currently-subscribed channel; if it's already
+  //     set (StrictMode remount), bail before re-wiring .on().
+  //   • A unique random suffix on the channel name makes the (b) collision
+  //     impossible — each consumer gets its own realtime topic. The cost is
+  //     slightly more upstream subscribers; the trade is worth it vs. the
+  //     hard crash.
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   useEffect(() => {
+    // Guard: don't re-subscribe if a channel is already wired for this
+    // hook instance. The cleanup below null-outs the ref so legitimate
+    // threadId changes (the dep) still re-subscribe.
+    if (channelRef.current) return
+
+    const suffix = Math.random().toString(36).slice(2, 8)
     const channel = supabase
-      .channel(`atlas-chat:${threadId}`)
+      .channel(`atlas-chat:${threadId}:${suffix}`)
       .on(
         'postgres_changes',
         {
@@ -113,8 +140,11 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
         },
       )
       .subscribe()
+    channelRef.current = channel
     return () => {
-      void supabase.removeChannel(channel)
+      const current = channelRef.current
+      channelRef.current = null
+      if (current) void supabase.removeChannel(current)
     }
   }, [threadId])
 
