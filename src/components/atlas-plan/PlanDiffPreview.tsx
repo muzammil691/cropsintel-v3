@@ -266,7 +266,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               size="sm"
               onClick={() => setConfirmingApprove(true)}
               disabled={busy !== null}
-              className="text-xs h-8 sm:ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
+              className="text-xs h-8 sm:ml-auto bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200"
             >
               {busy === 'approve' ? (
                 <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -310,7 +310,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               size="sm"
               onClick={handleApprove}
               disabled={busy !== null}
-              className="bg-amber-700 hover:bg-amber-800 text-white"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200"
             >
               {busy === 'approve' ? <Loader2 className="size-3 mr-1.5 animate-spin" aria-hidden /> : <Check className="size-3 mr-1.5" aria-hidden />}
               Confirm approve
