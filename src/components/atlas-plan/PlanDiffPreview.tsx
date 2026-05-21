@@ -236,9 +236,10 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               type="button"
               size="sm"
               variant="outline"
+              aria-label="Request edits to this plan diff"
               onClick={handleRevise}
               disabled={busy !== null}
-              className="text-xs h-8"
+              className="text-xs h-8 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {busy === 'revise' ? (
                 <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -251,6 +252,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               type="button"
               size="sm"
               variant="outline"
+              aria-label={showRejectInput ? 'Confirm reject plan diff' : 'Reject plan diff'}
               onClick={() => {
                 if (showRejectInput) {
                   void handleReject()
@@ -260,7 +262,7 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               }}
               disabled={busy !== null}
               className={cn(
-                'text-xs h-8',
+                'text-xs h-8 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
                 showRejectInput && 'border-rose-400 text-rose-700 dark:border-rose-700 dark:text-rose-300',
               )}
             >
@@ -274,9 +276,10 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
             <Button
               type="button"
               size="sm"
+              aria-label="Approve plan diff"
               onClick={() => setConfirmingApprove(true)}
               disabled={busy !== null}
-              className="text-xs h-8 sm:ml-auto bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200"
+              className="text-xs h-8 sm:ml-auto bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {busy === 'approve' ? (
                 <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -312,15 +315,17 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
               size="sm"
               onClick={() => setConfirmingApprove(false)}
               disabled={busy !== null}
+              className="transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Cancel
             </Button>
             <Button
               type="button"
               size="sm"
+              aria-label="Confirm approve plan diff"
               onClick={handleApprove}
               disabled={busy !== null}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {busy === 'approve' ? <Loader2 className="size-3 mr-1.5 animate-spin" aria-hidden /> : <Check className="size-3 mr-1.5" aria-hidden />}
               Confirm approve
@@ -336,17 +341,21 @@ function OpCard({ op, index }: { op: PlanDiffOp; index: number }) {
   const [expanded, setExpanded] = useState(false)
   const meta = OP_META[op.op]
   const Icon = meta.icon
+  const detailId = `op-detail-${index}`
 
   return (
     <article
       className={cn(
-        'rounded-md border px-3 py-2 transition-colors duration-150 cursor-pointer',
+        'rounded-md border px-3 py-2 transition-colors duration-200 cursor-pointer',
+        'focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none',
         meta.toneClass,
       )}
       onClick={() => setExpanded((v) => !v)}
       role="button"
       tabIndex={0}
       aria-expanded={expanded}
+      aria-controls={detailId}
+      aria-label={`${meta.label} operation ${index}: ${opPrimaryLabel(op)}. Press Enter to toggle details.`}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
@@ -374,7 +383,7 @@ function OpCard({ op, index }: { op: PlanDiffOp; index: number }) {
         )}
       </header>
       {expanded && (
-        <div className="mt-2 text-[11px] text-slate-700 dark:text-slate-300 space-y-1 pl-5">
+        <div id={detailId} className="mt-2 text-[11px] text-slate-700 dark:text-slate-300 space-y-1 pl-5">
           <OpDetailBody op={op} />
         </div>
       )}

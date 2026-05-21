@@ -218,7 +218,8 @@ export function WorkshopSessionList({
           type="button"
           size="sm"
           onClick={onStartNew}
-          className="w-full bg-amber-700 hover:bg-amber-800 text-white text-xs h-8 transition-colors duration-200"
+          aria-label="Start new workshop session"
+          className="w-full bg-amber-700 hover:bg-amber-800 text-white text-xs h-8 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Plus className="size-3.5 mr-1" aria-hidden />
           Start new workshop
@@ -226,7 +227,9 @@ export function WorkshopSessionList({
         <button
           type="button"
           onClick={() => setIncludeArchived((v) => !v)}
-          className="mt-2 w-full text-[10px] text-amber-900/80 dark:text-amber-200/70 hover:text-amber-900 dark:hover:text-amber-100 flex items-center justify-center gap-1.5 transition-colors"
+          aria-label={includeArchived ? 'Hide archived sessions' : 'Show archived sessions'}
+          aria-pressed={includeArchived}
+          className="mt-2 w-full text-[10px] text-amber-900/80 dark:text-amber-200/70 hover:text-amber-900 dark:hover:text-amber-100 flex items-center justify-center gap-1.5 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none rounded"
         >
           <Eye className="size-3" aria-hidden />
           {includeArchived ? 'Hide archived' : 'Show archived'}
@@ -278,6 +281,7 @@ export function WorkshopSessionList({
         confirm={confirm}
         onCancel={() => setConfirm(null)}
         onConfirm={handleConfirmedAction}
+        busy={actionBusy !== null}
       />
     </aside>
   )
@@ -302,8 +306,8 @@ function SessionCard({ session, bucket, priority, isSelected, isBusy, onSelect, 
     <li>
       <div
         className={cn(
-          'group rounded-md border transition-colors duration-150',
-          'focus-within:ring-2 focus-within:ring-amber-600/50',
+          'group rounded-md border transition-colors duration-200',
+          'focus-within:ring-2 focus-within:ring-emerald-600/50',
           isSelected
             ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-400 dark:border-amber-700'
             : archived
@@ -315,9 +319,11 @@ function SessionCard({ session, bucket, priority, isSelected, isBusy, onSelect, 
           type="button"
           onClick={onSelect}
           aria-pressed={isSelected ? 'true' : 'false'}
+          aria-label={`Select workshop session ${session.id.slice(0, 8)}`}
           className={cn(
             'w-full text-left px-2 py-1.5 text-[10px] sm:text-[11px] min-h-11 sm:min-h-0',
-            'focus-visible:outline-none rounded-t-md',
+            'transition-colors duration-200 rounded-t-md',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50',
             isSelected ? 'text-amber-900 dark:text-amber-100' : 'text-slate-700 dark:text-slate-200',
           )}
         >
@@ -368,9 +374,10 @@ function SessionCard({ session, bucket, priority, isSelected, isBusy, onSelect, 
               <Button
                 type="button"
                 size="sm"
+                aria-label="Queue this workshop session"
                 onClick={(e) => { e.stopPropagation(); onAction('queue') }}
                 disabled={isBusy}
-                className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isBusy ? (
                   <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -386,9 +393,10 @@ function SessionCard({ session, bucket, priority, isSelected, isBusy, onSelect, 
                   type="button"
                   size="sm"
                   variant="outline"
+                  aria-label="Restore archived workshop session"
                   onClick={(e) => { e.stopPropagation(); onAction('unarchive') }}
                   disabled={isBusy}
-                  className="h-6 text-[10px] px-2"
+                  className="h-6 text-[10px] px-2 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isBusy ? (
                     <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -402,9 +410,10 @@ function SessionCard({ session, bucket, priority, isSelected, isBusy, onSelect, 
                   type="button"
                   size="sm"
                   variant="ghost"
+                  aria-label="Archive workshop session"
                   onClick={(e) => { e.stopPropagation(); onAction('archive') }}
                   disabled={isBusy}
-                  className="h-6 text-[10px] px-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+                  className="h-6 text-[10px] px-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isBusy ? (
                     <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -426,9 +435,10 @@ interface ConfirmActionDialogProps {
   confirm: ConfirmState | null
   onCancel: () => void
   onConfirm: () => void
+  busy?: boolean
 }
 
-function ConfirmActionDialog({ confirm, onCancel, onConfirm }: ConfirmActionDialogProps) {
+function ConfirmActionDialog({ confirm, onCancel, onConfirm, busy = false }: ConfirmActionDialogProps) {
   const kind = confirm?.kind
   const isQueue = kind === 'queue'
   const isArchive = kind === 'archive'
@@ -471,15 +481,25 @@ function ConfirmActionDialog({ confirm, onCancel, onConfirm }: ConfirmActionDial
           </div>
         )}
         <DialogFooter>
-          <Button type="button" variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onCancel}
+            disabled={busy}
+            className="transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          >Cancel</Button>
           <Button
             type="button"
             size="sm"
             onClick={onConfirm}
+            disabled={busy}
+            aria-label={isQueue ? 'Confirm queue and push' : isArchive ? 'Confirm archive session' : 'Confirm restore session'}
             className={cn(
-              isQueue && 'bg-emerald-600 hover:bg-emerald-700 text-white transition-colors',
-              isArchive && 'bg-slate-700 hover:bg-slate-800 text-white transition-colors',
-              !isQueue && !isArchive && 'bg-amber-600 hover:bg-amber-700 text-white transition-colors',
+              'transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:outline-none disabled:opacity-50 disabled:cursor-not-allowed',
+              isQueue && 'bg-emerald-600 hover:bg-emerald-700 text-white',
+              isArchive && 'bg-slate-700 hover:bg-slate-800 text-white',
+              !isQueue && !isArchive && 'bg-amber-600 hover:bg-amber-700 text-white',
             )}
           >
             {isQueue && (<><Rocket className="size-3 mr-1.5" aria-hidden />Queue + push</>)}
