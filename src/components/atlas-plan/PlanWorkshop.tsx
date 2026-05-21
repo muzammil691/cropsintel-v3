@@ -1141,7 +1141,7 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
             rows={2}
             placeholder={lastUnanswered
               ? 'Type your answer… (Cmd+Enter to send)'
-              : 'Waiting for the next question — you can pre-type or pause.'}
+              : 'Pre-type your response…'}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault()
@@ -1156,7 +1156,6 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
                 onClick={handleFinalize}
                 disabled={finalizing || submitting}
                 className="text-xs h-8"
@@ -1175,7 +1174,8 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
               onClick={() => void handleSubmitAnswer()}
               disabled={submitting || answer.trim().length === 0 || !lastUnanswered}
               title={!lastUnanswered ? "Atlas hasn't asked yet — wait for the next question" : undefined}
-              className="text-xs h-8 ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
+              aria-label={submitting ? 'Sending answer…' : 'Send answer'}
+              className="text-xs h-8 ml-auto transition-colors duration-200"
             >
               {submitting ? (
                 <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
