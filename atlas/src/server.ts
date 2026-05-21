@@ -4673,9 +4673,27 @@ export async function startServer(): Promise<void> {
       }
     }
 
-    // POST /atlas/workshop/diffs/:id/approve — STUB (Session 6 wires real
-    // plan-mutator + autonomous queue trigger). For now: marks the row
-    // approved + flips session to 'completed' so the UI can show success.
+    // POST /atlas/workshop/diffs/:id/approve — Session 6 plan-mutator +
+    // autonomous queue trigger (was STUB in Session 4).
+    //
+    // Order of operations:
+    //   1. Mark plan_diffs row as approved (idempotent — `is(approved_at,
+    //      null)` filter rejects double-approve races).
+    //   2. Flip the owning session to status='completed'.
+    //   3. Parse diff_jsonb.ops; for every 'add' / 'edit' op, insert an
+    //      atlas_dispatches row with status='queued' that the builder
+    //      picker (Session 6's claimNextQueuedDispatch) will drain into
+    //      'building'. 'remove' and 'reorder' ops are plan-tree mutations
+    //      only — they don't produce specs, so no dispatch is queued.
+    //   4. Stamp plan_diffs.applied_at so observers can see the queue
+    //      trigger fired.
+    //
+    // Schema fit: atlas_dispatches has `tool` + `arguments jsonb` (no
+    // dedicated phase_id / spec_markdown / source_diff_id columns), so
+    // the workshop-supplied metadata lives inside `arguments`. The
+    // builder picker reads `tool='builder.workshop_diff_spec'` to know
+    // it's a workshop-originated build and pulls phase_id / spec_markdown
+    // / source_diff_id from arguments.
     {
       const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)\/approve$/)
       if (m && method === 'POST') {
@@ -4691,11 +4709,11 @@ export async function startServer(): Promise<void> {
         const nowIso = new Date().toISOString()
         const { data: diffRow, error: diffErr } = await sb
           .from('plan_diffs')
-          .update({ approved_by: null, approved_at: nowIso })
+          .update({ approved_by: principal.memberId, approved_at: nowIso })
           .eq('id', diffId)
           .is('approved_at', null)
           .is('rejected_at', null)
-          .select('id, session_id')
+          .select('id, session_id, diff_jsonb')
           .single()
         if (diffErr || !diffRow) {
           json(res, 409, { error: 'diff_not_found_or_already_resolved', detail: diffErr?.message })
@@ -4706,12 +4724,87 @@ export async function startServer(): Promise<void> {
             .update({ status: 'completed', completed_at: nowIso })
             .eq('id', diffRow.session_id)
         }
+
+        // ─── Autonomous queue trigger ────────────────────────────────────
+        type DiffOp =
+          | { op: 'add'; phase_id: string; parent_id?: string | null; title?: string; body?: string; launch_tier?: string }
+          | { op: 'edit'; phase_id: string; title?: string; body?: string; launch_tier?: string }
+          | { op: 'remove'; phase_id: string; reason?: string }
+          | { op: 'reorder'; parent_id: string; ordered_phase_ids: string[] }
+
+        const jsonb = (diffRow as { diff_jsonb?: { ops?: unknown[] } }).diff_jsonb
+        const ops: DiffOp[] = Array.isArray(jsonb?.ops) ? (jsonb!.ops as DiffOp[]) : []
+        const queuable = ops.filter((o): o is Extract<DiffOp, { op: 'add' | 'edit' }> =>
+          o && (o.op === 'add' || o.op === 'edit'),
+        )
+
+        const trustMode = getCurrentMode()
+        const dispatchRows = queuable.map((op) => {
+          const title = op.title ?? op.phase_id
+          // No spec_markdown field on the op shape; synthesize from op.title +
+          // op.body so the builder agent gets a readable spec to work from.
+          const specBody = (op.body ?? '').trim()
+          const specMarkdown = `# ${op.phase_id}: ${title}\n\n${specBody || '_(no body provided in diff)_'}\n`
+          return {
+            trust_mode: trustMode,
+            initiated_by: `workshop_diff_approval:${principal.memberId ?? principal.sessionId}`,
+            tool: 'builder.workshop_diff_spec',
+            arguments: {
+              phase_id: op.phase_id,
+              title,
+              spec_markdown: specMarkdown,
+              priority: 'normal',
+              requested_by: principal.memberId,
+              source: 'workshop_diff_approval',
+              source_diff_id: diffId,
+              op_kind: op.op,
+              launch_tier: op.launch_tier ?? null,
+              parent_id: op.op === 'add' ? (op.parent_id ?? null) : null,
+            } as Record<string, unknown>,
+            status: 'queued' as const,
+          }
+        })
+
+        const dispatchIds: string[] = []
+        let queueError: string | null = null
+        if (dispatchRows.length > 0) {
+          const { data: inserted, error: insertErr } = await sb
+            .from('atlas_dispatches')
+            .insert(dispatchRows)
+            .select('id')
+          if (insertErr) {
+            queueError = insertErr.message
+          } else if (Array.isArray(inserted)) {
+            for (const row of inserted as Array<{ id: string }>) {
+              if (row?.id) dispatchIds.push(row.id)
+            }
+          }
+        }
+
+        // Stamp applied_at only when at least one dispatch landed (or there
+        // were no queueable ops — pure remove/reorder diffs are still
+        // "applied" in plan-tree-only mode). On insert failure, leave
+        // applied_at null so the operator can retry without orphan
+        // dispatch rows muddying the audit trail.
+        let appliedAt: string | null = null
+        if (queueError === null) {
+          appliedAt = nowIso
+          await sb
+            .from('plan_diffs')
+            .update({ applied_at: nowIso })
+            .eq('id', diffId)
+        }
+
         json(res, 200, {
           ok: true,
-          stub: true,
-          message: 'approve recorded — Session 6 will wire plan-mutator + autonomous queue trigger',
           diff_id: diffId,
           approved_at: nowIso,
+          applied_at: appliedAt,
+          dispatches_queued: dispatchIds.length,
+          dispatch_ids: dispatchIds,
+          ops_total: ops.length,
+          ops_skipped: ops.length - queuable.length,
+          queue_error: queueError,
         })
         return
       }

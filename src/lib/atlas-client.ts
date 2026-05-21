@@ -2769,13 +2769,28 @@ export async function getPlanDiff(diffId: string): Promise<{ ok: true; diff: Pla
   )
 }
 
-export async function approvePlanDiff(diffId: string): Promise<{
+export interface ApprovePlanDiffResult {
   ok: true
-  stub?: boolean
-  message?: string
   diff_id: string
   approved_at: string
-}> {
+  /** Set when the autonomous queue trigger succeeded (or the diff was a
+   *  pure plan-tree mutation with no queueable ops). Null when the insert
+   *  into atlas_dispatches failed and the diff is in a half-applied state. */
+  applied_at: string | null
+  /** Number of atlas_dispatches rows inserted by the autonomous queue
+   *  trigger. 0 when the diff was 100% remove/reorder ops. */
+  dispatches_queued: number
+  dispatch_ids: string[]
+  /** Total ops in the diff (queueable + skipped). */
+  ops_total: number
+  /** Number of ops that didn't produce a dispatch (remove + reorder). */
+  ops_skipped: number
+  /** Set when the atlas_dispatches insert failed — the diff is approved
+   *  but not applied. Operator can retry from Settings → Audit. */
+  queue_error: string | null
+}
+
+export async function approvePlanDiff(diffId: string): Promise<ApprovePlanDiffResult> {
   return fetchJson(
     `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}/approve`,
     { method: 'POST', headers: authHeaders() },
