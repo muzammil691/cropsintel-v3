@@ -36,6 +36,76 @@ function normaliseRealtimeRow(row: {
   }
 }
 
+// 1.10bd — refcounted module singleton for the realtime chat subscription.
+//
+// The cockpit mounts CockpitChat twice (desktop <aside> + MobileChatSheet,
+// both kept in the DOM regardless of Tailwind breakpoint). Both consumers
+// call useAtlasChat() with the same threadId. supabase-js v2 dedupes
+// `supabase.channel(name)` by name across the whole client, so both
+// consumers used to land on the same channel instance — consumer 1's
+// .subscribe() ran, then consumer 2's .on() call threw "cannot add
+// postgres_changes callbacks after subscribe()". Same risk on React 19
+// StrictMode mount → cleanup → mount cycles.
+//
+// Fix: exactly one channel per threadId. The first consumer creates +
+// subscribes + adds itself to a listener Set. Subsequent consumers (or
+// re-mounts) just add their callback to the same Set; the channel's
+// single .on() fans out to every registered listener. When the listener
+// count drops to zero, the channel is torn down. No random suffixes, no
+// per-consumer channel proliferation — connection count is capped at 1
+// per active threadId.
+
+type RealtimePayload = { new: { id: string; role: string; content: string; metadata?: Record<string, unknown> | null; created_at: string } }
+type Listener = (payload: RealtimePayload) => void
+
+interface ChannelEntry {
+  channel: ReturnType<typeof supabase.channel>
+  listeners: Set<Listener>
+}
+
+const channels = new Map<string, ChannelEntry>()
+
+function subscribeChat(threadId: string, listener: Listener): () => void {
+  let entry = channels.get(threadId)
+  if (!entry) {
+    // First consumer for this threadId. Register the listener BEFORE
+    // wiring .on() so the fan-out closure has the listener in scope on
+    // first invocation; subsequent consumers join the same Set.
+    const listeners = new Set<Listener>([listener])
+    const channel = supabase
+      .channel(`atlas-chat:${threadId}`)
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- supabase-js's
+        // postgres_changes signature is a tagged tuple; the v2 typing surfaces a union
+        // that doesn't narrow cleanly here. The runtime contract matches.
+        'postgres_changes' as any,
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'atlas_conversations',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload: RealtimePayload) => {
+          for (const l of listeners) l(payload)
+        },
+      )
+      .subscribe()
+    entry = { channel, listeners }
+    channels.set(threadId, entry)
+  } else {
+    entry.listeners.add(listener)
+  }
+  return () => {
+    const e = channels.get(threadId)
+    if (!e) return
+    e.listeners.delete(listener)
+    if (e.listeners.size === 0) {
+      void supabase.removeChannel(e.channel)
+      channels.delete(threadId)
+    }
+  }
+}
+
 export interface UseAtlasChatResult {
   messages: ChatMessage[]
   isStreaming: boolean
@@ -80,42 +150,28 @@ export function useAtlasChat(threadId = DEFAULT_THREAD): UseAtlasChatResult {
   // user's phone via WhatsApp, another open tab, the live-mode session)
   // appear here within ~1–2 s. We dedup against optimistic local rows so the
   // sender's own message doesn't appear twice.
+  //
+  // 1.10bd — Channel creation moved to subscribeChat (module-level
+  // refcounted singleton above). See its block comment for why. This
+  // hook just registers a listener and returns the cleanup that
+  // un-registers it; the channel itself is shared across all consumers
+  // of the same threadId.
   useEffect(() => {
-    const channel = supabase
-      .channel(`atlas-chat:${threadId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'atlas_conversations',
-          filter: `thread_id=eq.${threadId}`,
-        },
-        (payload) => {
-          const raw = payload.new as {
-            id: string
-            role: string
-            content: string
-            metadata?: Record<string, unknown> | null
-            created_at: string
-          }
-          if (!raw?.id) return
-          const incoming = normaliseRealtimeRow(raw)
-          setMessages((prev) => {
-            // Already present (server echo of our optimistic row, or a second
-            // delivery on reconnect) → skip.
-            if (prev.some((m) => m.id === incoming.id)) return prev
-            // If we're mid-stream and the latest assistant message is the
-            // optimistic placeholder we just appended, leave it alone — the
-            // SSE stream will keep filling its content. Avoid double-rendering.
-            return [...prev, incoming]
-          })
-        },
-      )
-      .subscribe()
-    return () => {
-      void supabase.removeChannel(channel)
-    }
+    const cleanup = subscribeChat(threadId, (payload) => {
+      const raw = payload.new
+      if (!raw?.id) return
+      const incoming = normaliseRealtimeRow(raw)
+      setMessages((prev) => {
+        // Already present (server echo of our optimistic row, or a second
+        // delivery on reconnect) → skip.
+        if (prev.some((m) => m.id === incoming.id)) return prev
+        // If we're mid-stream and the latest assistant message is the
+        // optimistic placeholder we just appended, leave it alone — the
+        // SSE stream will keep filling its content. Avoid double-rendering.
+        return [...prev, incoming]
+      })
+    })
+    return cleanup
   }, [threadId])
 
   const send = useCallback(
