@@ -90,22 +90,15 @@ export function PlanDiffPreview({ diff, onResolved, className }: PlanDiffPreview
     setBusy('approve')
     setError(null)
     try {
+      // 1.10bd-queue-pivot Step 3b: /approve is mark-only now. It records
+      // approval; the user explicitly clicks "Queue this session" from the
+      // session list to land the spec files atomically. The Queue button on
+      // the session card calls queueWorkshopDiff (POST .../queue).
       const result = await approvePlanDiff(diff.id)
-      // Session 6 wired the autonomous queue. Surface the count so the
-      // user knows builds kicked off (or that the diff was pure plan-tree
-      // mutation with no queueable ops). Plain remove/reorder diffs return
-      // dispatches_queued=0 with applied_at set — also a success.
-      const queued = result.dispatches_queued
-      if (result.queue_error) {
-        toast.error(`Approved, but failed to queue dispatches: ${result.queue_error}`, { duration: 8000 })
-      } else if (queued > 0) {
-        toast.success(`${queued} op${queued === 1 ? '' : 's'} queued for autonomous build`, { duration: 5000 })
-      } else if (result.ops_total > 0) {
-        // All ops were remove/reorder — applied to plan tree without
-        // queueing builds.
-        toast.success(`Diff applied — ${result.ops_total} plan-tree mutation${result.ops_total === 1 ? '' : 's'}, no builds needed`, { duration: 5000 })
+      if (result.ops_total === 0) {
+        toast.success('Diff approved (no ops — nothing to queue)', { duration: 4000 })
       } else {
-        toast.success('Diff approved', { duration: 4000 })
+        toast.success(`Diff approved — ${result.ops_total} op${result.ops_total === 1 ? '' : 's'} ready to queue from the session list`, { duration: 5000 })
       }
       onResolved('approved')
     } catch (err) {

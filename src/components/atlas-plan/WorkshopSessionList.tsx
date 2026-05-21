@@ -3,13 +3,32 @@
 // Lists prior + active workshop sessions with status pills and a primary
 // "Start new workshop" button at top. Selection is controlled by the
 // parent (PlanWorkshop) via `selectedSessionId` + `onSelect`.
+//
+// 1.10bd-queue-pivot Step 4: cards now expose explicit Queue and Archive
+// actions. "Queue this session" runs the atomic /queue handler (master
+// plan rewrite + spec drafting + git push). Archive hides the session
+// from the default list without deleting state. Sessions in the queue-
+// ready group (approved diff, not yet applied, not archived) show 1./2./3.
+// priority numbering so the user can see queue order at a glance.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, RefreshCw, Sparkles } from 'lucide-react'
+import { Plus, RefreshCw, Sparkles, Archive, ArchiveRestore, Rocket, Loader2, AlertTriangle, Eye } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import {
   listWorkshopSessions,
+  archiveWorkshopSession,
+  unarchiveWorkshopSession,
+  queueWorkshopDiff,
   type WorkshopSessionSummary,
   type WorkshopSessionStatus,
 } from '@/lib/atlas-client'
@@ -43,6 +62,47 @@ const STATUS_PILL: Record<WorkshopSessionStatus, { label: string; className: str
   },
 }
 
+// Derived bucket — different from the raw status because we want to split
+// 'completed' into "ready to queue" (approved, not yet applied) vs "applied"
+// (already pushed to the filesystem). Buckets are rendered in this order.
+type CardBucket =
+  | 'active'
+  | 'awaiting_approval'
+  | 'ready_to_queue'
+  | 'applied'
+  | 'rejected'
+  | 'abandoned'
+  | 'archived'
+
+const BUCKET_HEADING: Record<CardBucket, string> = {
+  active: 'Active',
+  awaiting_approval: 'Awaiting approval',
+  ready_to_queue: 'Ready to queue',
+  applied: 'Applied',
+  rejected: 'Rejected',
+  abandoned: 'Abandoned',
+  archived: 'Archived',
+}
+
+function bucketOf(s: WorkshopSessionSummary): CardBucket {
+  if (s.archived_at) return 'archived'
+  if (s.status === 'active') return 'active'
+  if (s.status === 'awaiting_approval') return 'awaiting_approval'
+  if (s.status === 'abandoned') return 'abandoned'
+  // status === 'completed' — refine by diff timestamps.
+  if (s.plan_diff_applied_at) return 'applied'
+  if (s.plan_diff_rejected_at) return 'rejected'
+  if (s.plan_diff_approved_at) return 'ready_to_queue'
+  // Completed but no diff resolution — treat as awaiting_approval visually.
+  return 'awaiting_approval'
+}
+
+type ConfirmKind = 'queue' | 'archive' | 'unarchive'
+interface ConfirmState {
+  kind: ConfirmKind
+  session: WorkshopSessionSummary
+}
+
 export function WorkshopSessionList({
   selectedSessionId,
   onSelect,
@@ -53,12 +113,16 @@ export function WorkshopSessionList({
   const [sessions, setSessions] = useState<WorkshopSessionSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [includeArchived, setIncludeArchived] = useState(false)
+  const [reloadTick, setReloadTick] = useState(0)
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
+  const [actionBusy, setActionBusy] = useState<string | null>(null) // session id
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    listWorkshopSessions()
+    listWorkshopSessions({ includeArchived })
       .then((r) => {
         if (cancelled) return
         setSessions(r.sessions ?? [])
@@ -73,18 +137,65 @@ export function WorkshopSessionList({
     return () => {
       cancelled = true
     }
-  }, [refreshKey])
+  }, [refreshKey, includeArchived, reloadTick])
 
-  // Group: active/awaiting_approval first, then completed, then abandoned.
   const grouped = useMemo(() => {
-    const order: WorkshopSessionStatus[] = ['active', 'awaiting_approval', 'completed', 'abandoned']
-    const out: Array<[WorkshopSessionStatus, WorkshopSessionSummary[]]> = []
-    for (const status of order) {
-      const list = sessions.filter((s) => s.status === status)
-      if (list.length > 0) out.push([status, list])
+    const order: CardBucket[] = ['active', 'awaiting_approval', 'ready_to_queue', 'applied', 'rejected', 'abandoned', 'archived']
+    const buckets = new Map<CardBucket, WorkshopSessionSummary[]>()
+    for (const s of sessions) {
+      const b = bucketOf(s)
+      const arr = buckets.get(b) ?? []
+      arr.push(s)
+      buckets.set(b, arr)
+    }
+    const out: Array<[CardBucket, WorkshopSessionSummary[]]> = []
+    for (const b of order) {
+      const list = buckets.get(b)
+      if (list && list.length > 0) {
+        // Within ready_to_queue, oldest started_at first (FIFO).
+        if (b === 'ready_to_queue') list.sort((a, c) => a.started_at.localeCompare(c.started_at))
+        out.push([b, list])
+      }
     }
     return out
   }, [sessions])
+
+  async function handleConfirmedAction() {
+    if (!confirm) return
+    const { kind, session } = confirm
+    setActionBusy(session.id)
+    setConfirm(null)
+    try {
+      if (kind === 'queue') {
+        if (!session.plan_diff_id) {
+          toast.error('Session has no plan diff to queue')
+          return
+        }
+        const result = await queueWorkshopDiff(session.plan_diff_id)
+        if (result.ok) {
+          toast.success(
+            `Queued ${result.specs_drafted} spec${result.specs_drafted === 1 ? '' : 's'}${result.commit_sha ? ` — ${result.commit_sha.slice(0, 7)}` : ''}`,
+            { duration: 6000 },
+          )
+        } else if (result.status === 'rolled_back') {
+          toast.error(`Push failed; working tree reset to origin/main. Retry or inspect /health. ${result.error ?? ''}`, { duration: 10000 })
+        } else {
+          toast.error(`Queue failed: ${result.error ?? 'unknown error'}`, { duration: 10000 })
+        }
+      } else if (kind === 'archive') {
+        await archiveWorkshopSession(session.id)
+        toast.success('Session archived', { duration: 3000 })
+      } else if (kind === 'unarchive') {
+        await unarchiveWorkshopSession(session.id)
+        toast.success('Session restored', { duration: 3000 })
+      }
+      setReloadTick((t) => t + 1)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err), { duration: 8000 })
+    } finally {
+      setActionBusy(null)
+    }
+  }
 
   return (
     <aside
@@ -112,6 +223,14 @@ export function WorkshopSessionList({
           <Plus className="size-3.5 mr-1" aria-hidden />
           Start new workshop
         </Button>
+        <button
+          type="button"
+          onClick={() => setIncludeArchived((v) => !v)}
+          className="mt-2 w-full text-[10px] text-amber-900/80 dark:text-amber-200/70 hover:text-amber-900 dark:hover:text-amber-100 flex items-center justify-center gap-1.5 transition-colors"
+        >
+          <Eye className="size-3" aria-hidden />
+          {includeArchived ? 'Hide archived' : 'Show archived'}
+        </button>
       </header>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-3">
@@ -131,62 +250,245 @@ export function WorkshopSessionList({
             No workshops yet. Start one to refine the plan.
           </p>
         )}
-        {!loading && grouped.map(([status, list]) => (
-          <section key={status} className="space-y-1">
+        {!loading && grouped.map(([bucket, list]) => (
+          <section key={bucket} className="space-y-1">
             <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 px-1">
-              {STATUS_PILL[status].label}{' '}
+              {BUCKET_HEADING[bucket]}{' '}
               <span className="tabular-nums">({list.length})</span>
             </h4>
             <ul className="space-y-1">
-              {list.map((s) => {
-                const isSelected = s.id === selectedSessionId
-                const startedDate = s.started_at ? new Date(s.started_at).toLocaleDateString() : ''
-                return (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => onSelect(s.id)}
-                      aria-pressed={isSelected}
-                      className={cn(
-                        'w-full text-left rounded-md px-2 py-1.5 text-[10px] sm:text-[11px] min-h-[44px] sm:min-h-0 transition-colors duration-150',
-                        'border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600/50',
-                        isSelected
-                          ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-400 dark:border-amber-700 text-amber-900 dark:text-amber-100'
-                          : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-800 text-slate-700 dark:text-slate-200',
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <span
-                          className={cn(
-                            'inline-block px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded',
-                            STATUS_PILL[s.status].className,
-                          )}
-                        >
-                          {STATUS_PILL[s.status].label}
-                        </span>
-                        <span className="text-slate-400 ml-auto tabular-nums">{startedDate}</span>
-                      </div>
-                      <div className="truncate font-mono text-[10px] text-slate-500">
-                        {s.id.slice(0, 8)}…
-                      </div>
-                      <div className="text-slate-500 mt-0.5">
-                        {s.total_turns} turn{s.total_turns === 1 ? '' : 's'}
-                        {s.total_cost_usd > 0 && (
-                          <>
-                            {' · '}
-                            <span className="tabular-nums">${s.total_cost_usd.toFixed(2)}</span>
-                          </>
-                        )}
-                      </div>
-                    </button>
-                  </li>
-                )
-              })}
+              {list.map((s, idx) => (
+                <SessionCard
+                  key={s.id}
+                  session={s}
+                  bucket={bucket}
+                  priority={bucket === 'ready_to_queue' ? idx + 1 : null}
+                  isSelected={s.id === selectedSessionId}
+                  isBusy={actionBusy === s.id}
+                  onSelect={() => onSelect(s.id)}
+                  onAction={(kind) => setConfirm({ kind, session: s })}
+                />
+              ))}
             </ul>
           </section>
         ))}
       </div>
+
+      <ConfirmActionDialog
+        confirm={confirm}
+        onCancel={() => setConfirm(null)}
+        onConfirm={handleConfirmedAction}
+      />
     </aside>
+  )
+}
+
+interface SessionCardProps {
+  session: WorkshopSessionSummary
+  bucket: CardBucket
+  priority: number | null
+  isSelected: boolean
+  isBusy: boolean
+  onSelect: () => void
+  onAction: (kind: ConfirmKind) => void
+}
+
+function SessionCard({ session, bucket, priority, isSelected, isBusy, onSelect, onAction }: SessionCardProps) {
+  const startedDate = session.started_at ? new Date(session.started_at).toLocaleDateString() : ''
+  const archived = !!session.archived_at
+  const pill = STATUS_PILL[session.status]
+
+  return (
+    <li>
+      <div
+        className={cn(
+          'group rounded-md border transition-colors duration-150',
+          'focus-within:ring-2 focus-within:ring-amber-600/50',
+          isSelected
+            ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-400 dark:border-amber-700'
+            : archived
+              ? 'bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-70'
+              : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-800',
+        )}
+      >
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-pressed={isSelected ? 'true' : 'false'}
+          className={cn(
+            'w-full text-left px-2 py-1.5 text-[10px] sm:text-[11px] min-h-11 sm:min-h-0',
+            'focus-visible:outline-none rounded-t-md',
+            isSelected ? 'text-amber-900 dark:text-amber-100' : 'text-slate-700 dark:text-slate-200',
+          )}
+        >
+          <div className="flex items-center gap-1.5 mb-0.5">
+            {priority !== null && (
+              <span
+                className="inline-flex items-center justify-center min-w-5 h-5 px-1 text-[10px] font-semibold tabular-nums rounded-full bg-emerald-600 text-white"
+                aria-label={`Queue priority ${priority}`}
+                title={`Priority ${priority} — earliest sessions queue first`}
+              >
+                {priority}
+              </span>
+            )}
+            <span
+              className={cn(
+                'inline-block px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded',
+                pill.className,
+              )}
+            >
+              {pill.label}
+            </span>
+            {bucket === 'applied' && (
+              <span className="inline-block px-1.5 py-0.5 text-[9px] uppercase tracking-wider rounded bg-emerald-600 text-white">
+                Applied
+              </span>
+            )}
+            <span className="text-slate-400 ml-auto tabular-nums">{startedDate}</span>
+          </div>
+          <div className="truncate font-mono text-[10px] text-slate-500">
+            {session.id.slice(0, 8)}…
+          </div>
+          <div className="text-slate-500 mt-0.5">
+            {session.total_turns} turn{session.total_turns === 1 ? '' : 's'}
+            {session.total_cost_usd > 0 && (
+              <>
+                {' · '}
+                <span className="tabular-nums">${session.total_cost_usd.toFixed(2)}</span>
+              </>
+            )}
+          </div>
+        </button>
+
+        {/* Action row — Queue, Archive / Unarchive. Rendered conditionally
+            so non-actionable cards stay compact. */}
+        {(bucket === 'ready_to_queue' || (!archived && (bucket === 'applied' || bucket === 'rejected' || bucket === 'abandoned')) || archived) && (
+          <div className="flex items-center gap-1 px-1.5 pb-1.5 pt-0.5 border-t border-slate-100 dark:border-slate-800/60">
+            {bucket === 'ready_to_queue' && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); onAction('queue') }}
+                disabled={isBusy}
+                className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+              >
+                {isBusy ? (
+                  <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+                ) : (
+                  <Rocket className="size-3 mr-1" aria-hidden />
+                )}
+                Queue this session
+              </Button>
+            )}
+            <div className="ml-auto">
+              {archived ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => { e.stopPropagation(); onAction('unarchive') }}
+                  disabled={isBusy}
+                  className="h-6 text-[10px] px-2"
+                >
+                  {isBusy ? (
+                    <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+                  ) : (
+                    <ArchiveRestore className="size-3 mr-1" aria-hidden />
+                  )}
+                  Restore
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={(e) => { e.stopPropagation(); onAction('archive') }}
+                  disabled={isBusy}
+                  className="h-6 text-[10px] px-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+                >
+                  {isBusy ? (
+                    <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+                  ) : (
+                    <Archive className="size-3 mr-1" aria-hidden />
+                  )}
+                  Archive
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </li>
+  )
+}
+
+interface ConfirmActionDialogProps {
+  confirm: ConfirmState | null
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+function ConfirmActionDialog({ confirm, onCancel, onConfirm }: ConfirmActionDialogProps) {
+  const kind = confirm?.kind
+  const isQueue = kind === 'queue'
+  const isArchive = kind === 'archive'
+  // const isUnarchive = kind === 'unarchive'
+
+  return (
+    <Dialog open={confirm !== null} onOpenChange={(open) => { if (!open) onCancel() }}>
+      <DialogContent className="sm:max-w-md" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {isQueue && <Rocket className="size-4 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden />}
+            {isArchive && <Archive className="size-4 text-slate-600 dark:text-slate-400 shrink-0" aria-hidden />}
+            {!isQueue && !isArchive && <ArchiveRestore className="size-4 text-amber-600 dark:text-amber-400 shrink-0" aria-hidden />}
+            {isQueue && 'Queue this session?'}
+            {isArchive && 'Archive this session?'}
+            {!isQueue && !isArchive && 'Restore this session?'}
+          </DialogTitle>
+          <DialogDescription className="text-sm text-slate-600 dark:text-slate-300 leading-snug">
+            {isQueue && (
+              <>
+                Atlas will rewrite <code className="font-mono text-[11px]">.agent/master-plan.md</code>, synthesize spec files for every add/edit op, and push a single commit to <code className="font-mono text-[11px]">origin/main</code>. The builder picks up specs from <code className="font-mono text-[11px]">.agent/tasks/queued/</code> on its next cycle. If the push fails, the working tree resets cleanly to <code className="font-mono text-[11px]">origin/main</code> — no half-applied state.
+              </>
+            )}
+            {isArchive && (
+              'Hides this session from the default list. State is preserved and recoverable via "Show archived" → Restore. Active/awaiting_approval sessions can also be archived.'
+            )}
+            {!isQueue && !isArchive && (
+              'Clears archived_at so the session reappears in the default list.'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        {isQueue && (
+          <div className="rounded-md border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+            <div className="flex items-start gap-1.5">
+              <AlertTriangle className="size-3.5 shrink-0 mt-0.5" aria-hidden />
+              <span>
+                This commits + pushes to <code className="font-mono">main</code>. Make sure the diff is what you want before confirming.
+              </span>
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={onConfirm}
+            className={cn(
+              isQueue && 'bg-emerald-600 hover:bg-emerald-700 text-white transition-colors',
+              isArchive && 'bg-slate-700 hover:bg-slate-800 text-white transition-colors',
+              !isQueue && !isArchive && 'bg-amber-600 hover:bg-amber-700 text-white transition-colors',
+            )}
+          >
+            {isQueue && (<><Rocket className="size-3 mr-1.5" aria-hidden />Queue + push</>)}
+            {isArchive && (<><Archive className="size-3 mr-1.5" aria-hidden />Archive</>)}
+            {!isQueue && !isArchive && (<><ArchiveRestore className="size-3 mr-1.5" aria-hidden />Restore</>)}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

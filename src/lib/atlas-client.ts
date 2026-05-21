@@ -2664,6 +2664,14 @@ export interface WorkshopSessionSummary {
   total_cost_usd: number
   plan_diff_id: string | null
   master_plan_version: string | null
+  /** 1.10bd Step 4: null when not archived. Sessions with archived_at !== null
+   *  are hidden from the default listWorkshopSessions response. */
+  archived_at: string | null
+  /** 1.10bd Step 4: timestamps from the linked plan_diffs row. Used by the
+   *  session card to choose between Queue / Archive / "applied" badge. */
+  plan_diff_approved_at: string | null
+  plan_diff_applied_at: string | null
+  plan_diff_rejected_at: string | null
 }
 
 export type PlanDiffOp =
@@ -2711,8 +2719,29 @@ export async function startWorkshopSession(
   })
 }
 
-export async function listWorkshopSessions(): Promise<{ ok: true; sessions: WorkshopSessionSummary[] }> {
-  return fetchJson(`${ATLAS_URL}/atlas/workshop/sessions`, { headers: authHeaders() })
+export async function listWorkshopSessions(
+  opts?: { includeArchived?: boolean },
+): Promise<{ ok: true; sessions: WorkshopSessionSummary[] }> {
+  const qs = opts?.includeArchived ? '?include_archived=true' : ''
+  return fetchJson(`${ATLAS_URL}/atlas/workshop/sessions${qs}`, { headers: authHeaders() })
+}
+
+export async function archiveWorkshopSession(
+  sessionId: string,
+): Promise<{ ok: true; id: string; archived_at: string }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/sessions/${encodeURIComponent(sessionId)}/archive`,
+    { method: 'POST', headers: authHeaders() },
+  )
+}
+
+export async function unarchiveWorkshopSession(
+  sessionId: string,
+): Promise<{ ok: true; id: string; archived_at: null }> {
+  return fetchJson(
+    `${ATLAS_URL}/atlas/workshop/sessions/${encodeURIComponent(sessionId)}/unarchive`,
+    { method: 'POST', headers: authHeaders() },
+  )
 }
 
 export async function getWorkshopSession(
@@ -2769,25 +2798,17 @@ export async function getPlanDiff(diffId: string): Promise<{ ok: true; diff: Pla
   )
 }
 
+// 1.10bd-queue-pivot Step 3b: /approve no longer auto-applies. It records
+// approval only. The user must then call /queue (queueWorkshopDiff below)
+// to land the spec files. Pre-1.10bd this shape included dispatches_queued
+// / applied_at — those moved to QueueWorkshopDiffResult.
 export interface ApprovePlanDiffResult {
   ok: true
   diff_id: string
   approved_at: string
-  /** Set when the autonomous queue trigger succeeded (or the diff was a
-   *  pure plan-tree mutation with no queueable ops). Null when the insert
-   *  into atlas_dispatches failed and the diff is in a half-applied state. */
-  applied_at: string | null
-  /** Number of atlas_dispatches rows inserted by the autonomous queue
-   *  trigger. 0 when the diff was 100% remove/reorder ops. */
-  dispatches_queued: number
-  dispatch_ids: string[]
-  /** Total ops in the diff (queueable + skipped). */
   ops_total: number
-  /** Number of ops that didn't produce a dispatch (remove + reorder). */
-  ops_skipped: number
-  /** Set when the atlas_dispatches insert failed — the diff is approved
-   *  but not applied. Operator can retry from Settings → Audit. */
-  queue_error: string | null
+  /** Server hint pointing the client at the next step. */
+  next_action: string
 }
 
 export async function approvePlanDiff(diffId: string): Promise<ApprovePlanDiffResult> {
@@ -2795,6 +2816,51 @@ export async function approvePlanDiff(diffId: string): Promise<ApprovePlanDiffRe
     `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}/approve`,
     { method: 'POST', headers: authHeaders() },
   )
+}
+
+// 1.10bd-queue-pivot Step 3b: POST /atlas/workshop/diffs/:id/queue.
+// Atomic: master-plan rewrite + spec drafting + single git commit + push.
+// status='rolled_back' means git push failed but the working tree was
+// reset cleanly to origin/main (recoverable — try again). status='failure'
+// means something else broke and the operator should inspect
+// atlas_queue_operations.meta_json.
+export interface QueueWorkshopDiffResult {
+  ok: boolean
+  status: 'success' | 'rolled_back' | 'failure'
+  diff_id: string
+  queue_op_id: string | null
+  applied_at: string | null
+  ops_total: number
+  ops_applied: number
+  ops_skipped: number
+  specs_drafted: number
+  spec_paths: string[]
+  commit_sha: string | null
+  pushed: boolean
+  error: string | null
+}
+
+export async function queueWorkshopDiff(diffId: string): Promise<QueueWorkshopDiffResult> {
+  // Bypasses fetchJson because the server intentionally returns 500/502 with
+  // a structured QueueWorkshopDiffResult body (status='failure'/'rolled_back')
+  // that the UI needs to render. fetchJson's throw-on-non-2xx would erase that.
+  const url = `${ATLAS_URL}/atlas/workshop/diffs/${encodeURIComponent(diffId)}/queue`
+  const res = await fetch(url, { method: 'POST', headers: authHeaders() })
+  if (res.status === 401) {
+    throw new AtlasUnauthorizedError(`POST ${url} → 401`)
+  }
+  const text = await res.text()
+  let parsed: Partial<QueueWorkshopDiffResult> | { error?: string }
+  try { parsed = text ? JSON.parse(text) : {} } catch {
+    throw new Error(`${url} returned non-JSON body: ${text.slice(0, 200)}`)
+  }
+  // If the server returned a non-structured error (e.g. 503 queue_frozen,
+  // 404 diff_not_found), surface as a thrown Error so callers can catch it.
+  if (!('status' in parsed) && !res.ok) {
+    const err = (parsed as { error?: string }).error ?? `HTTP ${res.status}`
+    throw new Error(`POST ${url} → ${res.status}: ${err}`)
+  }
+  return parsed as QueueWorkshopDiffResult
 }
 
 export async function rejectPlanDiff(

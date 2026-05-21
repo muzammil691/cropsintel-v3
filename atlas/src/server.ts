@@ -4559,7 +4559,11 @@ export async function startServer(): Promise<void> {
     }
 
     // GET /atlas/workshop/sessions — list sessions (newest first, capped 50).
-    if (url === '/atlas/workshop/sessions' && method === 'GET') {
+    // 1.10bd-queue-pivot Step 4: also surfaces archived_at and the linked
+    // plan_diff's approved_at / applied_at / rejected_at so the frontend
+    // can render Queue / Archive button variants without a second roundtrip.
+    // ?include_archived=true returns archived sessions too (default: hidden).
+    if (url.split('?')[0] === '/atlas/workshop/sessions' && method === 'GET') {
       const principal = await requireAuth(req, res)
       if (!principal) return
       if (!roleAtLeast(principal.role, 'admin')) {
@@ -4568,13 +4572,43 @@ export async function startServer(): Promise<void> {
       }
       const sb = getSupabaseClient()
       if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
-      const { data, error } = await sb
+      const qs = new URL(url, 'http://x').searchParams
+      const includeArchived = qs.get('include_archived') === 'true'
+      let query = sb
         .from('plan_workshop_sessions')
-        .select('id, status, started_at, completed_at, total_turns, total_cost_usd, plan_diff_id, master_plan_version')
+        .select('id, status, started_at, completed_at, total_turns, total_cost_usd, plan_diff_id, master_plan_version, archived_at')
         .order('started_at', { ascending: false })
         .limit(50)
+      if (!includeArchived) query = query.is('archived_at', null)
+      const { data: sessions, error } = await query
       if (error) { json(res, 500, { error: error.message }); return }
-      json(res, 200, { ok: true, sessions: data ?? [] })
+      // Batch-fetch linked plan_diffs in a single query (no FK, so a manual
+      // join in JS — Supabase's PostgREST relationship syntax needs an FK).
+      const diffIds = (sessions ?? [])
+        .map((s) => (s as { plan_diff_id: string | null }).plan_diff_id)
+        .filter((x): x is string => !!x)
+      const diffMap: Record<string, { approved_at: string | null; applied_at: string | null; rejected_at: string | null }> = {}
+      if (diffIds.length > 0) {
+        const { data: diffs } = await sb
+          .from('plan_diffs')
+          .select('id, approved_at, applied_at, rejected_at')
+          .in('id', diffIds)
+        for (const d of diffs ?? []) {
+          const row = d as { id: string; approved_at: string | null; applied_at: string | null; rejected_at: string | null }
+          diffMap[row.id] = { approved_at: row.approved_at, applied_at: row.applied_at, rejected_at: row.rejected_at }
+        }
+      }
+      const enriched = (sessions ?? []).map((s) => {
+        const row = s as { plan_diff_id: string | null }
+        const d = row.plan_diff_id ? diffMap[row.plan_diff_id] : undefined
+        return {
+          ...s,
+          plan_diff_approved_at: d?.approved_at ?? null,
+          plan_diff_applied_at: d?.applied_at ?? null,
+          plan_diff_rejected_at: d?.rejected_at ?? null,
+        }
+      })
+      json(res, 200, { ok: true, sessions: enriched })
       return
     }
 
@@ -4658,6 +4692,60 @@ export async function startServer(): Promise<void> {
         const meta = (data as { metadata?: Record<string, unknown> }).metadata ?? {}
         const workshopState = (meta.workshop_state ?? null) as Record<string, unknown> | null
         json(res, 200, { ok: true, session: { ...data, workshop_state: workshopState } })
+        return
+      }
+    }
+
+    // POST /atlas/workshop/sessions/:id/archive — 1.10bd Step 4.
+    // Marks plan_workshop_sessions.archived_at. Allowed on any status —
+    // even archiving an active session removes it from the default list.
+    // Idempotent: archiving an already-archived session is a no-op.
+    {
+      const m = url.match(/^\/atlas\/workshop\/sessions\/([^/]+)\/archive$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const sessionId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const nowIso = new Date().toISOString()
+        const { data, error } = await sb
+          .from('plan_workshop_sessions')
+          .update({ archived_at: nowIso })
+          .eq('id', sessionId)
+          .select('id, archived_at')
+          .single()
+        if (error || !data) { json(res, 404, { error: 'session_not_found', detail: error?.message }); return }
+        json(res, 200, { ok: true, id: sessionId, archived_at: (data as { archived_at: string }).archived_at })
+        return
+      }
+    }
+
+    // POST /atlas/workshop/sessions/:id/unarchive — 1.10bd Step 4.
+    {
+      const m = url.match(/^\/atlas\/workshop\/sessions\/([^/]+)\/unarchive$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        const sessionId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { data, error } = await sb
+          .from('plan_workshop_sessions')
+          .update({ archived_at: null })
+          .eq('id', sessionId)
+          .select('id')
+          .single()
+        if (error || !data) { json(res, 404, { error: 'session_not_found', detail: error?.message }); return }
+        json(res, 200, { ok: true, id: sessionId, archived_at: null })
         return
       }
     }
@@ -4785,17 +4873,19 @@ export async function startServer(): Promise<void> {
         if (row.applied_at) { json(res, 409, { error: 'diff_already_applied', applied_at: row.applied_at }); return }
         if (row.rejected_at) { json(res, 409, { error: 'diff_rejected' }); return }
 
-        // Resolve member: prefer the diff's owning workshop session, fall
-        // back to the caller. Used only for atlas_queue_operations.member_id.
+        // Resolve member: prefer the diff's owning workshop session
+        // (plan_workshop_sessions.created_by — the column is `created_by`,
+        // not `member_id`), fall back to the caller. Used only for
+        // atlas_queue_operations.member_id.
         let memberId: string | null = principal.memberId ?? null
         if (row.session_id) {
           const { data: sessRow } = await sb
             .from('plan_workshop_sessions')
-            .select('member_id')
+            .select('created_by')
             .eq('id', row.session_id)
             .maybeSingle()
-          if (sessRow && (sessRow as { member_id?: string | null }).member_id) {
-            memberId = (sessRow as { member_id: string }).member_id
+          if (sessRow && (sessRow as { created_by?: string | null }).created_by) {
+            memberId = (sessRow as { created_by: string }).created_by
           }
         }
 
@@ -5059,6 +5149,8 @@ export async function startServer(): Promise<void> {
             'POST /atlas/workshop/sessions',
             'POST /atlas/workshop/sessions/:id/answer',
             'POST /atlas/workshop/sessions/:id/finalize',
+            'POST /atlas/workshop/sessions/:id/archive',
+            'POST /atlas/workshop/sessions/:id/unarchive',
             'GET  /atlas/workshop/sessions/:id/diff',
             'POST /atlas/workshop/diffs/:id/approve',
             'POST /atlas/workshop/diffs/:id/queue',
