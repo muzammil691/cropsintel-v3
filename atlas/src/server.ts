@@ -142,6 +142,13 @@ import {
 } from './lib/project-context'
 import { getRepoIndex, refreshRepoIndex, startRepoIndexLoop } from './lib/repo-index'
 import { getFileContent } from './lib/github-client'
+import {
+  queueWorkshopDiff,
+  bootGitRecovery,
+  getGitState,
+  isQueueFrozen,
+  getQueueFreezeReason,
+} from './lib/queue-orchestrator'
 
 const ELEVENLABS_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_ELEVENLABS_GATE ?? '90')
 const OPENAI_BUDGET_GATE_USD = parseFloat(process.env.ATLAS_BUDGET_OPENAI_GATE ?? '45')
@@ -2125,12 +2132,18 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/health' && method === 'GET') {
+      // 1.10bd: surface git_state + queue_frozen so the operator can detect
+      // ahead-of-remote / diverged / frozen states without SSHing into Railway.
+      const gitState = await getGitState()
       json(res, 200, {
         status: 'ok',
         service: 'cropsintel-atlas',
         version: '0.1.0',
         trust_mode: getCurrentMode(),
         ts: new Date().toISOString(),
+        git_state: gitState,
+        queue_frozen: isQueueFrozen(),
+        queue_freeze_reason: getQueueFreezeReason(),
       })
       return
     }
@@ -4673,27 +4686,18 @@ export async function startServer(): Promise<void> {
       }
     }
 
-    // POST /atlas/workshop/diffs/:id/approve — Session 6 plan-mutator +
-    // autonomous queue trigger (was STUB in Session 4).
+    // POST /atlas/workshop/diffs/:id/approve — mark approval only.
     //
-    // Order of operations:
-    //   1. Mark plan_diffs row as approved (idempotent — `is(approved_at,
-    //      null)` filter rejects double-approve races).
-    //   2. Flip the owning session to status='completed'.
-    //   3. Parse diff_jsonb.ops; for every 'add' / 'edit' op, insert an
-    //      atlas_dispatches row with status='queued' that the builder
-    //      picker (Session 6's claimNextQueuedDispatch) will drain into
-    //      'building'. 'remove' and 'reorder' ops are plan-tree mutations
-    //      only — they don't produce specs, so no dispatch is queued.
-    //   4. Stamp plan_diffs.applied_at so observers can see the queue
-    //      trigger fired.
+    // 1.10bd-queue-pivot: approval no longer auto-dispatches. Previously
+    // (commit 4ce5a3a) this handler inserted atlas_dispatches rows and
+    // stamped applied_at — that path never actually wrote master-plan.md
+    // and bypassed the filesystem queue, so it's been removed. The user
+    // now explicitly hits POST /atlas/workshop/diffs/:id/queue (which
+    // calls queueWorkshopDiff in lib/queue-orchestrator.ts) to land the
+    // diff in master-plan + .agent/tasks/queued in a single git commit.
     //
-    // Schema fit: atlas_dispatches has `tool` + `arguments jsonb` (no
-    // dedicated phase_id / spec_markdown / source_diff_id columns), so
-    // the workshop-supplied metadata lives inside `arguments`. The
-    // builder picker reads `tool='builder.workshop_diff_spec'` to know
-    // it's a workshop-originated build and pulls phase_id / spec_markdown
-    // / source_diff_id from arguments.
+    // Approve = "I'm happy with this diff" (lock it in for queue/archive).
+    // Queue   = "ship the spec files now" (the atomic transactional path).
     {
       const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)\/approve$/)
       if (m && method === 'POST') {
@@ -4725,87 +4729,110 @@ export async function startServer(): Promise<void> {
             .eq('id', diffRow.session_id)
         }
 
-        // ─── Autonomous queue trigger ────────────────────────────────────
-        type DiffOp =
-          | { op: 'add'; phase_id: string; parent_id?: string | null; title?: string; body?: string; launch_tier?: string }
-          | { op: 'edit'; phase_id: string; title?: string; body?: string; launch_tier?: string }
-          | { op: 'remove'; phase_id: string; reason?: string }
-          | { op: 'reorder'; parent_id: string; ordered_phase_ids: string[] }
-
         const jsonb = (diffRow as { diff_jsonb?: { ops?: unknown[] } }).diff_jsonb
-        const ops: DiffOp[] = Array.isArray(jsonb?.ops) ? (jsonb!.ops as DiffOp[]) : []
-        const queuable = ops.filter((o): o is Extract<DiffOp, { op: 'add' | 'edit' }> =>
-          o && (o.op === 'add' || o.op === 'edit'),
-        )
-
-        const trustMode = getCurrentMode()
-        const dispatchRows = queuable.map((op) => {
-          const title = op.title ?? op.phase_id
-          // No spec_markdown field on the op shape; synthesize from op.title +
-          // op.body so the builder agent gets a readable spec to work from.
-          const specBody = (op.body ?? '').trim()
-          const specMarkdown = `# ${op.phase_id}: ${title}\n\n${specBody || '_(no body provided in diff)_'}\n`
-          return {
-            trust_mode: trustMode,
-            initiated_by: `workshop_diff_approval:${principal.memberId ?? principal.sessionId}`,
-            tool: 'builder.workshop_diff_spec',
-            arguments: {
-              phase_id: op.phase_id,
-              title,
-              spec_markdown: specMarkdown,
-              priority: 'normal',
-              requested_by: principal.memberId,
-              source: 'workshop_diff_approval',
-              source_diff_id: diffId,
-              op_kind: op.op,
-              launch_tier: op.launch_tier ?? null,
-              parent_id: op.op === 'add' ? (op.parent_id ?? null) : null,
-            } as Record<string, unknown>,
-            status: 'queued' as const,
-          }
-        })
-
-        const dispatchIds: string[] = []
-        let queueError: string | null = null
-        if (dispatchRows.length > 0) {
-          const { data: inserted, error: insertErr } = await sb
-            .from('atlas_dispatches')
-            .insert(dispatchRows)
-            .select('id')
-          if (insertErr) {
-            queueError = insertErr.message
-          } else if (Array.isArray(inserted)) {
-            for (const row of inserted as Array<{ id: string }>) {
-              if (row?.id) dispatchIds.push(row.id)
-            }
-          }
-        }
-
-        // Stamp applied_at only when at least one dispatch landed (or there
-        // were no queueable ops — pure remove/reorder diffs are still
-        // "applied" in plan-tree-only mode). On insert failure, leave
-        // applied_at null so the operator can retry without orphan
-        // dispatch rows muddying the audit trail.
-        let appliedAt: string | null = null
-        if (queueError === null) {
-          appliedAt = nowIso
-          await sb
-            .from('plan_diffs')
-            .update({ applied_at: nowIso })
-            .eq('id', diffId)
-        }
+        const ops: unknown[] = Array.isArray(jsonb?.ops) ? jsonb!.ops! : []
 
         json(res, 200, {
           ok: true,
           diff_id: diffId,
           approved_at: nowIso,
-          applied_at: appliedAt,
-          dispatches_queued: dispatchIds.length,
-          dispatch_ids: dispatchIds,
           ops_total: ops.length,
-          ops_skipped: ops.length - queuable.length,
-          queue_error: queueError,
+          next_action: 'POST /atlas/workshop/diffs/:id/queue to land the spec files',
         })
+        return
+      }
+    }
+
+    // POST /atlas/workshop/diffs/:id/queue — 1.10bd-queue-pivot Step 3b.
+    //
+    // Atomic apply: read master-plan.md → compute new markdown in memory
+    // → synthesize spec files → fs.rename into final locations → single
+    // git commit + push. On push failure, hard-reset to origin/main so
+    // the local commit and file changes are both discarded. Every
+    // outcome lands in atlas_queue_operations with timestamps + op
+    // counts + commit_sha + meta_json. See lib/queue-orchestrator.ts.
+    //
+    // Requires the diff to already be approved (approved_at set,
+    // applied_at still null, not rejected). Frozen queue (boot recovery
+    // tripped or rollback failed) short-circuits with 503.
+    {
+      const m = url.match(/^\/atlas\/workshop\/diffs\/([^/]+)\/queue$/)
+      if (m && method === 'POST') {
+        const principal = await requireAuth(req, res)
+        if (!principal) return
+        if (!roleAtLeast(principal.role, 'admin')) {
+          json(res, 403, { error: 'role_insufficient', required: 'admin' })
+          return
+        }
+        if (isQueueFrozen()) {
+          json(res, 503, { error: 'queue_frozen', reason: getQueueFreezeReason() })
+          return
+        }
+        const diffId = decodeURIComponent(m[1])
+        const sb = getSupabaseClient()
+        if (!sb) { json(res, 503, { error: 'supabase_unavailable' }); return }
+        const { data: diffRow, error: diffErr } = await sb
+          .from('plan_diffs')
+          .select('id, session_id, diff_jsonb, approved_at, applied_at, rejected_at')
+          .eq('id', diffId)
+          .single()
+        if (diffErr || !diffRow) {
+          json(res, 404, { error: 'diff_not_found', detail: diffErr?.message })
+          return
+        }
+        const row = diffRow as { id: string; session_id: string | null; diff_jsonb: { ops?: unknown[]; summary?: string } | null; approved_at: string | null; applied_at: string | null; rejected_at: string | null }
+        if (!row.approved_at) { json(res, 409, { error: 'diff_not_approved' }); return }
+        if (row.applied_at) { json(res, 409, { error: 'diff_already_applied', applied_at: row.applied_at }); return }
+        if (row.rejected_at) { json(res, 409, { error: 'diff_rejected' }); return }
+
+        // Resolve member: prefer the diff's owning workshop session, fall
+        // back to the caller. Used only for atlas_queue_operations.member_id.
+        let memberId: string | null = principal.memberId ?? null
+        if (row.session_id) {
+          const { data: sessRow } = await sb
+            .from('plan_workshop_sessions')
+            .select('member_id')
+            .eq('id', row.session_id)
+            .maybeSingle()
+          if (sessRow && (sessRow as { member_id?: string | null }).member_id) {
+            memberId = (sessRow as { member_id: string }).member_id
+          }
+        }
+
+        const jsonb = row.diff_jsonb ?? { ops: [] }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ops shape is
+        // validated inside applyOpsToMasterPlan; passing through as the imported
+        // PlanDiffOp union without re-declaring the discriminated tuple here.
+        const ops = Array.isArray(jsonb.ops) ? (jsonb.ops as any[]) : []
+
+        try {
+          const result = await queueWorkshopDiff({
+            diffId,
+            memberId,
+            sessionId: row.session_id,
+            ops,
+            diffJsonb: { ops, summary: jsonb.summary },
+          })
+          const httpStatus = result.ok ? 200 : (result.status === 'rolled_back' ? 502 : 500)
+          json(res, httpStatus, {
+            ok: result.ok,
+            status: result.status,
+            diff_id: diffId,
+            queue_op_id: result.queueOpId,
+            applied_at: result.appliedAt,
+            ops_total: result.opsTotal,
+            ops_applied: result.opsApplied,
+            ops_skipped: result.opsSkipped,
+            specs_drafted: result.specsDrafted,
+            spec_paths: result.specPaths,
+            commit_sha: result.commitSha,
+            pushed: result.pushed,
+            error: result.error,
+          })
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          json(res, 500, { error: 'queue_unhandled', detail: msg })
+        }
         return
       }
     }
@@ -5034,6 +5061,7 @@ export async function startServer(): Promise<void> {
             'POST /atlas/workshop/sessions/:id/finalize',
             'GET  /atlas/workshop/sessions/:id/diff',
             'POST /atlas/workshop/diffs/:id/approve',
+            'POST /atlas/workshop/diffs/:id/queue',
             'POST /atlas/workshop/diffs/:id/reject',
             'POST /atlas/workshop/diffs/:id/revise',
           ],
@@ -6230,6 +6258,23 @@ export async function startServer(): Promise<void> {
   })
 
   attachTtsWebSocket(server)
+
+  // 1.10bd-queue-pivot Step 3b: detect ahead/behind/diverged on boot.
+  // Behind → pull --rebase. Ahead with stuck in_progress queue ops →
+  // freeze queue. Diverged → freeze + WhatsApp alert. See lib/queue-
+  // orchestrator.ts bootGitRecovery() for the full state machine.
+  try {
+    const alertPhone = process.env.VERIFIER_ALERT_PHONE
+    const recovery = await bootGitRecovery({
+      notifyWhatsApp: alertPhone
+        ? async (message: string) => { try { await sendWhatsAppReply(alertPhone, message) } catch { /* boot must not block */ } }
+        : undefined,
+    })
+    console.log(`[boot] git-recovery: state=${recovery.state.state} action=${recovery.action} frozen=${recovery.queueFrozen}`)
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    console.warn('[boot] git-recovery failed (continuing):', detail)
+  }
 
   startSnapshotCron()
   startConductorLoop()
