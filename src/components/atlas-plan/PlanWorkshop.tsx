@@ -1017,12 +1017,13 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
     void reload()
   }, [sessionId, reload, refreshKey])
 
-  async function handleSubmitAnswer() {
-    if (answer.trim().length === 0) return
+  async function handleSubmitAnswer(overrideText?: string) {
+    const text = (overrideText ?? answer).trim()
+    if (text.length === 0) return
     setSubmitting(true)
     setError(null)
     try {
-      await submitTurnAnswer(sessionId, answer.trim())
+      await submitTurnAnswer(sessionId, text)
       setAnswer('')
       await reload()
       onBumpList()
@@ -1110,8 +1111,13 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
             No turns yet — first Atlas message is about to land.
           </p>
         )}
-        {turns.map((t) => (
-          <TurnRow key={t.index} turn={t} />
+        {turns.map((t, i) => (
+          <TurnRow
+            key={t.index}
+            turn={t}
+            isLast={i === turns.length - 1}
+            onPickOption={isLive ? (opt) => { setAnswer(opt); void handleSubmitAnswer(opt) } : undefined}
+          />
         ))}
         {error && (
           <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-2.5 py-1.5 text-[11px] text-red-700 dark:text-red-300">
@@ -1121,70 +1127,39 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
       </div>
 
       {isLive && (
-        <footer className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2.5 space-y-2">
-          {lastUnanswered ? (
-            <>
-              <Textarea
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                rows={2}
-                placeholder="Type your answer… (Cmd+Enter to send)"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault()
-                    void handleSubmitAnswer()
-                  }
-                }}
-                className="text-sm resize-none"
-                disabled={submitting}
-              />
-              <div className="flex items-center gap-1.5">
-                {readyToDraft && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={handleFinalize}
-                    disabled={finalizing || submitting}
-                    className="text-xs h-8"
-                  >
-                    {finalizing ? (
-                      <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
-                    ) : (
-                      <CheckCircle2 className="size-3 mr-1" aria-hidden />
-                    )}
-                    Generate plan diff
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleSubmitAnswer}
-                  disabled={submitting || answer.trim().length === 0}
-                  className="text-xs h-8 ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
-                >
-                  {submitting ? (
-                    <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
-                  ) : (
-                    <Send className="size-3 mr-1" aria-hidden />
-                  )}
-                  Send
-                </Button>
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center gap-2">
-              <p className="text-xs text-slate-600 dark:text-slate-300 flex-1">
-                {readyToDraft
-                  ? 'Atlas signaled ready to draft. Generate the plan diff when you want to gate approval.'
-                  : 'Waiting for the next turn…'}
-              </p>
+        // 1.10bd-Phase-A — Persistent chat input. Was previously gated on
+        // `lastUnanswered` and disappeared between turns; now always visible
+        // when the session is active so the user can pre-type or volunteer
+        // info ahead of Atlas's next question. `sticky bottom-0` is a hedge
+        // against the still-open layout bug where the action bar can land
+        // below the viewport — sticky pins the footer to the bottom of the
+        // pane's scroll context where supported.
+        <footer className="sticky bottom-0 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2.5 space-y-2">
+          <Textarea
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            rows={2}
+            placeholder={lastUnanswered
+              ? 'Type your answer… (Cmd+Enter to send)'
+              : 'Waiting for the next question — you can pre-type or pause.'}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                if (lastUnanswered) void handleSubmitAnswer()
+              }
+            }}
+            className="text-sm resize-none"
+            disabled={submitting}
+          />
+          <div className="flex items-center gap-1.5">
+            {readyToDraft && (
               <Button
                 type="button"
                 size="sm"
+                variant="outline"
                 onClick={handleFinalize}
-                disabled={finalizing}
-                className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
+                disabled={finalizing || submitting}
+                className="text-xs h-8"
               >
                 {finalizing ? (
                   <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
@@ -1193,8 +1168,23 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
                 )}
                 Generate plan diff
               </Button>
-            </div>
-          )}
+            )}
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void handleSubmitAnswer()}
+              disabled={submitting || answer.trim().length === 0 || !lastUnanswered}
+              title={!lastUnanswered ? "Atlas hasn't asked yet — wait for the next question" : undefined}
+              className="text-xs h-8 ml-auto bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
+            >
+              {submitting ? (
+                <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+              ) : (
+                <Send className="size-3 mr-1" aria-hidden />
+              )}
+              Send
+            </Button>
+          </div>
         </footer>
       )}
     </div>
@@ -1253,7 +1243,65 @@ function ClarityBar({ value, turns }: { value: number; turns: number }) {
   )
 }
 
-function TurnRow({ turn }: { turn: WorkshopTurnRecord }) {
+// 1.10bd-Phase-A — Inline-option parser. When the workshop engine populates
+// `turn.options` we render those directly. When it doesn't (older sessions,
+// or the engine inlining choices in the question prose), scan the question
+// text for three common prefix shapes:
+//   • Greek prefixes:           α. ... | β. ... | γ. ... (also α) β) γ))
+//   • Parenthesized letters:    (a) ... | (b) ... | (s) ... | (t) ...
+//   • Capitalised Q-prefix:     Q1: ... | Q2: ...
+// Returns the option BODIES (prefix stripped) so clicking a button submits
+// just the answer content, not the structural marker. Returns [] when no
+// recognizable bullets are present — caller falls back to plain question.
+const GREEK_OPTION_LETTERS = /[αβγδεζηθικλμνξοπρστυφχψω]/
+const PARENTHESIZED_OPTION = /^\s*\(([a-z])\)\s+(.+?)\s*$/i
+const Q_PREFIX_OPTION = /^\s*Q(\d+)\s*[:.]\s+(.+?)\s*$/
+const GREEK_PREFIX_OPTION = new RegExp(
+  '^\\s*(' + GREEK_OPTION_LETTERS.source + ')\\s*[.)]\\s+(.+?)\\s*$',
+)
+
+function parseInlineOptions(text: string): string[] {
+  const out: string[] = []
+  const lines = text.split(/\r?\n/)
+  for (const raw of lines) {
+    const greekMatch = raw.match(GREEK_PREFIX_OPTION)
+    if (greekMatch) {
+      const body = greekMatch[2].trim()
+      if (body) out.push(body)
+      continue
+    }
+    const parenMatch = raw.match(PARENTHESIZED_OPTION)
+    if (parenMatch) {
+      const body = parenMatch[2].trim()
+      if (body) out.push(body)
+      continue
+    }
+    const qMatch = raw.match(Q_PREFIX_OPTION)
+    if (qMatch) {
+      const body = qMatch[2].trim()
+      if (body) out.push(body)
+      continue
+    }
+  }
+  return out
+}
+
+interface TurnRowProps {
+  turn: WorkshopTurnRecord
+  /** When provided AND this is the latest turn AND no answer yet, the option
+   *  bullets render as clickable pills that auto-submit on click. */
+  onPickOption?: (optionText: string) => void
+  /** True for the last turn in the list. Older turns always render plain
+   *  bullets (clicking an old option to answer the current question would
+   *  be confusing). */
+  isLast?: boolean
+}
+
+function TurnRow({ turn, onPickOption, isLast }: TurnRowProps) {
+  const effectiveOptions = turn.options && turn.options.length > 0
+    ? turn.options
+    : parseInlineOptions(turn.question)
+  const optionsAreInteractive = Boolean(onPickOption) && isLast === true && turn.answer === null && effectiveOptions.length > 0
   return (
     <div className="space-y-1.5">
       <article className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2">
@@ -1264,15 +1312,33 @@ function TurnRow({ turn }: { turn: WorkshopTurnRecord }) {
         <p className="text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap leading-relaxed">
           {turn.question}
         </p>
-        {turn.options && turn.options.length > 0 && (
-          <ul className="mt-1.5 space-y-0.5">
-            {turn.options.map((o, i) => (
-              <li key={i} className="text-xs text-slate-600 dark:text-slate-300 pl-3 relative">
-                <span className="absolute left-0 text-slate-400">•</span>
-                {o}
-              </li>
-            ))}
-          </ul>
+        {effectiveOptions.length > 0 && (
+          optionsAreInteractive ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {effectiveOptions.map((o, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => onPickOption!(o)}
+                  className="inline-flex items-start text-left text-xs px-2.5 py-1 rounded-full border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-amber-900 dark:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-950/40 hover:border-amber-500 dark:hover:border-amber-500 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+                >
+                  <span className="text-[10px] text-amber-700 dark:text-amber-300 font-mono mr-1.5 shrink-0">
+                    {i + 1}
+                  </span>
+                  <span className="leading-snug">{o}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <ul className="mt-1.5 space-y-0.5">
+              {effectiveOptions.map((o, i) => (
+                <li key={i} className="text-xs text-slate-600 dark:text-slate-300 pl-3 relative">
+                  <span className="absolute left-0 text-slate-400">•</span>
+                  {o}
+                </li>
+              ))}
+            </ul>
+          )
         )}
         {turn.cited_sources.length > 0 && <CitedSourcesChips sources={turn.cited_sources} />}
       </article>
