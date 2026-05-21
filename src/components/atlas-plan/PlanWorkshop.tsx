@@ -70,17 +70,17 @@ export function PlanWorkshop() {
 
   return (
     <section className="flex flex-col h-full overflow-hidden bg-white dark:bg-slate-950">
-      <header className="px-3 sm:px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/30">
+      <header className="px-3 sm:px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/30">
         <div className="flex items-center gap-2">
-          <Sparkles className="size-4 text-amber-700 dark:text-amber-300" aria-hidden />
+          <Sparkles className="size-4 text-amber-700 dark:text-amber-300" aria-hidden="true" />
           <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-200">
             Plan Workshop
           </h2>
-          <span className="text-[10px] text-amber-700 dark:text-amber-400 ml-1">
+          <span className="text-xs font-medium text-amber-700 dark:text-amber-400 ml-1">
             standing planning intelligence
           </span>
         </div>
-        <p className="mt-0.5 text-[11px] text-slate-700 dark:text-slate-300 leading-relaxed">
+        <p className="mt-0.5 text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
           Drop concepts and uploads, work through architectural questions, generate a plan diff for approval. Atlas reads the master plan, idea file, V1 + V3 codebases, and prior decision logs on every turn.
         </p>
       </header>
@@ -153,7 +153,7 @@ function EmptyState({ onStartNew }: { onStartNew: () => void }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 p-6 max-w-md mx-auto">
       <span className="grid place-items-center size-12 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
-        <Sparkles className="size-5" aria-hidden />
+        <Sparkles className="size-5" aria-hidden="true" />
       </span>
       <div>
         <p className="text-sm font-medium">Pick a session or start a new one.</p>
@@ -165,7 +165,7 @@ function EmptyState({ onStartNew }: { onStartNew: () => void }) {
         type="button"
         size="sm"
         onClick={onStartNew}
-        className="mt-1 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
+        className="mt-1 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
       >
         Start new workshop
       </Button>
@@ -287,9 +287,9 @@ function StartSessionForm({ onStarted, onCancel }: StartSessionFormProps) {
           size="sm"
           variant="ghost"
           onClick={onCancel}
-          className="text-xs h-7"
+          className="text-xs h-7 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
         >
-          <X className="size-3 mr-1" aria-hidden /> Cancel
+          <X className="size-3 mr-1" aria-hidden="true" /> Cancel
         </Button>
       </div>
 
@@ -372,7 +372,7 @@ function StartSessionForm({ onStarted, onCancel }: StartSessionFormProps) {
       )}
 
       <div className="flex justify-end gap-2 pt-1">
-        <Button type="button" size="sm" variant="outline" onClick={onCancel} disabled={busy} className="text-xs h-8">
+        <Button type="button" size="sm" variant="outline" onClick={onCancel} disabled={busy} className="text-xs h-8 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2">
           Cancel
         </Button>
         {(() => {
@@ -395,16 +395,16 @@ function StartSessionForm({ onStarted, onCancel }: StartSessionFormProps) {
               onClick={handleStart}
               disabled={submitDisabled}
               title={disabledReason}
-              className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200"
+              className="text-xs h-8 bg-amber-700 hover:bg-amber-800 text-white transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
             >
               {busy ? (
                 <>
-                  <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+                  <Loader2 className="size-3 mr-1 animate-spin" aria-hidden="true" />
                   Loading context + first turn…
                 </>
               ) : (
                 <>
-                  <Sparkles className="size-3 mr-1" aria-hidden />
+                  <Sparkles className="size-3 mr-1" aria-hidden="true" />
                   {label}
                 </>
               )}
@@ -642,14 +642,14 @@ function ConceptMultiSelect({
               size="sm"
               variant="outline"
               onClick={selectAllVisible}
-              className="text-[11px] h-7 gap-1"
+              className="text-[11px] h-7 gap-1 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
               aria-label={allVisibleSelected
                 ? `Deselect all ${visibleCount} visible concepts`
                 : `Select all ${visibleCount} visible concepts`}
             >
               {allVisibleSelected
-                ? <><X className="size-3" aria-hidden /> Deselect all visible ({visibleCount})</>
-                : <><CheckSquare className="size-3" aria-hidden /> Select all visible ({visibleCount})</>}
+                ? <><X className="size-3" aria-hidden="true" /> Deselect all visible ({visibleCount})</>
+                : <><CheckSquare className="size-3" aria-hidden="true" /> Select all visible ({visibleCount})</>}
             </Button>
 
             {groups.folderParents.length > 0 && (
@@ -661,10 +661,10 @@ function ConceptMultiSelect({
                   onClick={() => setFolderDropdownOpen((v) => !v)}
                   aria-haspopup="menu"
                   aria-expanded={folderDropdownOpen}
-                  className="text-[11px] h-7 gap-1"
+                  className="text-[11px] h-7 gap-1 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
                 >
-                  <Folder className="size-3" aria-hidden /> Select folder
-                  <ChevronDown className="size-3" aria-hidden />
+                  <Folder className="size-3" aria-hidden="true" /> Select folder
+                  <ChevronDown className="size-3" aria-hidden="true" />
                 </Button>
                 {folderDropdownOpen && (
                   <div
@@ -683,14 +683,14 @@ function ConceptMultiSelect({
                             toggleFolder(p.title, state !== 'all')
                             setFolderDropdownOpen(false)
                           }}
-                          className="w-full text-left px-2.5 py-1.5 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200 flex items-center gap-1.5 focus:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800"
+                          className="w-full text-left px-2.5 py-1.5 text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors duration-200 flex items-center gap-1.5 focus:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-slate-800 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
                         >
-                          <Folder className="size-3 text-amber-700 dark:text-amber-300 shrink-0" aria-hidden />
+                          <Folder className="size-3 text-amber-700 dark:text-amber-300 shrink-0" aria-hidden="true" />
                           <span className="flex-1 truncate">{p.title}</span>
                           <span className="text-[10px] text-slate-500 tabular-nums">
                             {childCount} file{childCount === 1 ? '' : 's'}
                           </span>
-                          {state === 'all' && <CheckCircle2 className="size-3 text-amber-700 dark:text-amber-300" aria-hidden />}
+                          {state === 'all' && <CheckCircle2 className="size-3 text-amber-700 dark:text-amber-300" aria-hidden="true" />}
                         </button>
                       )
                     })}
@@ -705,10 +705,10 @@ function ConceptMultiSelect({
                 size="sm"
                 variant="ghost"
                 onClick={clearAll}
-                className="text-[11px] h-7 gap-1 text-slate-600 dark:text-slate-300"
+                className="text-[11px] h-7 gap-1 text-slate-600 dark:text-slate-300 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
                 aria-label={`Clear ${selected.size} selected`}
               >
-                <X className="size-3" aria-hidden /> Clear ({selected.size} selected)
+                <X className="size-3" aria-hidden="true" /> Clear ({selected.size} selected)
               </Button>
             )}
 
@@ -717,7 +717,7 @@ function ConceptMultiSelect({
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="Filter…"
-              className="ml-auto text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500/40 w-32"
+              className="ml-auto text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2 w-32"
               aria-label="Filter concepts"
             />
           </div>
@@ -729,7 +729,7 @@ function ConceptMultiSelect({
             role="listbox"
             aria-multiselectable="true"
             aria-label="Concepts (use Cmd+A to select all visible, Shift+click for range)"
-            className="max-h-60 overflow-y-auto space-y-0.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40"
+            className="max-h-60 overflow-y-auto space-y-0.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 p-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
           >
             {visibleFlat.length === 0 && (
               <p className="text-xs text-slate-500 italic px-2 py-2">No concepts match the filter.</p>
@@ -784,7 +784,7 @@ function ConceptMultiSelect({
           </div>
 
           <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
-            <Info className="size-2.5" aria-hidden />
+            <Info className="size-2.5" aria-hidden="true" />
             Shift+click for range. Cmd/Ctrl+A while the list is focused selects all visible.
           </p>
         </div>
@@ -849,7 +849,7 @@ function ConceptMultiSelectRow({
           : `Select ${concept.title}`}
       />
       <span className="flex-1 min-w-0 flex items-baseline gap-1.5">
-        {isFolder && <Folder className="size-3 text-amber-700 dark:text-amber-300 shrink-0 self-center" aria-hidden />}
+        {isFolder && <Folder className="size-3 text-amber-700 dark:text-amber-300 shrink-0 self-center" aria-hidden="true" />}
         <span className={cn('truncate', isFolder ? 'font-semibold' : 'font-medium')}>{
           childOf ? concept.title.replace(new RegExp('^' + childOf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/'), '') : concept.title
         }</span>
@@ -926,10 +926,10 @@ function WorkshopIntroCard() {
       <button
         type="button"
         onClick={reveal}
-        className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 rounded"
+        className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2 rounded"
         aria-label="Show how Workshop works"
       >
-        <Info className="size-3" aria-hidden />
+        <Info className="size-3" aria-hidden="true" />
         How Workshop works
       </button>
     )
@@ -944,9 +944,9 @@ function WorkshopIntroCard() {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss instructions"
-        className="absolute top-2 right-2 inline-flex items-center justify-center size-6 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 transition-colors duration-150"
+        className="absolute top-2 right-2 inline-flex items-center justify-center size-6 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2 transition-colors duration-150"
       >
-        <X className="size-3" aria-hidden />
+        <X className="size-3" aria-hidden="true" />
       </button>
       <h4
         id="workshop-intro-heading"
@@ -1056,7 +1056,7 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center text-xs text-slate-500 gap-1.5">
-        <RefreshCw className="size-3 animate-spin" aria-hidden /> Loading session…
+        <RefreshCw className="size-3 animate-spin" aria-hidden="true" /> Loading session…
       </div>
     )
   }
@@ -1076,7 +1076,7 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
     if (diffLoading) {
       return (
         <div className="flex-1 flex items-center justify-center text-xs text-slate-500 gap-1.5">
-          <RefreshCw className="size-3 animate-spin" aria-hidden /> Loading plan diff…
+          <RefreshCw className="size-3 animate-spin" aria-hidden="true" /> Loading plan diff…
         </div>
       )
     }
@@ -1158,12 +1158,12 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
                 size="sm"
                 onClick={handleFinalize}
                 disabled={finalizing || submitting}
-                className="text-xs h-8"
+                className="text-xs h-8 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
               >
                 {finalizing ? (
-                  <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+                  <Loader2 className="size-3 mr-1 animate-spin" aria-hidden="true" />
                 ) : (
-                  <CheckCircle2 className="size-3 mr-1" aria-hidden />
+                  <CheckCircle2 className="size-3 mr-1" aria-hidden="true" />
                 )}
                 Generate plan diff
               </Button>
@@ -1175,12 +1175,12 @@ function ActiveSession({ sessionId, refreshKey, onBumpList }: ActiveSessionProps
               disabled={submitting || answer.trim().length === 0 || !lastUnanswered}
               title={!lastUnanswered ? "Atlas hasn't asked yet — wait for the next question" : undefined}
               aria-label={submitting ? 'Sending answer…' : 'Send answer'}
-              className="text-xs h-8 ml-auto transition-colors duration-200"
+              className="text-xs h-8 ml-auto transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
             >
               {submitting ? (
-                <Loader2 className="size-3 mr-1 animate-spin" aria-hidden />
+                <Loader2 className="size-3 mr-1 animate-spin" aria-hidden="true" />
               ) : (
-                <Send className="size-3 mr-1" aria-hidden />
+                <Send className="size-3 mr-1" aria-hidden="true" />
               )}
               Send
             </Button>
@@ -1198,7 +1198,7 @@ function SessionHeader({ session }: { session: WorkshopSessionDetail }) {
   return (
     <div className="px-3 py-2 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
       <div className="flex items-center gap-2 mb-1 text-[11px] text-slate-500">
-        <Database className="size-3" aria-hidden />
+        <Database className="size-3" aria-hidden="true" />
         <span>
           📚 Atlas read: {conceptCount} concept{conceptCount === 1 ? '' : 's'} · master plan · idea · runtime state · V3 conventions
           {/* V1/V3 file counts are kept inside per-turn citations rather than inflated up here. */}
@@ -1306,7 +1306,7 @@ function TurnRow({ turn, onPickOption, isLast }: TurnRowProps) {
     <div className="space-y-1.5">
       <article className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2">
         <header className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-300 mb-1">
-          <Sparkles className="size-3" aria-hidden />
+          <Sparkles className="size-3" aria-hidden="true" />
           Atlas · turn {turn.index} · confidence {Math.round(turn.confidence_at_propose * 100)}%
         </header>
         <p className="text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap leading-relaxed">
@@ -1320,7 +1320,7 @@ function TurnRow({ turn, onPickOption, isLast }: TurnRowProps) {
                   key={i}
                   type="button"
                   onClick={() => onPickOption!(o)}
-                  className="inline-flex items-start text-left text-xs px-2.5 py-1 rounded-full border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-amber-900 dark:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-950/40 hover:border-amber-500 dark:hover:border-amber-500 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+                  className="inline-flex items-start text-left text-xs px-2.5 py-1 rounded-full border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-900 text-amber-900 dark:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-950/40 hover:border-amber-500 dark:hover:border-amber-500 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
                 >
                   <span className="text-[10px] text-amber-700 dark:text-amber-300 font-mono mr-1.5 shrink-0">
                     {i + 1}
@@ -1364,9 +1364,9 @@ function CitedSourcesChips({ sources }: { sources: WorkshopCitedSource[] }) {
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="text-[10px] text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 inline-flex items-center gap-1 transition-colors duration-200"
+        className="text-[10px] text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 inline-flex items-center gap-1 transition-colors duration-200 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600/50 focus-visible:ring-offset-2"
       >
-        <Quote className="size-3" aria-hidden />
+        <Quote className="size-3" aria-hidden="true" />
         cited: {sources.length} source{sources.length === 1 ? '' : 's'}
         <span className="text-slate-400 ml-0.5">[{expanded ? 'hide' : 'show'}]</span>
       </button>
@@ -1384,7 +1384,7 @@ function CitedSourcesChips({ sources }: { sources: WorkshopCitedSource[] }) {
                 key={`${s.kind}-${s.ref}-${i}`}
                 className="text-[10px] text-slate-600 dark:text-slate-300 pl-1 flex items-start gap-1.5"
               >
-                <Icon className="size-2.5 mt-0.5 shrink-0 text-slate-400" aria-hidden />
+                <Icon className="size-2.5 mt-0.5 shrink-0 text-slate-400" aria-hidden="true" />
                 <span className="min-w-0">
                   <span className="text-slate-400 mr-1">[{s.kind.replace('_', ' ')}]</span>
                   <span className="font-medium">{s.label}</span>
