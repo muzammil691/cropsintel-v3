@@ -87,6 +87,12 @@ V3 has three scoped, separately-permissioned relationship graphs. **The relation
 
 The AI enforces every wall autonomously. Any feature that breaches a wall is automatically out of scope.
 
+#### 1.4-PRE-SMOKE — Queue pipeline smoke test
+
+_launch tier: v1.0-alpha_
+
+Smoke-test phase added to verify Step 3b queue pipeline end-to-end. Remove after `atlas_queue_operations` confirms successful flow. No-op.
+
 ### 1.5 The flywheel
 
 1. Free/limited analytics attracts the global almond chain.
