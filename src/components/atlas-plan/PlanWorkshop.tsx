@@ -85,7 +85,18 @@ export function PlanWorkshop() {
         </p>
       </header>
 
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[240px_minmax(0,1fr)_280px] overflow-hidden">
+      {/*
+        1.10bd-scroll-fix — `auto-rows-[minmax(0,1fr)]` pins the implicit
+        grid row to fill the flex-1 height of this container. Without it,
+        the row template defaults to `auto` (content-sized), so grid items
+        with `h-full` resolve circularly against content height; PlanDiffPreview
+        ends up taller than the viewport with no scroll because the parent
+        bound is auto-grown. With the explicit minmax(0,1fr) the row tracks
+        the container's bounded height and `<main>`'s `h-full` becomes
+        definite for PlanDiffPreview's overflow-hidden + flex-1 body chain
+        to scroll inside the pane.
+      */}
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[240px_minmax(0,1fr)_280px] auto-rows-[minmax(0,1fr)] overflow-hidden">
         <WorkshopSessionList
           selectedSessionId={selectedSessionId}
           onSelect={(id) => {
@@ -100,7 +111,14 @@ export function PlanWorkshop() {
           className="hidden md:flex"
         />
 
-        <main className="flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
+        {/*
+          1.10bd-scroll-fix — `overflow-y-auto` (not `overflow-hidden`) so if
+          PlanDiffPreview's internal flex-1 scroll surface ever fails to bound
+          (e.g. a header that's taller than the pane), the pane itself
+          provides the scroll instead of clipping the action bar below the
+          viewport.
+        */}
+        <main className="flex flex-col min-w-0 min-h-0 h-full overflow-y-auto">
           {showStartForm ? (
             <StartSessionForm
               onStarted={(id) => {
