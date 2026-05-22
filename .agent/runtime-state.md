@@ -9,7 +9,7 @@ This is on Muzammil's Mac, outside any git repo, never committed. The Railway ag
 
 When this file is updated, also update SECRETS.md's change log on Muzammil's Mac.
 
-Last updated: 2026-05-22 (Phase 1.10bb shipped — verifier_runs.subject_matter_hits column applied to prod, Verifier write path restored)
+Last updated: 2026-05-22 (Phase 1.10bb shipped — verifier_runs.subject_matter_hits applied to prod via commit 433dd94, autonomous Builder 454s; Verifier write path restored, first clean row at 14:31:10 UTC after 15 days of db_write_failed)
 
 ---
 
@@ -33,10 +33,10 @@ Last updated: 2026-05-22 (Phase 1.10bb shipped — verifier_runs.subject_matter_
 - `wizard_sessions` (1.10am)
 - All `atlas_*` tables (1.10aj/al/am/an)
 
-**Phase 1.10bb (applied 2026-05-22 14:29 UTC by agent via pooled psql, single-file apply — NOT db push):**
+**Phase 1.10bb (applied 2026-05-22 14:29 UTC by agent via pooled psql, single-file apply — NOT db push; shipped via commit 433dd94 in autonomous Builder run, 454s elapsed):**
 - `verifier_runs.subject_matter_hits int NOT NULL DEFAULT 0` — unblocks Verifier write path. Prior 44 rows since 2026-05-07 had silently fallen through to `writeUnknownVerifierRun()` with `unknown_reason='db_write_failed'` because `verifier/src/lib/audit.ts` was inserting an unknown column.
 - Caveat: migration file `supabase/migrations/20260507120000_verifier_subject_matter_hits.sql` shares the `20260507120000` version prefix with the already-applied `20260507120000_atlas_schema_complete.sql`. The `schema_migrations` row for that version was already claimed by atlas_schema_complete, which is the root reason the verifier file was silently skipped on `db push`. The ALTER itself is idempotent (`ADD COLUMN IF NOT EXISTS`) and was applied directly; no second `schema_migrations` row possible (primary key collision). A follow-up phase should rename the verifier migration file to a unique timestamp to avoid future skips on fresh clones.
-- AC#3/AC#4 (no new `db_write_failed` rows; next Verifier row carries `passed IN (true,false)` and `unknown_reason IS NULL`) verify on the next natural Verifier audit run; column presence + writability confirmed by the apply itself.
+- **VERIFIED 2026-05-22 14:31:10 UTC** — first post-fix verifier_runs row landed with `passed=true, mode='gate', unknown_reason=null, subject_matter_hits=0, duration_ms=14071`. The 15-day db_write_failed streak (2026-05-07 15:14 → 2026-05-22 13:39) is broken. AC#3/AC#4 both pass against live data. The 44 historical db_write_failed rows remain as audit evidence — see [follow-up H](../docs/follow-ups.md) for cleanup decision.
 
 ### Edge functions (Supabase, deployed 2026-05-10; config.toml flipped 2026-05-10 in Phase 1.3c)
 
@@ -178,6 +178,10 @@ remaining work is Muzammil-side ops that the agent cannot perform from CI
 4. **End-to-end smoke test missing** — `scripts/smoke-test-v1-alpha.sh` added. ⏳ Muzammil runs it and verifies OTP delivery.
 
 Once 1, 2 and 4 complete (3 lands automatically with this PR), V3 is in preview and Atlas plans Phase 1.4 onward autonomously.
+
+### Known issues (non-blocking)
+
+5. **Verifier public URL returns 404 from external (logged 2026-05-22 post-1.10bb)** — `https://rare-happiness-production.up.railway.app/` returns Railway-level 404 ("Application not found") from outside the Railway network. Service is operational via Railway's internal service-to-service routing (confirmed by verifier_runs row at 2026-05-22 14:31:10 with `mode='gate'`, written by agent-loop.sh calling Verifier HTTP from inside the Builder Railway service). Not blocking the autonomous loop — only external probes (cockpit "test verifier" buttons, manual curl) fail. Investigate domain attachment in Railway dashboard (`rare-happiness` service → Settings → Networking → Public Networking); the public domain may have detached during a redeploy. Logged as follow-up E.
 
 ---
 

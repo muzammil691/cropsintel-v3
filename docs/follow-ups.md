@@ -126,6 +126,184 @@ shape may have shifted).
 
 ---
 
+## E — Verifier public URL 404 (Railway domain detached or redeploy URL change)
+
+**Logged:** 2026-05-22 (during Phase 1.10bb verification)
+
+**What:** `https://rare-happiness-production.up.railway.app/` returns Railway-level
+404 (`{"status":"error","code":404,"message":"Application not found"}`) from
+external probes. Both `/health` and `/audit` 404. The Verifier service itself
+is operational — at 2026-05-22 14:31:10 UTC `agent-loop.sh` running inside the
+Builder Railway service successfully POSTed `/audit` and got `passed=true` back
+(verified via a `mode='gate'` row in `verifier_runs`). So service-to-service
+routing inside Railway still works; only the public domain is broken.
+
+**Why this matters:** the cockpit's "test verifier" buttons + any external curl
+probe + monitoring tools that hit the public URL all fail. The autonomous loop
+is unaffected. But anyone diagnosing the system from outside (including future-
+you with `curl /health`) will incorrectly conclude the service is down.
+
+**Suggested fix:** open Railway dashboard → `rare-happiness` service (ID
+`bfa035e9-7e8d-46da-9a61-dc636fd225d9`) → Settings → Networking → Public
+Networking. Likely outcomes:
+1. Public domain detached (most common after a redeploy without re-attaching)
+   — click "Generate Domain" or attach the old one. Done.
+2. New domain shown with different subdomain — update `VERIFIER_URL` env on
+   Atlas (`courteous-simplicity`) and Builder (`cropsintel-agent`), plus
+   `.env.example` and runtime-state.md.
+3. Service is fine but on a private-only deployment — decide whether external
+   access is wanted (probably yes for observability) and attach a public domain.
+
+**Owner:** Muzammil (needs Railway dashboard access)
+
+**Detected:** Phase 1.10bb verification (2026-05-22 14:45 UTC)
+
+---
+
+## F — snapshot.ts reads non-existent verifier_runs.verdict column
+
+**Logged:** 2026-05-22 (during Phase 1.10bb workshop investigation)
+
+**What:** [atlas/src/cron/snapshot.ts:41-47](../atlas/src/cron/snapshot.ts#L41-L47):
+
+```ts
+const { data: recentRuns } = await sb
+  .from('verifier_runs')
+  .select('verdict')                              // ← column doesn't exist
+  .gte('created_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString())
+const passes = (recentRuns ?? []).filter(r => r.verdict === 'pass').length
+```
+
+Two bugs in 6 lines:
+1. `verifier_runs` has no `verdict` column — only `passed boolean` (Phase 1.10v
+   added `verdict` to the in-memory `VerificationResult` type for HTTP responses
+   but never wrote a migration to add it to the table).
+2. Column is `ran_at`, not `created_at`. `.gte('created_at', ...)` always
+   filters by NULL → returns the empty set (or every row, depending on PostgREST
+   behavior; either way, not what's intended).
+
+**Why this matters:** every Atlas snapshot since this code shipped has logged
+`passRate = 0% / null`. Silent corruption of a monitoring metric.
+
+**Suggested fix:** replace `verdict` → `passed`, replace `created_at` → `ran_at`,
+update the filter to `.eq('passed', true)`. ~6 LOC.
+
+```ts
+.select('passed')
+.gte('ran_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString())
+.eq('passed', true)
+```
+
+**Owner:** Atlas (queueable as a small spec — Builder-fixable)
+
+**Detected:** Phase 1.10bb evidence-gathering grep (2026-05-22)
+
+---
+
+## G — memory/agent-history.ts reads non-existent verifier_runs.verdict column
+
+**Logged:** 2026-05-22 (during Phase 1.10bb workshop investigation)
+
+**What:** [memory/src/ingest/agent-history.ts:43,122,211](../memory/src/ingest/agent-history.ts#L43)
+declares a `VerifierRow` interface with `verdict: string | null` and `created_at:
+string | null`. Same bugs as follow-up F:
+
+```ts
+interface VerifierRow {
+  ...
+  verdict: string | null            // ← column doesn't exist
+  ...
+  created_at: string | null         // ← actual column is ran_at
+}
+...
+lines.push(`verdict: ${r.verdict ?? 'unknown'}`)
+```
+
+**Why this matters:** every verifier-failure memory chunk emitted by the memory
+service has stamped `verdict: unknown` regardless of the actual outcome. The
+chunks have been useless as searchable evidence since the ingest landed.
+
+**Suggested fix:** update `VerifierRow` interface to match the actual schema
+(`passed boolean | null`, `ran_at timestamptz`). Render `passed=true → 'pass'`,
+`passed=false → 'fail'`, `passed=null → unknown_reason`. ~15 LOC.
+
+**Owner:** Atlas (queueable as a small spec)
+
+**Detected:** Phase 1.10bb evidence-gathering grep (2026-05-22)
+
+---
+
+## H — 44 historical db_write_failed verifier_runs rows from 2026-05-07 to 2026-05-22
+
+**Logged:** 2026-05-22 (post-Phase 1.10bb verification)
+
+**What:** between 2026-05-07 15:14:00 UTC and 2026-05-22 13:39:15 UTC the
+Verifier silently fell through to `writeUnknownVerifierRun(..., 'db_write_failed')`
+on every audit because of the migration drift fixed in Phase 1.10bb. The
+resulting 44 rows have `passed=NULL`, `unknown_reason='db_write_failed'`, and
+no real verdict signal. They're harmless (Phase 1.10bb code reads `.passed`
+filtered to `true|false`, so these rows don't poison aggregates) but they
+add noise to any time-series queries on verifier_runs.
+
+**Why this matters:** purely cosmetic. The rows are accurate audit evidence
+that the system was broken for 15 days. Keeping them as a paper trail has
+value; deleting them lies about history.
+
+**Suggested fix (three options, archive preferred):**
+
+1. **Archive** — add a column like `lifecycle_status text NOT NULL DEFAULT 'live'`
+   and flip these 44 rows to `'historical_db_write_failed'`. Aggregation queries
+   filter `lifecycle_status = 'live'`. Pattern matches 1.10be's `legacy_inert`
+   on `atlas_dispatches`.
+2. **Delete** — single SQL DELETE. Loses the audit trail.
+3. **Leave** — accept the noise; teach readers to filter `unknown_reason IS NULL`.
+
+Archive is consistent with the 1.10be precedent. Small spec (~15 min Builder).
+
+**Owner:** Muzammil decision (archive vs delete vs leave)
+
+**Detected:** Phase 1.10bb verification (2026-05-22)
+
+---
+
+## I — stray atlas_verifier_runs table possibly created by phase-1.10bb-fix-verifier-db-write-failures (f95bccb)
+
+**Logged:** 2026-05-22 (during Phase 1.10bb workshop investigation)
+
+**What:** the earlier autonomous attempt `phase-1.10bb-fix-verifier-db-write-failures.md`
+(shipped 2026-05-21 via commit `f95bccb`, 7 files, 407s) was authored against
+the WRONG TABLE NAME — it referred to `atlas_verifier_runs` (with the `atlas_`
+prefix). The real table is `verifier_runs`. That spec's RLS/migration changes
+either:
+1. Created a new empty `atlas_verifier_runs` table that's never written to, OR
+2. No-op'd because the target table didn't exist, OR
+3. Targeted a different actual table
+
+We never verified which.
+
+**Why this matters:** if a stray `atlas_verifier_runs` table exists, it's
+confusing dead weight in the schema. Future investigators (and Atlas itself
+reading from `information_schema`) might assume it's authoritative.
+
+**Suggested fix:** quick check via Supabase MCP:
+
+```sql
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public' AND table_name = 'atlas_verifier_runs';
+-- If exists:
+SELECT count(*) FROM public.atlas_verifier_runs;
+-- If 0 rows: DROP TABLE public.atlas_verifier_runs;
+-- If nonzero rows: investigate before dropping
+```
+
+Single migration if cleanup is warranted.
+
+**Owner:** Atlas (queueable as ~10-LOC investigative spec)
+
+**Detected:** Phase 1.10bb evidence-gathering grep (2026-05-22)
+
+---
+
 ## Adding a follow-up
 
 Append a new `## X — Title` section in chronological order. Keep the
