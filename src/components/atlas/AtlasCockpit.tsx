@@ -100,6 +100,16 @@ export function AtlasCockpit() {
   // sync without polling. The count includes both 'queued' (waiting to be
   // picked up) and 'building' (actively running) rows — the operator cares
   // about total in-flight work, not just rows still in queue.
+  //
+  // 1.10be — the .in() whitelist below is the legacy_inert exclusion mechanism.
+  // `legacy_inert` is the terminal status applied by migration phase_1_10be_orphan_archive
+  // to the 8 orphan rows the pre-Step-3b /approve auto-dispatch path inserted
+  // (tool='builder.workshop_diff_spec', initiated_by='workshop_diff_approval:…').
+  // The Builder never consumed those rows (it reads filesystem queue, not
+  // atlas_dispatches), but they were counted by the previous filter and inflated
+  // the badge by 8. New terminal statuses introduced by future cleanup migrations
+  // belong outside this whitelist by default; add to the IN array only for
+  // actively-counted lifecycle states.
   const [dispatchQueueCount, setDispatchQueueCount] = useState(0)
   const refreshDispatchQueueCount = useCallback(async () => {
     try {
