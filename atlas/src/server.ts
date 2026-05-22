@@ -68,6 +68,7 @@ import {
 import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop, getConductorState } from './cron/conductor'
+import { getBroadcasterObservability } from './lib/workshop-whatsapp-broadcaster'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb, verifyTrustModePersistence } from './lib/trust-mode'
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
@@ -2137,7 +2138,10 @@ export async function startServer(): Promise<void> {
       // Step 2a — conductor_state block surfaces the autonomous heartbeat loop
       // (last tick, last designer audit, last remediation, in-flight builder
       // tasks) so the operator isn't surprised by autonomous activity.
+      // C.1 — workshop_broadcaster_state surfaces the 30s sub-tick that
+      // pings the session owner on WhatsApp when a new workshop turn fires.
       const [gitState, conductorState] = await Promise.all([getGitState(), getConductorState()])
+      const broadcasterState = getBroadcasterObservability()
       json(res, 200, {
         status: 'ok',
         service: 'cropsintel-atlas',
@@ -2148,6 +2152,7 @@ export async function startServer(): Promise<void> {
         queue_frozen: isQueueFrozen(),
         queue_freeze_reason: getQueueFreezeReason(),
         conductor_state: conductorState,
+        workshop_broadcaster_state: broadcasterState,
       })
       return
     }

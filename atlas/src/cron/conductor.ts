@@ -52,6 +52,17 @@ const autoRequeuedFailures = new Set<string>()
 // Cleared every 6h so genuinely-still-stuck specs eventually re-notify.
 const pingedZombies = new Map<string, number>()  // taskId → ping timestamp (ms)
 
+// C.1 — Workshop → WhatsApp broadcaster sub-tick. Independent setInterval
+// at 30s (or ATLAS_WORKSHOP_BROADCASTER_MS) so the response time on a new
+// workshop turn is bounded by 30s, not the 5-minute conductor heartbeat.
+// The broadcaster is best-effort and rate-self-limits via the idempotency
+// column plan_workshop_sessions.last_whatsapp_ping_at — overlapping ticks
+// are also guarded by tickInProgress below.
+import {
+  tickWorkshopBroadcaster,
+  WORKSHOP_BROADCASTER_INTERVAL_MS,
+} from '../lib/workshop-whatsapp-broadcaster'
+
 // 1.10bd Step 2a — Observability state for /health. Updated as runHeartbeat
 // makes progress; read by the server's /health handler via getConductorState().
 // Pure in-memory; no DB read on the /health hit path. In-flight count is a
@@ -113,6 +124,51 @@ export function startConductorLoop(): void {
   console.log(`[atlas-conductor] starting heartbeat, interval=${HEARTBEAT_INTERVAL_MS}ms`)
   void runHeartbeat()
   setInterval(() => void runHeartbeat(), HEARTBEAT_INTERVAL_MS)
+
+  // C.1 — Workshop→WhatsApp broadcaster sub-tick. Separate interval so a new
+  // workshop question pings the user within ~30s instead of waiting up to
+  // 5 minutes for the next heartbeat. Re-entrancy guarded by
+  // workshopBroadcasterTickInProgress; a long tick won't stack.
+  console.log(
+    `[atlas-conductor] starting workshop-broadcaster sub-tick, interval=${WORKSHOP_BROADCASTER_INTERVAL_MS}ms`,
+  )
+  void runWorkshopBroadcasterTick()
+  setInterval(() => void runWorkshopBroadcasterTick(), WORKSHOP_BROADCASTER_INTERVAL_MS)
+}
+
+let workshopBroadcasterTickInProgress = false
+async function runWorkshopBroadcasterTick(): Promise<void> {
+  // Re-entrancy guard: if a previous tick is still running (slow Twilio,
+  // slow DB), skip rather than stack. The idempotency column means the
+  // skipped tick costs nothing — the next tick picks up where this one
+  // left off.
+  if (workshopBroadcasterTickInProgress) return
+  workshopBroadcasterTickInProgress = true
+  try {
+    const r = await tickWorkshopBroadcaster()
+    if (r.sent > 0 || r.failed > 0) {
+      console.log(
+        `[atlas-conductor] workshop-broadcaster tick: candidates=${r.candidates} sent=${r.sent} skipped=${r.skipped} failed=${r.failed}`,
+      )
+    }
+  } catch (err) {
+    // Broadcaster must NEVER take down the conductor. Log + best-effort audit.
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[atlas-conductor] workshop-broadcaster tick crashed:', msg)
+    const sb = getSupabaseClient()
+    if (sb) {
+      try {
+        await sb.from('agent_audit_log').insert({
+          agent_name: 'atlas',
+          action_type: 'workshop_whatsapp_broadcast_tick_error',
+          payload: { error: msg },
+          status: 'error',
+        })
+      } catch { /* observability only */ }
+    }
+  } finally {
+    workshopBroadcasterTickInProgress = false
+  }
 }
 
 async function runHeartbeat(): Promise<void> {
