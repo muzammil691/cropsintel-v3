@@ -90,6 +90,42 @@ without DDL.
 
 ---
 
+## C — news-scraper RSS feed 404
+
+**Status:** Active failure (5x/day per cron schedule)
+
+**Symptom:** `almonds.com/rss/news` returns 404 on every fetch
+
+**Impact:** News intelligence pipeline silently empty since at least 2026-05-10
+
+**Suggested fix:** (a) replace feed URL with an alternative ABC news source, OR
+(b) scrape `almondboard.com/news/` directly via HTML parser, OR (c) deprecate
+the scraper entirely if news isn't core to V1.0-alpha
+
+**Owner:** Muzammil to decide path forward
+
+**Detected:** Step 1 verification (2026-05-22 morning)
+
+---
+
+## D — abc-scraper using deprecated Gemini model
+
+**Status:** Active failure (2x/day per cron schedule)
+
+**Symptom:** Calls to `gemini-2.0-flash` return 404 — Google deprecated the model
+
+**Impact:** ABC position report ingestion pipeline failing silently
+
+**Suggested fix:** Update model ID in the scraper config to `gemini-2.5-flash`
+or newer. Verify the prompt template still works with the newer model (output
+shape may have shifted).
+
+**Owner:** Muzammil to decide model + verify
+
+**Detected:** Step 1 verification (2026-05-22 morning)
+
+---
+
 ## Adding a follow-up
 
 Append a new `## X — Title` section in chronological order. Keep the
