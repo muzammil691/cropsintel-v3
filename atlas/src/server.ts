@@ -67,7 +67,7 @@ import {
 } from './lib/storage'
 import { randomUUID } from 'crypto'
 import { startSnapshotCron } from './cron/snapshot'
-import { startConductorLoop } from './cron/conductor'
+import { startConductorLoop, getConductorState } from './cron/conductor'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb, verifyTrustModePersistence } from './lib/trust-mode'
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
@@ -2134,7 +2134,10 @@ export async function startServer(): Promise<void> {
     if (url === '/health' && method === 'GET') {
       // 1.10bd: surface git_state + queue_frozen so the operator can detect
       // ahead-of-remote / diverged / frozen states without SSHing into Railway.
-      const gitState = await getGitState()
+      // Step 2a — conductor_state block surfaces the autonomous heartbeat loop
+      // (last tick, last designer audit, last remediation, in-flight builder
+      // tasks) so the operator isn't surprised by autonomous activity.
+      const [gitState, conductorState] = await Promise.all([getGitState(), getConductorState()])
       json(res, 200, {
         status: 'ok',
         service: 'cropsintel-atlas',
@@ -2144,6 +2147,7 @@ export async function startServer(): Promise<void> {
         git_state: gitState,
         queue_frozen: isQueueFrozen(),
         queue_freeze_reason: getQueueFreezeReason(),
+        conductor_state: conductorState,
       })
       return
     }

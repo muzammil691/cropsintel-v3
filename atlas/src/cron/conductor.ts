@@ -52,6 +52,45 @@ const autoRequeuedFailures = new Set<string>()
 // Cleared every 6h so genuinely-still-stuck specs eventually re-notify.
 const pingedZombies = new Map<string, number>()  // taskId → ping timestamp (ms)
 
+// 1.10bd Step 2a — Observability state for /health. Updated as runHeartbeat
+// makes progress; read by the server's /health handler via getConductorState().
+// Pure in-memory; no DB read on the /health hit path. In-flight count is a
+// cheap filesystem readdir done at read time.
+let lastHeartbeatAt: Date | null = null
+let lastAuditedCommit: { sha: string; subject: string; verdict: string; at: Date } | null = null
+let lastRemediationSpec: { filename: string; commit_sha: string | null; at: Date } | null = null
+
+export interface ConductorObservability {
+  last_heartbeat_at: string | null
+  heartbeat_interval_ms: number
+  last_audited_commit: { sha: string; subject: string; verdict: string; at: string } | null
+  last_remediation_spec: { filename: string; commit_sha: string | null; at: string } | null
+  in_flight_builder_tasks: number
+  in_flight_filenames: string[]
+}
+
+export async function getConductorState(): Promise<ConductorObservability> {
+  // Filesystem readdir to count .agent/tasks/in-progress/*.md. Skips _template.md
+  // and .gitkeep; matches the same predicate gatherState() uses internally.
+  let inFlight: string[] = []
+  try {
+    const entries = await readdir(resolve(REPO_ROOT, '.agent/tasks/in-progress'))
+    inFlight = entries.filter((f) => f.endsWith('.md') && f !== '_template.md')
+  } catch { /* missing dir → in-flight is empty */ }
+  return {
+    last_heartbeat_at: lastHeartbeatAt ? lastHeartbeatAt.toISOString() : null,
+    heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
+    last_audited_commit: lastAuditedCommit
+      ? { sha: lastAuditedCommit.sha, subject: lastAuditedCommit.subject, verdict: lastAuditedCommit.verdict, at: lastAuditedCommit.at.toISOString() }
+      : null,
+    last_remediation_spec: lastRemediationSpec
+      ? { filename: lastRemediationSpec.filename, commit_sha: lastRemediationSpec.commit_sha, at: lastRemediationSpec.at.toISOString() }
+      : null,
+    in_flight_builder_tasks: inFlight.length,
+    in_flight_filenames: inFlight,
+  }
+}
+
 interface Diagnosis {
   signals: Signal[]
   recommendedActions: Action[]
@@ -77,6 +116,10 @@ export function startConductorLoop(): void {
 }
 
 async function runHeartbeat(): Promise<void> {
+  // 1.10bd Step 2a — stamp the heartbeat tick regardless of trust mode so
+  // /health can show "Conductor is alive but trust-mode is stopped".
+  lastHeartbeatAt = new Date()
+
   const trustMode = getCurrentMode()
 
   if (trustMode === 'stopped') {
@@ -717,6 +760,17 @@ async function designerAuditOnUiCommit(
   }
 
   const audit = result.result as { verdict?: string; gaps?: Array<Record<string, unknown>> } | undefined
+  // 1.10bd Step 2a — observability: record every reachable verdict (pass/fail/etc.),
+  // not just fails. Lets /health surface "Designer last reviewed X 8 min ago" even
+  // when no remediation followed.
+  if (audit?.verdict) {
+    lastAuditedCommit = {
+      sha: commit.sha,
+      subject: commit.subject,
+      verdict: audit.verdict,
+      at: new Date(),
+    }
+  }
   if (!audit || audit.verdict !== 'fail') return
 
   await logDecision({
@@ -764,12 +818,18 @@ ${gaps.map((g, i) => `${i + 1}. **[${g.severity ?? 'warn'}] ${g.check ?? 'unknow
 3. Re-run Designer audit — verdict must be \`pass\`.
 `
 
-  await dispatch({
+  const dispatchResult = await dispatch({
     tool: 'builder.queue_spec' as ToolName,
     arguments: { filename, body },
     initiatedBy: 'cron',
     trustMode: 'auto',
   })
+  // 1.10bd Step 2a — surface the most recent remediation in /health. We
+  // record on every dispatch attempt (status check is left to the operator
+  // inspecting atlas_dispatches); the goal is "what was the last spec the
+  // Conductor decided to draft," not "did the dispatch succeed."
+  const remediationCommitSha = ((dispatchResult.result as { commit_sha?: string } | undefined)?.commit_sha) ?? null
+  lastRemediationSpec = { filename, commit_sha: remediationCommitSha, at: new Date() }
   await sendWhatsAppReply(
     MUZAMMIL_WHATSAPP,
     `🎨 Design remediation queued for ${commit.sha.slice(0, 8)} (${gaps.length} gaps).`,
