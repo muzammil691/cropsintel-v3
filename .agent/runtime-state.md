@@ -9,7 +9,7 @@ This is on Muzammil's Mac, outside any git repo, never committed. The Railway ag
 
 When this file is updated, also update SECRETS.md's change log on Muzammil's Mac.
 
-Last updated: 2026-05-10 (Phase 1.3c shipped — verify_jwt config flipped, drift repair queued for Muzammil, smoke-test script added, frontend deploy workflow already in place)
+Last updated: 2026-05-22 (Phase 1.10bb shipped — verifier_runs.subject_matter_hits column applied to prod, Verifier write path restored)
 
 ---
 
@@ -32,6 +32,11 @@ Last updated: 2026-05-10 (Phase 1.3c shipped — verify_jwt config flipped, drif
 - `concepts` (1.10aj)
 - `wizard_sessions` (1.10am)
 - All `atlas_*` tables (1.10aj/al/am/an)
+
+**Phase 1.10bb (applied 2026-05-22 14:29 UTC by agent via pooled psql, single-file apply — NOT db push):**
+- `verifier_runs.subject_matter_hits int NOT NULL DEFAULT 0` — unblocks Verifier write path. Prior 44 rows since 2026-05-07 had silently fallen through to `writeUnknownVerifierRun()` with `unknown_reason='db_write_failed'` because `verifier/src/lib/audit.ts` was inserting an unknown column.
+- Caveat: migration file `supabase/migrations/20260507120000_verifier_subject_matter_hits.sql` shares the `20260507120000` version prefix with the already-applied `20260507120000_atlas_schema_complete.sql`. The `schema_migrations` row for that version was already claimed by atlas_schema_complete, which is the root reason the verifier file was silently skipped on `db push`. The ALTER itself is idempotent (`ADD COLUMN IF NOT EXISTS`) and was applied directly; no second `schema_migrations` row possible (primary key collision). A follow-up phase should rename the verifier migration file to a unique timestamp to avoid future skips on fresh clones.
+- AC#3/AC#4 (no new `db_write_failed` rows; next Verifier row carries `passed IN (true,false)` and `unknown_reason IS NULL`) verify on the next natural Verifier audit run; column presence + writability confirmed by the apply itself.
 
 ### Edge functions (Supabase, deployed 2026-05-10; config.toml flipped 2026-05-10 in Phase 1.3c)
 
@@ -94,6 +99,9 @@ Atlas internals shipped:
 - Zombie reaper + heartbeat (1.10ag)
 - Verifier db_write_failed fix (1.10az)
 - Cockpit polish (1.10ba)
+- Verifier write path unblocked — `subject_matter_hits` column applied 2026-05-22 (1.10bb)
+
+Pre-flight health check 2026-05-22 14:28 UTC: Atlas 200, Verifier 200, Designer 200, Council 200, Memory 200, Builder (self) 200, Adela 404 (Application not found — out of scope of 1.10bb; flag for separate follow-up).
 
 ---
 
