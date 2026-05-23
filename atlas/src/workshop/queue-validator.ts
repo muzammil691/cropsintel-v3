@@ -20,8 +20,8 @@
 //
 // Wiring: `atlas/src/lib/tools.ts:builderQueueSpec` and `builderQueueSpecsBatch`
 // call `validateQueueCandidateBody` before writing the spec into
-// `.agent/tasks/queued/`. A refusal short-circuits the queue write and the
-// stub question file is left for a human to triage.
+// `.agent/tasks/queued/`. A refusal short-circuits the queue write and a
+// question-file scaffold is left under `.agent/questions/` for a human to triage.
 //
 // ─── Quoted from V3-CODING-INSTRUCTIONS.md §8 ("Spec frontmatter flags") ───
 // When Atlas drafts a task spec into `.agent/tasks/queued/`, the Workshop
