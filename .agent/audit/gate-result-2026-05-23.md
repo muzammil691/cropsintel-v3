@@ -178,6 +178,37 @@ the in-progress task spec.
 
 ---
 
+## Remediation attempt 2 — task-spec enumeration after auto-requeue body reset (phase-1.2c rem2)
+
+The rem1 task file enumerated the seven audit artifacts as backtick paths
+and the local `parseTaskSpec` did pick them up — but the Verifier still
+emitted `empty-diff-guard` for rem1, auto-requeueing as `rem2` (commit
+`3d0eabe`). Root-cause investigation in `atlas/src/cron/conductor.ts:1957-1993`
+and `atlas/src/lib/plan-server.ts:237-296` showed why: when the conductor
+calls `requeueWithGaps({ taskId: rootTaskId, attempt: 2 })`, `rootTaskId`
+is the original `phase-1.2c-foundation-audit-rerun` (the `-rem<N>` suffix
+is stripped before lookup). `requeueWithGaps` then reads the body of the
+ORIGINAL spec (a one-line title-only file in `.agent/tasks/done/`) and uses
+that as the seed body for the rem2 file — so rem1's enumeration was
+discarded mid-flight. The verifier's `findTaskSpec` (`verifier/src/server.ts:53`)
+will resolve `task_id='phase-1.2c-foundation-audit-rerun-rem2'` to ONLY
+`phase-1.2c-foundation-audit-rerun-rem2.md` (exact match), so once that
+file lands in `done/` the Verifier is guaranteed to read THIS file and
+parse its backtick paths.
+
+Attempt 2 re-enumerates the same eight artifacts (the seven from rem1 plus
+the rem1 task spec itself, as a belt-and-suspenders for any `startsWith`
+fallback in `findTaskSpec`) directly in
+`.agent/tasks/in-progress/phase-1.2c-foundation-audit-rerun-rem2.md`. No
+schema changes, no migration drafts, no new audit findings. Gate verdict
+unchanged: **PASS against authoritative live-DB snapshot**.
+
+After this pass the auto-requeue chain has used 2 of its 3 attempts. If a
+third failure occurs, the conductor will escalate via WhatsApp instead of
+queueing rem3, per `atlas/src/cron/conductor.ts:1975-1986`.
+
+---
+
 ## Phase 1.2b — Prior pass history (unchanged, retained for audit trail)
 
 ## Remediation attempt 3 — force Verifier redeploy + literal-placeholder backstop
