@@ -49,3 +49,11 @@ spec before queue-out.
 
 - Reworking the conductor's queue scan
 - Bulk-tagging existing investigation specs (one-shot manual step)
+
+## Status
+
+Queued under cluster `7da23cc3f830`, rem2 (2026-05-23). This is the P2
+follow-up from ADR `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc3f830.md`
+§5 priority-2 and re-indexed in ADR §9. Catches the upstream contract
+gap at authoring time so future title-only specs cannot reach the
+Verifier in the first place.

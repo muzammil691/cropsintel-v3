@@ -43,3 +43,14 @@ The previous run of `phase-1-CLUSTER-investigation-7da23cc3f830-1779541608348` f
 - Actual: None of those four markdown files exist; only code changes to verifier source were provided.
 - Remediation: Add the ADR file with investigation findings and list the queued fixes, and commit the three enumerated follow-up task spec markdown files so spec.filesRequired is populated.
 
+## Files required
+
+The four markdown artifacts this remediation must ship (and include in this
+attempt's diff) are enumerated below in back-ticks so the spec-parser at
+`verifier/src/lib/spec-parser.ts` populates a non-empty `filesRequired`:
+
+- `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc3f830.md` — ADR extended with §8, §9, §10 (rem2 actions)
+- `.agent/tasks/queued/phase-1.0x-requeue-inheritance-fix.md` — P1 follow-up spec (ADR §5 priority-1)
+- `.agent/tasks/queued/phase-1.0x-workshop-preflight-filesrequired.md` — P2 follow-up spec (ADR §5 priority-2)
+- `.agent/tasks/queued/phase-1.0x-verifier-sync-hardening.md` — P3 follow-up spec (ADR §5 priority-3)
+

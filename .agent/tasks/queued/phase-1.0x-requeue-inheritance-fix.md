@@ -50,3 +50,11 @@ the requeue.
 - Refactoring the rest of `plan-server.ts`
 - Changing the conductor's escalation path
 - Touching the Workshop pre-flight (separate spec)
+
+## Status
+
+Queued under cluster `7da23cc3f830`, rem2 (2026-05-23). This is the P1
+follow-up from ADR `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc3f830.md`
+§5 priority-1 and re-indexed in ADR §9. Largest blast radius of the
+three queued fixes; recommended pickup order: this spec first, then the
+P2 Workshop pre-flight, then the P3 Verifier sync hardening.

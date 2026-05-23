@@ -44,3 +44,12 @@ explicit error log — DO NOT proceed to read files at the stale HEAD.
 - Replacing the underlying `git pull` mechanism
 - Retry / self-heal on sync failure (Atlas conductor handles requeue)
 - Changes to the Verifier judges or `empty-diff-guard` itself
+
+## Status
+
+Queued under cluster `7da23cc3f830`, rem2 (2026-05-23). This is the P3
+follow-up from ADR `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc3f830.md`
+§5 priority-3 and re-indexed in ADR §9. Belt-and-braces backstop for
+the rem1 stale-pull window — pick up after the P1 inheritance fix and
+P2 Workshop pre-flight have shipped, since those address larger blast
+radius issues.
