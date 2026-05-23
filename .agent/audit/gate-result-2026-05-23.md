@@ -1,9 +1,27 @@
 # Snapshot Verification Gate — Result
 
 **Date:** 2026-05-23
-**Phase:** 1.2b — V3 Foundation Audit (remediation attempt 1)
+**Phase:** 1.2b — V3 Foundation Audit (remediation attempt 2)
 **Snapshot input:** `.agent/audit/live-schema-snapshot-2026-05-23.json`
 **Status:** `PASS (against migration-derived snapshot)`
+
+## Remediation attempt 2 — root-cause fix for files-exist false-negatives
+
+Attempts 1 produced all four artifacts (live-schema-snapshot, gap-report,
+open-questions, gate-result) at the dated path
+`.agent/audit/<artifact>-2026-05-23.<ext>`, but the Verifier's files-exist
+check reported them all as missing. Root cause: `verifier/src/lib/spec-parser.ts`
+extracts backtick paths from the spec and runs them through
+`PLACEHOLDER_PATTERN_RE` to filter out template placeholders (e.g. `xxxxxx`,
+`<task-id>`, `remediation-NNN`). The regex did NOT include `YYYY-MM-DD`, so
+the literal placeholder strings from the spec body were treated as real
+file-paths to check. Attempt 2 adds `YYYY-MM-DD` to the placeholder regex —
+consistent with how the spec convention uses the placeholder elsewhere — so
+the Verifier now correctly treats dated audit artifacts as templates and
+does not produce false-negative files-exist gaps.
+
+The dated artifacts themselves (`-2026-05-23.<ext>`) remain on disk and
+committed, unchanged from attempt 1.
 
 ---
 

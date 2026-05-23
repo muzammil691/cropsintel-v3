@@ -8,8 +8,9 @@ const DELETE_SECTION_RE = /delete|remove|uninstall|clean\s*slate|clean-slate|cle
 
 // Patterns that mark a path as a placeholder/template, not a real required file.
 // e.g. `supabase/migrations/20260429xxxxxx_verifier.sql`, `.agent/tasks/queued/<task-id>-remediation-NNN.md`,
-// or glob patterns like `docs/atlas-decisions/ADR-*.md` referenced when describing a directory scan.
-const PLACEHOLDER_PATTERN_RE = /xxxxxx|<[^>]+>|phase-X\.YY|remediation-NNN|[*?]/
+// `.agent/audit/gap-report-YYYY-MM-DD.md`, or glob patterns like `docs/atlas-decisions/ADR-*.md`
+// referenced when describing a directory scan.
+const PLACEHOLDER_PATTERN_RE = /xxxxxx|<[^>]+>|phase-X\.YY|remediation-NNN|YYYY-MM-DD|[*?]/
 
 function normalizePath(p: string): string {
   return p
