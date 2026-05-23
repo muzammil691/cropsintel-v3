@@ -217,6 +217,40 @@ export interface VerifierGap {
   description?: string
 }
 
+// Cluster 7da23cc3f830 fix — body source selection for chained remediations.
+// Returns the most recent existing spec body so each retry inherits the
+// Builder's enumeration work from the prior attempt (esp. the back-ticked
+// file paths Verifier reads as spec.filesRequired). Without this, every
+// retry reseeds from the title-only original spec, which is the proximate
+// cause of the 7da23cc3f830 Verifier-cluster loop.
+//
+// Lookup chain for attempt N: prior rem(N-1), then rem(N-2), ..., then rem1,
+// then the original. Each candidate is checked in failed/ then done/.
+export async function findInheritedBody(args: {
+  taskId: string
+  attempt: number
+  repoRoot?: string
+}): Promise<{ content: string; source: string } | null> {
+  const root = args.repoRoot ?? REPO_ROOT
+  const remFilename = (k: number) =>
+    k === 1 ? `${args.taskId}-rem.md` : `${args.taskId}-rem${k}.md`
+
+  const candidates: string[] = []
+  for (let k = args.attempt - 1; k >= 1; k--) candidates.push(remFilename(k))
+  candidates.push(`${args.taskId}.md`)
+
+  for (const filename of candidates) {
+    for (const bucket of ['failed', 'done'] as const) {
+      const p = resolve(root, `.agent/tasks/${bucket}`, filename)
+      try {
+        const content = await readFile(p, 'utf-8')
+        return { content, source: `${bucket}/${filename}` }
+      } catch { /* not in this bucket */ }
+    }
+  }
+  return null
+}
+
 export async function requeueWithGaps(args: {
   taskId: string
   gaps: VerifierGap[]
@@ -232,20 +266,14 @@ export async function requeueWithGaps(args: {
   if (attempt > 3) {
     return { ok: false, reason: '3-attempt cap exceeded — escalate via WhatsApp instead of looping' }
   }
-  // Find the failed spec — prefer failed/, fall back to done/ (some legacy
-  // builder runs land in done/ with passed=false).
-  const failedPath = resolve(REPO_ROOT, '.agent/tasks/failed', `${args.taskId}.md`)
-  const donePath = resolve(REPO_ROOT, '.agent/tasks/done', `${args.taskId}.md`)
-  let originalContent: string | null = null
-  for (const p of [failedPath, donePath]) {
-    try {
-      originalContent = await readFile(p, 'utf-8')
-      break
-    } catch { /* try next */ }
-  }
-  if (!originalContent) {
+  // Prefer the most recent existing remediation body over the title-only
+  // original — preserves Builder's prior enumeration (esp. file paths that
+  // Verifier reads as spec.filesRequired).
+  const inherited = await findInheritedBody({ taskId: args.taskId, attempt })
+  if (!inherited) {
     return { ok: false, reason: `original spec not found in failed/ or done/ for ${args.taskId}` }
   }
+  const originalContent = inherited.content
 
   // Compute remediation filename. Skip if already queued/in-progress (idempotent).
   const remSuffix = attempt === 1 ? '-rem' : `-rem${attempt}`
