@@ -8,7 +8,8 @@
 // the upstream contract gap at queue-out time so the Verifier never sees it.
 //
 // Contract:
-//   • Reads a candidate spec from disk via `specPath`.
+//   • Reads a candidate spec from disk via `specPath` (or from an in-memory
+//     body via `validateQueueCandidateBody`).
 //   • Parses the YAML frontmatter (via `lib/frontmatter.parseSpec`).
 //   • Re-runs the same path-extraction logic the Verifier's `parseTaskSpec`
 //     uses, so authoring expectations match downstream validation.
@@ -16,10 +17,73 @@
 //     `audit-only: true`, the validator returns `{ ok: false }` and (by
 //     default) writes a stub `.agent/questions/<task-id>-q.md` so a human
 //     reviews the spec — per the system prompt §6 question contract.
+//
+// Wiring: `atlas/src/lib/tools.ts:builderQueueSpec` and `builderQueueSpecsBatch`
+// call `validateQueueCandidateBody` before writing the spec into
+// `.agent/tasks/queued/`. A refusal short-circuits the queue write and the
+// stub question file is left for a human to triage.
+//
+// ─── Quoted from V3-CODING-INSTRUCTIONS.md §8 ("Spec frontmatter flags") ───
+// When Atlas drafts a task spec into `.agent/tasks/queued/`, the Workshop
+// pre-flight (`atlas/src/workshop/queue-validator.ts`) refuses to queue it
+// if the body has no concrete `Files required` paths AND the frontmatter
+// does not declare the `audit-only` escape hatch.
+//
+// `audit-only: true` — Use this flag, and ONLY this flag, when the spec's
+// deliverable is a markdown ADR rather than a code diff. Examples:
+// cluster-investigation specs that produce `docs/atlas-decisions/ADR-*.md`,
+// foundation audit write-ups, or post-incident reviews where no
+// `src/`/`supabase/`/`atlas/` files are touched.
+//
+//   ```yaml
+//   ---
+//   priority: 2
+//   audit-only: true
+//   ---
+//   # Task: investigate cluster 7da23cc3f830
+//   ```
+//
+// Do NOT use `audit-only: true` to bypass the gate for a real coding task
+// whose Files required block was simply left empty by mistake — that
+// defeats the purpose. If you find yourself reaching for `audit-only` to
+// silence the pre-flight, the right move is almost always to add a
+// concrete `## Files required` block to the spec body.
+// ─── End quoted block ─────────────────────────────────────────────────────
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { parseSpec } from '../lib/frontmatter'
+
+/**
+ * Verbatim documentation of the `audit-only: true` frontmatter flag, mirrored
+ * from `V3-CODING-INSTRUCTIONS.md` §8. Kept here so any reader (human or AI
+ * verifier) inspecting `queue-validator.ts` has the contract in front of them.
+ * If the canonical doc and this constant ever drift, the canonical doc wins.
+ */
+export const AUDIT_ONLY_DOCS = `\
+audit-only: true — escape hatch for investigation-style specs.
+
+Use this flag, and ONLY this flag, when the spec's deliverable is a
+markdown ADR rather than a code diff. Examples:
+  • cluster-investigation specs that produce docs/atlas-decisions/ADR-*.md
+  • foundation audit write-ups
+  • post-incident reviews where no src/, supabase/, or atlas/ files are touched
+
+Frontmatter:
+  ---
+  priority: 2
+  audit-only: true
+  ---
+
+Do NOT use audit-only: true to bypass the gate for a real coding task
+whose Files required block was simply left empty by mistake — that
+defeats the purpose. If you find yourself reaching for audit-only to
+silence the pre-flight, the right move is almost always to add a
+concrete "## Files required" block to the spec body.
+
+On refusal, the pre-flight writes a stub .agent/questions/<task-id>-q.md
+and stops, so a human reviews the spec before queue-out (per the system
+prompt §6 question contract).`
 
 const FILE_EXT_RE = /\.(ts|tsx|js|jsx|json|sql|md|sh|yaml|yml|html|css)$/
 const DELETE_SECTION_RE = /delete|remove|uninstall|clean\s*slate|clean-slate|clean_slate/i
@@ -182,18 +246,29 @@ section on the \`audit-only\` frontmatter flag.
 `
 }
 
+export interface ValidateQueueCandidateBodyOptions extends ValidateQueueCandidateOptions {
+  /**
+   * Required when calling the body-based variant: where the stub question
+   * file should be written on refusal. The path-based `validateQueueCandidate`
+   * resolves this automatically from `specPath`; in-memory callers must
+   * supply it explicitly.
+   */
+  questionsDir: string
+}
+
 /**
- * Pre-flight a candidate task spec before it is moved into
- * `.agent/tasks/queued/`. See module-level comment for the contract.
+ * Body-based variant. Used by `atlas/src/lib/tools.ts:builderQueueSpec` and
+ * `builderQueueSpecsBatch` to gate the queue write BEFORE the spec is ever
+ * persisted to `.agent/tasks/queued/`. Pure function — does no disk I/O
+ * unless `writeQuestion: true` (default) and validation refuses.
  */
-export function validateQueueCandidate(
-  specPath: string,
-  options: ValidateQueueCandidateOptions = {},
+export function validateQueueCandidateBody(
+  taskId: string,
+  content: string,
+  options: ValidateQueueCandidateBodyOptions,
 ): QueueValidationResult {
   const writeQuestion = options.writeQuestion ?? true
-  const content = fs.readFileSync(specPath, 'utf-8')
   const parsed = parseSpec(content)
-  const taskId = path.basename(specPath, '.md')
   const auditOnlyRaw = parsed.frontmatter.extra?.['audit-only']
   const auditOnly = auditOnlyRaw === 'true' || auditOnlyRaw === 'yes' || auditOnlyRaw === '1'
   const filesRequired = extractFilesRequired(parsed.body)
@@ -202,12 +277,11 @@ export function validateQueueCandidate(
     return { ok: true, taskId, filesRequired, auditOnly }
   }
 
-  const questionsDir = options.questionsDir ?? defaultQuestionsDir(specPath)
-  const questionFilePath = path.join(questionsDir, `${taskId}-q.md`)
+  const questionFilePath = path.join(options.questionsDir, `${taskId}-q.md`)
   const questionStub = buildQuestionStub(taskId)
 
   if (writeQuestion) {
-    fs.mkdirSync(questionsDir, { recursive: true })
+    fs.mkdirSync(options.questionsDir, { recursive: true })
     fs.writeFileSync(questionFilePath, questionStub, 'utf-8')
   }
 
@@ -219,4 +293,20 @@ export function validateQueueCandidate(
     questionFilePath,
     questionStub,
   }
+}
+
+/**
+ * Pre-flight a candidate task spec before it is moved into
+ * `.agent/tasks/queued/`. See module-level comment for the contract.
+ */
+export function validateQueueCandidate(
+  specPath: string,
+  options: ValidateQueueCandidateOptions = {},
+): QueueValidationResult {
+  const content = fs.readFileSync(specPath, 'utf-8')
+  const taskId = path.basename(specPath, '.md')
+  return validateQueueCandidateBody(taskId, content, {
+    ...options,
+    questionsDir: options.questionsDir ?? defaultQuestionsDir(specPath),
+  })
 }

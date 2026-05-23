@@ -23,6 +23,7 @@ import {
   clearPlanNodeState,
   listAllActivePlanNodeStates,
 } from './plan-state'
+import { validateQueueCandidateBody } from '../workshop/queue-validator'
 
 const execFileP = promisify(execFile)
 
@@ -114,6 +115,19 @@ export async function builderQueueSpec(
   const existing = await findExistingSpecBucket(filename)
   if (existing) {
     throw new Error(`builder.queue_spec: ${buildDuplicateSpecError(filename, existing)}`)
+  }
+  // Workshop pre-flight — refuse to queue a title-only / files-required-empty
+  // spec without the `audit-only: true` escape hatch. On refusal a stub
+  // .agent/questions/<task-id>-q.md is written for human review and the
+  // queue write is abandoned. See atlas/src/workshop/queue-validator.ts.
+  const taskId = filename.replace(/\.md$/, '')
+  const preflight = validateQueueCandidateBody(taskId, body, {
+    questionsDir: resolve(REPO_ROOT, '.agent/questions'),
+  })
+  if (!preflight.ok) {
+    throw new Error(
+      `builder.queue_spec: workshop pre-flight refused ${filename} — ${preflight.reason}. See ${preflight.questionFilePath}`,
+    )
   }
   const relPath = `.agent/tasks/queued/${filename}`
   const fullPath = resolve(REPO_ROOT, relPath)
@@ -223,6 +237,19 @@ export async function builderQueueSpecsBatch(
       const existing = await findExistingSpecBucket(s.filename)
       if (existing) {
         failed.push({ filename: s.filename, error: buildDuplicateSpecError(s.filename, existing) })
+        continue
+      }
+      // Workshop pre-flight — same gate as builderQueueSpec, applied per-spec
+      // so one bad spec in a batch fails alone rather than aborting the batch.
+      const taskId = s.filename.replace(/\.md$/, '')
+      const preflight = validateQueueCandidateBody(taskId, s.body, {
+        questionsDir: resolve(REPO_ROOT, '.agent/questions'),
+      })
+      if (!preflight.ok) {
+        failed.push({
+          filename: s.filename,
+          error: `workshop pre-flight refused — ${preflight.reason}. See ${preflight.questionFilePath}`,
+        })
         continue
       }
       const relPath = `.agent/tasks/queued/${s.filename}`

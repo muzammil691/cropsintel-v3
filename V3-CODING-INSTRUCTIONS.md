@@ -372,6 +372,21 @@ On refusal, the pre-flight writes a stub `.agent/questions/<task-id>-q.md`
 and stops, so a human reviews the spec before queue-out (per the system
 prompt §6 question contract).
 
+### Wiring
+
+The gate runs inside `atlas/src/lib/tools.ts:builderQueueSpec` and its
+batch sibling `builderQueueSpecsBatch`, both of which call
+`validateQueueCandidateBody(taskId, body, { questionsDir })` BEFORE
+writing the spec into `.agent/tasks/queued/`. A refusal short-circuits
+the queue write — for the single-spec path it throws; for the batch
+path it moves the offending spec into the `failed` array so the rest of
+the batch still ships. Either way the stub question file is left for a
+human to triage.
+
+The validator also exports `AUDIT_ONLY_DOCS`, a verbatim mirror of this
+section, so any reader (human or AI verifier) inspecting
+`atlas/src/workshop/queue-validator.ts` sees the contract inline.
+
 ---
 
 **End of V3 Coding Instructions.** Re-read at the start of every session.

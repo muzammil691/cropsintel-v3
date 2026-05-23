@@ -22,7 +22,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   validateQueueCandidate,
+  validateQueueCandidateBody,
   extractFilesRequired,
+  AUDIT_ONLY_DOCS,
 } from './queue-validator'
 
 let repoRoot: string
@@ -187,5 +189,71 @@ audit-only: true
     if (result.ok) return
     expect(existsSync(result.questionFilePath)).toBe(false)
     expect(result.questionStub).toContain(`# Question — ${taskId}`)
+  })
+})
+
+describe('validateQueueCandidateBody (in-memory variant — used by builderQueueSpec)', () => {
+  it('rejects empty-filesRequired without audit-only and writes the stub', () => {
+    const taskId = 'phase-x-body-reject'
+    const questionsDir = join(repoRoot, '.agent/questions')
+    const result = validateQueueCandidateBody(
+      taskId,
+      `---\npriority: 2\n---\n# Task: ${taskId}\n`,
+      { questionsDir },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.questionFilePath).toBe(join(questionsDir, `${taskId}-q.md`))
+    expect(existsSync(result.questionFilePath)).toBe(true)
+  })
+
+  it('accepts empty-filesRequired with audit-only: true', () => {
+    const taskId = 'phase-x-body-audit'
+    const questionsDir = join(repoRoot, '.agent/questions')
+    const result = validateQueueCandidateBody(
+      taskId,
+      `---\npriority: 2\naudit-only: true\n---\n# Task: ${taskId}\n`,
+      { questionsDir },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.auditOnly).toBe(true)
+    expect(existsSync(join(questionsDir, `${taskId}-q.md`))).toBe(false)
+  })
+
+  it('accepts non-empty filesRequired', () => {
+    const taskId = 'phase-x-body-real'
+    const questionsDir = join(repoRoot, '.agent/questions')
+    const body = `---\npriority: 2\n---\n# Task: ${taskId}\n\n## Files required\n\n- \`atlas/src/workshop/queue-validator.ts\`\n`
+    const result = validateQueueCandidateBody(taskId, body, { questionsDir })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.filesRequired).toEqual(['atlas/src/workshop/queue-validator.ts'])
+  })
+
+  it('respects writeQuestion: false', () => {
+    const taskId = 'phase-x-body-dry'
+    const questionsDir = join(repoRoot, '.agent/questions')
+    const result = validateQueueCandidateBody(
+      taskId,
+      `# Task: ${taskId}\n`,
+      { questionsDir, writeQuestion: false },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(existsSync(result.questionFilePath)).toBe(false)
+  })
+})
+
+describe('AUDIT_ONLY_DOCS', () => {
+  it('mirrors the V3-CODING-INSTRUCTIONS.md §8 contract verbatim', () => {
+    expect(AUDIT_ONLY_DOCS).toContain('audit-only: true')
+    expect(AUDIT_ONLY_DOCS).toContain('escape hatch')
+    expect(AUDIT_ONLY_DOCS).toContain('docs/atlas-decisions/ADR-')
+    expect(AUDIT_ONLY_DOCS).toContain('Files required')
   })
 })
