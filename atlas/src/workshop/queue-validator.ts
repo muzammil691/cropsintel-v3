@@ -262,6 +262,18 @@ export interface ValidateQueueCandidateBodyOptions extends ValidateQueueCandidat
  * persisted to `.agent/tasks/queued/`. Pure function — does no disk I/O
  * unless `writeQuestion: true` (default) and validation refuses.
  */
+/**
+ * Truthy values accepted for the `audit-only` frontmatter flag. Kept narrow
+ * on purpose — anything outside this set falls back to "audit-only off" so
+ * a typo in the frontmatter cannot silently bypass the gate.
+ */
+const AUDIT_ONLY_TRUTHY = new Set(['true', 'yes', '1'])
+
+function isAuditOnlyValue(raw: string | undefined): boolean {
+  if (raw === undefined) return false
+  return AUDIT_ONLY_TRUTHY.has(raw.trim().toLowerCase())
+}
+
 export function validateQueueCandidateBody(
   taskId: string,
   content: string,
@@ -269,8 +281,7 @@ export function validateQueueCandidateBody(
 ): QueueValidationResult {
   const writeQuestion = options.writeQuestion ?? true
   const parsed = parseSpec(content)
-  const auditOnlyRaw = parsed.frontmatter.extra?.['audit-only']
-  const auditOnly = auditOnlyRaw === 'true' || auditOnlyRaw === 'yes' || auditOnlyRaw === '1'
+  const auditOnly = isAuditOnlyValue(parsed.frontmatter.extra?.['audit-only'])
   const filesRequired = extractFilesRequired(parsed.body)
 
   if (filesRequired.length > 0 || auditOnly) {

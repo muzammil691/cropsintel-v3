@@ -158,6 +158,32 @@ priority: 2
     )
   })
 
+  it('treats audit-only values case-insensitively (TRUE / Yes / 1)', () => {
+    for (const raw of ['TRUE', 'True', 'Yes', 'YES', '1']) {
+      const taskId = `phase-x-audit-${raw}`
+      const specPath = writeSpec(
+        taskId,
+        `---\npriority: 2\naudit-only: ${raw}\n---\n# Task: ${taskId}\n`,
+      )
+      const result = validateQueueCandidate(specPath)
+      expect(result.ok, `expected ${raw} to be truthy`).toBe(true)
+      if (!result.ok) return
+      expect(result.auditOnly).toBe(true)
+    }
+  })
+
+  it('rejects bogus audit-only values (no, false, off, garbage)', () => {
+    for (const raw of ['no', 'false', 'off', 'maybe']) {
+      const taskId = `phase-x-bogus-${raw}`
+      const specPath = writeSpec(
+        taskId,
+        `---\npriority: 2\naudit-only: ${raw}\n---\n# Task: ${taskId}\n`,
+      )
+      const result = validateQueueCandidate(specPath, { writeQuestion: false })
+      expect(result.ok, `expected ${raw} to NOT bypass the gate`).toBe(false)
+    }
+  })
+
   it('accepts non-empty filesRequired even when audit-only is also set', () => {
     const taskId = 'phase-x-hybrid'
     const body = `---

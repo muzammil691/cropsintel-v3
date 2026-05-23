@@ -362,6 +362,12 @@ audit-only: true
 (deliverable is an ADR in docs/atlas-decisions/, not a code change)
 ```
 
+**Accepted values.** The gate treats `audit-only` case-insensitively and
+accepts the strings `true`, `yes`, and `1` (any casing — `True`, `TRUE`,
+`Yes`, etc.). Anything else (including `false`, `no`, `off`, or a typo)
+is treated as audit-only OFF, so a stray typo cannot silently bypass the
+gate. If you intend to flip the flag on, write it as `true`.
+
 **Do not** use `audit-only: true` to bypass the gate for a real coding task
 whose Files required block was simply left empty by mistake — that defeats
 the purpose. If you find yourself reaching for `audit-only` to silence the
