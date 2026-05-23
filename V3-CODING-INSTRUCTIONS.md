@@ -334,4 +334,44 @@ When all 16 are checked, Phase 1 is complete and Phase 2 (CRM Intelligence + Atl
 
 ---
 
+## 8. Spec frontmatter flags (Workshop pre-flight contract)
+
+When Atlas drafts a task spec into `.agent/tasks/queued/`, the Workshop
+pre-flight (`atlas/src/workshop/queue-validator.ts`) refuses to queue it if
+the body has no concrete `Files required` paths AND the frontmatter does
+not declare the `audit-only` escape hatch. A title-only spec
+deterministically fails the Verifier's `empty-diff-guard` check (see
+`docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc3f830.md` §3.1
+for the cluster that produced this gate).
+
+### `audit-only: true`
+
+Use this flag — and ONLY this flag — when the spec's deliverable is a
+markdown ADR rather than a code diff. Examples: cluster-investigation
+specs that produce `docs/atlas-decisions/ADR-*.md`, foundation audit
+write-ups, or post-incident reviews where no `src/`/`supabase/`/`atlas/`
+files are touched.
+
+```yaml
+---
+priority: 2
+audit-only: true
+---
+# Task: investigate cluster 7da23cc3f830
+
+(deliverable is an ADR in docs/atlas-decisions/, not a code change)
+```
+
+**Do not** use `audit-only: true` to bypass the gate for a real coding task
+whose Files required block was simply left empty by mistake — that defeats
+the purpose. If you find yourself reaching for `audit-only` to silence the
+pre-flight, the right move is almost always to add a concrete
+`## Files required` block to the spec body.
+
+On refusal, the pre-flight writes a stub `.agent/questions/<task-id>-q.md`
+and stops, so a human reviews the spec before queue-out (per the system
+prompt §6 question contract).
+
+---
+
 **End of V3 Coding Instructions.** Re-read at the start of every session.
