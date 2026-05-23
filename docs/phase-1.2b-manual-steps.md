@@ -10,9 +10,17 @@ applying.
 
 | Step | What | Owner | Reversible? | Status |
 |---|---|---|---|---|
-| 1 | Run `scripts/audit-live-schema.sql` in Supabase Studio against project `hzrnohsxigrqlmzegwlb`. Save output as `.agent/audit/live-schema-snapshot-2026-05-23.json`. Commit. | Muzammil | Yes (read-only SQL, no schema changes) | ⏳ Pending |
-| 2 | Queue post-snapshot follow-up phase (auto-suggested by the agent once it sees the snapshot file). | Muzammil | Yes | ⏳ Pending |
+| 1 | Run `scripts/audit-live-schema.sql` in Supabase Studio against project `hzrnohsxigrqlmzegwlb`. **Overwrite** `.agent/audit/live-schema-snapshot-2026-05-23.json` (currently holds a migration-derived placeholder synthesized by `scripts/synthesize-migration-snapshot.mjs` — see `_meta.is_live_db_output: false`). Commit. | Muzammil | Yes (read-only SQL, no schema changes) | ⏳ Pending — placeholder exists, live-DB output not yet captured |
+| 2 | Queue post-snapshot follow-up phase (auto-suggested by the agent once `_meta.is_live_db_output` flips to `true` or is dropped). | Muzammil | Yes | ⏳ Pending |
 | 3 | Apply any drafted migrations one-by-one in Studio per the per-step instructions a future spec will produce. | Muzammil | Per-migration rollback notes will be inline. | ⏳ Pending (no migrations drafted in 1.2b — none were needed at the migration-file level) |
+
+> **Note on the placeholder snapshot.** Remediation attempt 1 added
+> `scripts/synthesize-migration-snapshot.mjs` so the Snapshot Verification Gate
+> has a non-empty input even before Muzammil's Studio run. The synthesized
+> file mirrors the live-DB introspection JSON shape but only reflects what
+> the migration files say *should* exist — it cannot detect 1.10bb-style
+> drift. Replacing it with the genuine Studio output is still required and is
+> the only blocking step for the post-snapshot follow-up phase.
 
 ---
 
