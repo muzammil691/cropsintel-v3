@@ -9,7 +9,7 @@ This is on Muzammil's Mac, outside any git repo, never committed. The Railway ag
 
 When this file is updated, also update SECRETS.md's change log on Muzammil's Mac.
 
-Last updated: 2026-05-22 (Phase 1.10bb shipped — verifier_runs.subject_matter_hits applied to prod via commit 433dd94, autonomous Builder 454s; Verifier write path restored, first clean row at 14:31:10 UTC after 15 days of db_write_failed)
+Last updated: 2026-05-23 (Phase 1.2b autonomous Builder pass complete — drafted `scripts/audit-live-schema.sql` + plan-side audit outputs in `.agent/audit/`. Snapshot Verification Gate is DEFERRED pending Muzammil's Studio run; see `.agent/audit/gate-result-2026-05-23.md`. Zero migrations drafted in 1.2b: every V1.0-alpha-blocking-subset table already has a migration file — drift detection requires the live snapshot, queue post-snapshot follow-up after the snapshot lands.)
 
 ---
 
@@ -100,6 +100,7 @@ Atlas internals shipped:
 - Verifier db_write_failed fix (1.10az)
 - Cockpit polish (1.10ba)
 - Verifier write path unblocked — `subject_matter_hits` column applied 2026-05-22 (1.10bb)
+- Foundation audit infrastructure — `scripts/audit-live-schema.sql` + Snapshot Verification Gate flow (1.2b, autonomous pass 2026-05-23)
 
 Pre-flight health check 2026-05-22 14:28 UTC: Atlas 200, Verifier 200, Designer 200, Council 200, Memory 200, Builder (self) 200, Adela 404 (Application not found — out of scope of 1.10bb; flag for separate follow-up).
 
@@ -115,6 +116,7 @@ Pre-flight health check 2026-05-22 14:28 UTC: Atlas 200, Verifier 200, Designer 
 - Phase 1.3b AI agent landing scaffold ✅
 - Phase 1.3c V1.0-alpha unblock — verify_jwt config + drift repair migration + smoke-test script + manual-steps doc ✅ (2026-05-10; Muzammil runs the redeploy/repair/db-push steps per `docs/phase-1.3c-manual-steps.md`)
 - Phase 1.10 cockpit infrastructure (aj/ak/al/am/an/aw/az/ba) ✅
+- Phase 1.2b V3 foundation audit — autonomous Builder half: SQL drafted, plan-side gap report + open-questions + manual-steps drafted (2026-05-23). Muzammil-half pending: run `scripts/audit-live-schema.sql` in Studio → commit `.agent/audit/live-schema-snapshot-2026-05-23.json` → queue post-snapshot follow-up. **Audit outputs:** `.agent/audit/gate-result-2026-05-23.md`, `.agent/audit/snapshot-incomplete-2026-05-23.md`, `.agent/audit/gap-report-2026-05-23.md`, `.agent/audit/open-questions-2026-05-23.md`, `docs/phase-1.2b-manual-steps.md`. **Drafted migrations:** none (no V1.0-alpha-blocking PLAN-AHEAD gap surfaced at the migration-file level; live-DB drift detection deferred to post-snapshot pass).
 
 ### Next up
 
