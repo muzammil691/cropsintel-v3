@@ -9,21 +9,20 @@
 
 ---
 
-## ⚠ Caveat — what this report is and is not
+## Caveat — what this report is and is not (UPDATED for Phase 1.2c)
 
-This report compares **master plan §4.1 against committed `supabase/migrations/`
-files**. It does **not** yet reconcile against the live DB schema.
+**As of Phase 1.2c (2026-05-23 live-DB rerun) the live-DB column is populated.**
+The Snapshot Verification Gate ran against the authoritative live-DB snapshot
+(`.agent/audit/live-schema-snapshot-2026-05-23.json` with
+`_meta.is_live_db_output: true`) and PASSED all four checks. Drift findings
+are summarized in the "Live-DB diff" section near the bottom of this report;
+the per-row Live-DB status column below has been added too.
 
-The Snapshot Verification Gate is in `DEFERRED` state pending Muzammil's manual
-Studio run of `scripts/audit-live-schema.sql` (see
-`gate-result-2026-05-23.md`). When the snapshot lands, this report will be
-re-issued with a "Live-DB" column populated and an explicit Migration-vs-Live
-divergence column — that is where Phase 1.10bb-style drift surfaces (migration
-file exists, but `schema_migrations` row was claimed by a colliding version
-and the file was silently skipped on `db push`).
-
-For now: the "Migration status" column reflects what the migrations *say*
-should be in the DB; the "Live status" column is `UNKNOWN-PENDING-SNAPSHOT`.
+The original Phase 1.2b synthesized-snapshot caveat is retained for the audit
+trail: prior to Phase 1.2c the snapshot was a migration-derived placeholder
+(`_meta.is_live_db_output: false`) so the report could only reflect what the
+*migrations* claim should be in the DB. The live-DB column was
+`UNKNOWN-PENDING-SNAPSHOT` until 1.2c.
 
 ---
 
@@ -39,6 +38,46 @@ should be in the DB; the "Live status" column is `UNKNOWN-PENDING-SNAPSHOT`.
   citation.
 - **AMBIGUOUS** — divergence with no clear cause. Highest attention. Full
   context to `open-questions-2026-05-23.md`.
+
+---
+
+## Live-DB status (Phase 1.2c) — single summary
+
+The live-DB snapshot rows are summarized here rather than duplicated across
+the three per-entity tables below. Cross-reference by entity name.
+
+| Entity | In live DB? | commodity_id FK in live DB | Live-vs-migration diff |
+|---|---|---|---|
+| commodities | Yes | N-A-identity (this IS the master table) | none |
+| companies | Yes | none (identity, per Q1) | none |
+| contacts | Yes | none (identity, per Q1) | none |
+| canonical_products | Yes | PASS (NOT NULL FK→commodities) | none |
+| relationships | Yes | none (AMBIGUOUS, per Q2) | none |
+| profiles | Yes | N-A-identity | `verification_state` IS in live (synthesizer parser missed it; not real drift) |
+| offers | NOT present | N-A | matches migration (Phase 2 not yet shipped) |
+| offer_lines | NOT present | N-A | matches migration |
+| inquiries | NOT present | N-A | matches migration |
+| tracked_deals | NOT present | N-A | matches migration |
+| positions | Yes | PASS | none |
+| market_intelligence | Yes | PASS | none |
+| zyra_conversations | Yes | none (AMBIGUOUS, per Q3) | none |
+| communications | NOT present | N-A | matches migration |
+| observations | NOT present | N-A | matches migration |
+| exceptions | NOT present | N-A | matches migration |
+| verification_requests | Yes | N-A-identity | `decided_to_state` IS in live (synthesizer parser miss; not drift) |
+| guest_sessions | Yes | N-A-identity | none |
+| auth_bridge_log | Yes | N-A-identity | none |
+| chat_sessions | Yes | none (AMBIGUOUS, per Q3) | none |
+| news_items | Yes | PASS | none |
+| prices | Yes | PASS | none |
+| position_reports | Yes | PASS | none |
+| user_roles | Yes | N-A-identity | none |
+| legacy_users | Yes | N-A-identity | RLS enabled with no client policies (intentional; service_role bypass only) |
+
+**§4.1 + extensions + insights surface: ZERO V1.0-alpha-blocking gaps in live DB.**
+Every V1.0-alpha-blocking subset table is present with the expected column
+shape. The drift findings below are outside the V1.0-alpha-blocking scope per
+task spec.
 
 ---
 
@@ -173,24 +212,71 @@ NOT-applied, human-gated Studio apply).
 
 ---
 
-## Migrations drafted in 1.2b
+## Migrations drafted in 1.2b / 1.2c
 
-**None.** Drafting "just in case" migrations against unknown live-DB state
-would violate the anti-restart rule (creating parallel implementations next
-to potentially-already-applied migrations). The post-snapshot follow-up
-will draft migrations where drift is concretely surfaced.
+**1.2b: none.** Drafting "just in case" migrations against unknown live-DB state
+would have violated the anti-restart rule.
+
+**1.2c: none.** The live snapshot confirms every V1.0-alpha-blocking subset
+table is present with the expected column shape. The drift findings above
+(`cockpit_phase_approvals`, verifier-RLS hardening, 4 ghost rows) are all
+OUTSIDE V1.0-alpha-blocking scope per task spec definition (`auth + RBAC +
+verified queue + V2 migration + read-only /insights`). Migration drafting
+for cockpit drift is deferred to a dedicated follow-up phase to preserve
+human gating on the 1.10bb-class repair pattern and to avoid creating
+parallel migration files next to the partial-apply `20260508000000`
+(anti-restart rule, V3-CODING-INSTRUCTIONS §0).
 
 ---
 
-## DB-AHEAD findings
+## DB-AHEAD findings (populated in Phase 1.2c)
 
-Cannot be enumerated without the live snapshot. Many cockpit/atlas tables
-(brain_*, atlas_*, designer_runs, verifier_runs, pd_*, concepts,
-wizard_sessions, etc.) exist in migrations and are not in master plan §4.1
-because they are runtime-agent infrastructure rather than §4.1 data
-entities — these are expected and not DB-AHEAD findings. True DB-AHEAD
-findings (tables in live DB but in NEITHER migrations NOR plan) require the
-snapshot to surface.
+Cockpit/atlas tables that exist in migrations AND in the live DB
+(`brain_*`, `atlas_*`, `designer_runs`, `verifier_runs`, `pd_*`, `concepts`,
+`wizard_sessions`, etc.) are not DB-AHEAD — they are runtime-agent
+infrastructure with corresponding migration files.
+
+**True DB-AHEAD (in live DB but NO matching migration file):** 6 tables, all
+atlas-cockpit scope.
+
+| Table | Likely origin | V1.0-alpha impact | Recommendation |
+|---|---|---|---|
+| `atlas_audit_events` | Direct Studio ALTER during a cockpit phase | None | Workshop: write retro-migration file |
+| `atlas_concept_links` | Same | None | Same |
+| `atlas_connections` | Same | None | Same |
+| `atlas_project_connections` | Same | None | Same |
+| `atlas_queue_operations` | Same | None | Same |
+| `atlas_user_state` | Same | None | Same |
+
+None of these are §4.1 domain tables. They do not violate the multi-commodity
+FK rule because they are runtime-agent infrastructure, not domain entities.
+Flagged for a follow-up workshop phase to backfill migration files (so a
+fresh clone reproduces the same schema). Not migrated in 1.2c per the spec
+"DB-AHEAD: Flag for follow-up workshop, do NOT migrate, do NOT update plan."
+
+## Migration-drift findings (populated in Phase 1.2c — 1.10bb-class)
+
+These are migration files in the repo whose effect is NOT in the live DB.
+The exact failure mode Phase 1.10bb retro warned about.
+
+| Migration file | Drift type | V1.0-alpha-blocking? | Recommended remediation |
+|---|---|---|---|
+| `20260508000000_concepts_and_phase_approvals.sql` | Partial apply — `concepts` landed but `cockpit_phase_approvals` did NOT. `schema_migrations` row IS present, so `db push` won't re-run. | No (cockpit scope, not auth/RBAC/queue/insights) | Cockpit follow-up: apply `CREATE TABLE cockpit_phase_approvals` via pooled psql (1.10bb pattern), or split into a new migration with a fresh timestamp. |
+| `20260511000001_fix_verifier_runs_rls.sql` | Fully unapplied. None of the 4 explicit role-scoped policies landed. `schema_migrations` row missing. | No (verifier_runs write path operational via service_role bypass; this is hardening) | Studio apply or `db push` — file is idempotent (DROP POLICY IF EXISTS … CREATE POLICY). |
+| `20260511000002_fix_verifier_runs_schema.sql` | Effect IS in place (all 10 `ADD COLUMN IF NOT EXISTS` columns present), but `schema_migrations` row missing. | No (effect present) | `supabase migration repair --status applied 20260511000002` to silence future `db push`. |
+| `20260510000000_phase_1_3c_drift_repair_marker.sql` | COMMENT-only file — comment did NOT land. `schema_migrations` row missing. Marker-only; zero functional impact. | No | Either re-apply or accept as cosmetic. Same `migration repair` solution. |
+
+**Ghost `schema_migrations` rows (DB has version, repo has no file):**
+
+| Version | Name field in `schema_migrations` | Provenance | Recommendation |
+|---|---|---|---|
+| `20260506` | `ai_analyses` | The malformed row already documented in `runtime-state.md` line 178 ("delete the malformed `20260506` remote row" — Muzammil Phase 1.3c manual step still pending) | Delete the row per Phase 1.3c manual steps |
+| `20260521195157` | `1.10bd-queue-pivot-step2` | Phase 1.10bd applied via Studio without a repo file | Backfill a no-op `CREATE EXTENSION IF NOT EXISTS …` style file capturing what landed, or `migration repair --status reverted` after rationalizing |
+| `20260522124047` | `phase_1_10be_orphan_archive` | Same | Same |
+| `20260522130359` | `phase_c1_workshop_whatsapp_ping_col` | Same | Same |
+
+None of the ghost rows are V1.0-alpha-blocking. All four need a dedicated
+follow-up phase to reconcile.
 
 ---
 

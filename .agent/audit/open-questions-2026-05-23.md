@@ -125,45 +125,64 @@ schema_migrations row and any schema_migrations row without a filename.
 
 ---
 
-## Q5 — DB-AHEAD findings collection
+## Q5 — DB-AHEAD findings collection (POPULATED in Phase 1.2c)
 
-**Category:** Process — placeholder
+**Category:** DB-AHEAD — flagged for follow-up workshop, NOT migrated.
 
-**Context.** The task spec asks for DB-AHEAD items in this doc, but DB-AHEAD
-items require the live snapshot to be identified. None can be listed in
-this pass. Many cockpit/atlas tables (brain_*, atlas_*, designer_runs,
-verifier_runs, pd_*, concepts, wizard_sessions) exist in migrations and are
-not in §4.1 because they are runtime-agent infrastructure rather than §4.1
-data entities — these are not DB-AHEAD findings.
+**Findings (live-DB snapshot 2026-05-23):** six tables exist in the live DB
+but have no migration file in the repo. All are atlas-cockpit runtime
+infrastructure:
 
-**Recommendation:** When the snapshot lands, the post-snapshot pass will
-populate this section with: (a) tables in live DB not in any migration file,
-(b) columns in live DB not in any migration's CREATE/ALTER, and (c) RLS
-policies in live DB not in any migration. These are the true DB-AHEAD
-findings the spec wants flagged.
+- `atlas_audit_events`
+- `atlas_concept_links`
+- `atlas_connections`
+- `atlas_project_connections`
+- `atlas_queue_operations`
+- `atlas_user_state`
+
+None are §4.1 domain tables. None are V1.0-alpha-blocking. All were likely
+created via direct Studio ALTERs during a cockpit phase that did not commit
+a migration file.
+
+**Recommendation.** Schedule a dedicated workshop phase to backfill
+migration files reproducing each table's CREATE TABLE (so a fresh clone
+arrives at the same schema). Capture column lists from the live snapshot
+columns array. Do NOT alter live DB during the backfill — the goal is to
+make the migration history honest, not to change live state. Per the
+1.10bb retro, the backfill files should use FRESH unique timestamps (no
+sharing a prefix with an existing schema_migrations version) and should be
+followed by `supabase migration repair --status applied` against each new
+version so `db push` does not try to re-run them on the already-populated
+live DB.
+
+Column-level DB-AHEAD comparison (live columns in NO migration file) was
+NOT attempted in this pass — the synthesizer's regex parser is too lossy
+for that comparison to be authoritative. A dedicated diff against a fresh
+local DB built from `supabase db reset` would be the right tool, but is
+out of 1.2c scope.
 
 ---
 
-## Q6 — `current_user_tier()` vs `is_team_or_admin()` divergence
+## Q6 — `current_user_tier()` vs `is_team_or_admin()` divergence (RESOLVED in Phase 1.2c)
 
-**Category:** AMBIGUOUS — visible from migrations alone
+**Category:** RESOLVED — live DB lookup confirmed function exists.
 
-**Context.** Two parallel RBAC helper functions exist in migrations:
-- `public.has_role(user_id, role)` + `public.is_team_or_admin(user_id)` —
-  defined in foundation, used by foundation-era policies.
-- `public.current_user_tier()` — referenced in
-  `20260501050000_verification_requests.sql` lines 33, 37 ("maxons reads all
-  requests" policy). The function definition is not visible in the §4.1
-  foundation; if it's not in a later migration, the verification_requests
-  RLS policies may be broken (function not found → policy fails → maxons
-  can't read the queue).
+**Resolution.** A `pg_proc` lookup against the live DB on 2026-05-23 confirmed
+all three functions exist in `public`:
+- `has_role`
+- `is_team_or_admin`
+- `current_user_tier`
 
-**Question.** Is `current_user_tier()` defined in a migration I missed, in
-a hand-applied SQL pre-foundation, or is it broken?
+The `verification_requests` RLS policies that reference `current_user_tier()`
+are not broken. The helper was added by a migration whose function body the
+audit SQL did not introspect (the SQL captures table/column/policy presence
+only, by design). No further action.
 
-**Recommendation:** The post-snapshot pass should explicitly check whether
-`current_user_tier()` exists in the live DB via `pg_proc`. Add to
-`scripts/audit-live-schema.sql` (Q4 follow-up).
+**Follow-up note for `scripts/audit-live-schema.sql`.** Adding a `pg_proc`
+section to the introspection SQL (capturing function names + signatures, not
+bodies) would let future gate runs detect helper-function drift without a
+manual `pg_proc` lookup. Out of 1.2c scope but recommended for the
+next iteration of the audit SQL.
 
 ---
 
@@ -181,6 +200,99 @@ still skip the verifier file.
 (out of 1.2b scope — `runtime-state.md` line 38 says "A follow-up phase
 should rename the verifier migration file to a unique timestamp to avoid
 future skips on fresh clones."). Listed here for visibility, not action.
+
+---
+
+## Q9 — `cockpit_phase_approvals` partial-apply drift (NEW in Phase 1.2c)
+
+**Category:** DRIFT — 1.10bb-class partial-apply
+
+**Context.** Migration `20260508000000_concepts_and_phase_approvals.sql`
+creates two tables: `concepts` and `cockpit_phase_approvals`. Live DB has
+`concepts` but NOT `cockpit_phase_approvals`. The `schema_migrations` row
+for version `20260508000000` IS present, so `db push` will not re-apply.
+Same failure mode as Phase 1.10bb (`subject_matter_hits`).
+
+**Options.**
+1. **Pooled-psql single-table apply.** Run only the
+   `CREATE TABLE cockpit_phase_approvals` + index + RLS block from the
+   migration file directly via the 1.10bb-proven pattern. Pros: minimal new
+   files. Cons: leaves the `schema_migrations` row claiming a partial state.
+2. **New migration file with fresh unique timestamp.** Draft
+   `<new-ts>_cockpit_phase_approvals_repair.sql` carrying only the missing
+   table. Pros: makes the repair visible in the migration history. Cons:
+   one more file; needs human gating per Phase 1.10bb learning.
+3. **Defer — cockpit code does not currently write to the table.** Confirm
+   via `grep -rn "cockpit_phase_approvals" src/ supabase/ agent/` whether
+   anything reads/writes it. If not, deferring is safe.
+
+**Recommendation.** Option 2 in a dedicated follow-up phase (call it
+`phase-1.10bf-cockpit-approvals-drift-repair`). Out of 1.2c scope per the
+"V1.0-alpha-blocking only" migration drafting rule. Cockpit phase-approvals
+infra is not auth/RBAC/queue/insights — does not block V1.0-alpha.
+
+---
+
+## Q10 — `verifier_runs` RLS hardening unapplied (NEW in Phase 1.2c)
+
+**Category:** DRIFT — fully unapplied
+
+**Context.** `20260511000001_fix_verifier_runs_rls.sql` adds four explicit
+role-scoped RLS policies (service_role + authenticated INSERT/SELECT) on
+`verifier_runs`. Live DB has none of them — only the pre-existing
+`"anyone reads verifier_runs"` policy. The `schema_migrations` row is
+absent, so `db push` would still try to apply this file.
+
+**Impact.** Hardening, NOT functional. Verifier write path operates today via
+service_role bypass (`subject_matter_hits` rows landing since 2026-05-22 per
+`runtime-state.md` line 39). If the bypass default is ever revoked in
+Supabase (unlikely but possible), this file becomes critical.
+
+**Recommendation.** Include in the same dedicated drift-repair follow-up
+(Q9). The file is idempotent (`DROP POLICY IF EXISTS … CREATE POLICY`) so
+re-running via `db push` or Studio is safe. Out of 1.2c scope.
+
+---
+
+## Q11 — Ghost `schema_migrations` rows (NEW in Phase 1.2c)
+
+**Category:** AMBIGUOUS — migration history honesty
+
+**Context.** Four `schema_migrations` rows exist in the live DB with no
+matching file in `supabase/migrations/`:
+
+| Version | Name |
+|---|---|
+| `20260506` | `ai_analyses` |
+| `20260521195157` | `1.10bd-queue-pivot-step2` |
+| `20260522124047` | `phase_1_10be_orphan_archive` |
+| `20260522130359` | `phase_c1_workshop_whatsapp_ping_col` |
+
+The `20260506` row is the malformed entry already documented in
+`runtime-state.md` line 178 ("Muzammil deletes the malformed `20260506`
+remote row"). Still present 13 days later — that manual step is overdue.
+
+The other three appear to be Studio applies whose corresponding migration
+files were never committed back to the repo (Phase 1.10bd queue pivot step
+2, Phase 1.10be orphan archive, and a workshop-flow `whatsapp_ping_col`
+add).
+
+**Options.**
+1. **Backfill three migration files (no live-DB change).** Inspect live DB
+   for each phase's intended changes (cockpit_phase_approvals-style table
+   diffs), draft repo files capturing them, then `migration repair --status
+   applied` to keep `db push` quiet. Pros: makes history honest. Cons: needs
+   investigation per phase to know what each "should" contain.
+2. **`--status reverted` then delete the rows.** Treat them as never-applied;
+   the actual schema changes remain (no migration drives a DROP). Pros:
+   simpler. Cons: silently masks history; future devs can't trace what
+   landed.
+3. **Mark as known-divergence in `runtime-state.md`.** Defer.
+
+**Recommendation.** Option 1, scoped to the same drift-repair follow-up as
+Q9 and Q10. Document each phase's actual schema impact, ship a file, mark
+applied. The `20260506` row should be deleted per the existing Phase 1.3c
+manual step (Muzammil-owned, not agent).
 
 ---
 

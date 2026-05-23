@@ -1,9 +1,148 @@
 # Snapshot Verification Gate — Result
 
 **Date:** 2026-05-23
-**Phase:** 1.2b — V3 Foundation Audit (remediation attempt 3)
+**Phase:** 1.2c — Foundation audit gate re-run against live-DB snapshot
 **Snapshot input:** `.agent/audit/live-schema-snapshot-2026-05-23.json`
-**Status:** `PASS (against migration-derived snapshot)`
+**Status:** `PASS (against authoritative live-DB snapshot)`
+
+---
+
+## Phase 1.2c — Live-DB re-run (this pass)
+
+Per `runtime-state.md` line 12 and the prior Re-run Protocol in this file, the
+Phase 1.2b snapshot was a migration-derived placeholder with
+`_meta.is_live_db_output: false`. Phase 1.2c captures the authoritative live-DB
+snapshot via pooled psql against project `hzrnohsxigrqlmzegwlb` and re-runs the
+four gate checks against it. No human round-trip via Supabase Studio was
+required — Builder has `SUPABASE_DB_PASSWORD` set (same env path used by Phase
+1.10bb for single-file applies — see `runtime-state.md` line 36).
+
+**Snapshot capture command (reproducible):**
+```
+PGPASSWORD=$SUPABASE_DB_PASSWORD psql \
+  -h aws-1-ap-southeast-1.pooler.supabase.com -p 5432 \
+  -U postgres.hzrnohsxigrqlmzegwlb -d postgres \
+  -t -A -f scripts/audit-live-schema.sql
+```
+
+The output is wrapped in a `_meta` block tagging `is_live_db_output: true` and
+written to `.agent/audit/live-schema-snapshot-2026-05-23.json`, overwriting the
+synthesized placeholder from commit `c2cd286`.
+
+### Gate checks against live snapshot — all four PASS
+
+| # | Check | Threshold | Observed (live) | Observed (synth, prior) | Status |
+|---|---|---|---|---|---|
+| 1 | Snapshot covers expected ~80 tables | 50–120 | 80 | 75 | PASS |
+| 2 | Every §4.1 entity has present/not-present row | All 25 listed | 25/25 (18 present, 7 not) | 25/25 (18, 7) | PASS |
+| 3 | RLS enumeration succeeded for tables with RLS on | non-empty | 155 policies across 78 tables; 2 RLS-on with zero client policies (service_role-only) | 185 policies / 38 tables | PASS |
+| 4 | `commodity_id_check` returned a row per public table | one per table | 80/80 | 75/75 | PASS |
+
+The §4.1 entity present/not-present split matches the migration-derived
+expectation exactly. The multi-commodity FK status for the six PASS entities
+(canonical_products, positions, market_intelligence, news_items, prices,
+position_reports) is unchanged: all `commodity_id uuid NOT NULL REFERENCES
+commodities(id)` confirmed in the live DB.
+
+### Live-vs-migration diff (the part the synthesized snapshot could not see)
+
+**DB-AHEAD findings (6 tables in live not in migrations / synthesizer):**
+- `atlas_audit_events`
+- `atlas_concept_links`
+- `atlas_connections`
+- `atlas_project_connections`
+- `atlas_queue_operations`
+- `atlas_user_state`
+
+All six are atlas-cockpit runtime infrastructure (not §4.1 domain entities).
+Likely created via direct Studio ALTERs during cockpit phases that did not
+ship a committed migration file. Flagged in
+`open-questions-2026-05-23.md` Q5 (DB-AHEAD findings) for follow-up workshop.
+None are V1.0-alpha-blocking.
+
+**Migration drift findings (1 §4.1-cluster table + verifier-RLS hardening
+unapplied):**
+- `cockpit_phase_approvals` — migration `20260508000000_concepts_and_phase_approvals.sql`
+  creates this table alongside `concepts`. Live DB has `concepts` (so the
+  migration file ran partway) but NOT `cockpit_phase_approvals`. Same file's
+  `schema_migrations` version row `20260508000000` IS present, so `db push`
+  will not re-apply. This is a 1.10bb-class partial-apply drift, but
+  cockpit-scope (NOT V1.0-alpha-blocking per the auth/RBAC/verified-queue/V2-
+  migration/`/insights` definition). Logged as new Q9 in open-questions.
+- `20260511000001_fix_verifier_runs_rls.sql` — adds four explicit role-scoped
+  RLS policies (service_role + authenticated INSERT/SELECT) on
+  `verifier_runs`. Live DB only has the pre-existing `"anyone reads
+  verifier_runs"` policy; the four new policies are NOT present. The file's
+  `schema_migrations` row is absent, so `db push` would still try. Verifier
+  write path is currently operational via service_role bypass, so this is
+  hardening drift not breaking drift. Logged as new Q10 in open-questions.
+- `20260511000002_fix_verifier_runs_schema.sql` — 10 `ADD COLUMN IF NOT
+  EXISTS` statements. All 10 columns ARE present in live (verified via
+  `information_schema.columns`). Effect-in-place; only the
+  `schema_migrations` row is missing. No remediation needed beyond a
+  `migration repair --status applied` row to silence future `db push`.
+- `20260510000000_phase_1_3c_drift_repair_marker.sql` — sets a
+  `COMMENT ON SCHEMA public`. Live `pg_namespace.public` description is the
+  default `"standard public schema"`, so the COMMENT did NOT land. Marker-only
+  drift (no functional impact). Will resolve with the standard `migration
+  repair` Muzammil owns per `docs/phase-1.3c-manual-steps.md`.
+
+**Ghost `schema_migrations` rows (DB has version with no file in repo):**
+- `20260506` — `ai_analyses`. Already logged in `runtime-state.md` line 178
+  as "the malformed `20260506` remote row" that Muzammil was to delete in
+  Phase 1.3c. Still present.
+- `20260521195157` — `1.10bd-queue-pivot-step2`
+- `20260522124047` — `phase_1_10be_orphan_archive`
+- `20260522130359` — `phase_c1_workshop_whatsapp_ping_col`
+
+These three look like phase work that landed in DB without a corresponding
+migration file commit. Q11 in open-questions.
+
+**Resolved by live snapshot — open-question Q6:** `public.current_user_tier()`
+DOES exist in the live DB (confirmed via `pg_proc` lookup). The
+`verification_requests` RLS policies that reference it are not broken. Q6 is
+resolved without code change; the helper was added by a migration the audit
+SQL did not introspect functions from. Recorded in open-questions update.
+
+### V1.0-alpha-blocking PLAN-AHEAD migrations drafted in 1.2c
+
+**Zero.** Every member of the V1.0-alpha-blocking subset
+(`commodities`, `news_items`, `market_intelligence`, `prices`, `profiles`,
+`user_roles`, `verification_requests`, `auth_bridge_log`) is present in the
+live DB with the expected column shape — column-level diff against migration
+files showed zero missing columns once synthesizer parser limitations are
+discounted (`profiles.verification_state` and
+`verification_requests.decided_to_state` are present in live and in migration
+source; the synthesizer's regex parser missed them — see
+`scripts/synthesize-migration-snapshot.mjs`).
+
+All real drift surfaced by the live snapshot (`cockpit_phase_approvals`,
+the verifier-RLS hardening, ghost migration rows) is OUTSIDE the V1.0-alpha-
+blocking definition per task spec ("auth / RBAC / verified queue / V2 user
+migration / read-only `/insights`"). Migration drafting for these is
+deferred to a dedicated follow-up phase under explicit human gating, per the
+anti-restart rule (creating parallel migration files next to the partial-apply
+`20260508000000` would risk a second collision).
+
+### Artifacts in this pass
+
+- `.agent/audit/live-schema-snapshot-2026-05-23.json` — authoritative live-DB
+  snapshot (`_meta.is_live_db_output: true`), 300 KB, 80 tables, 900 columns,
+  50 FKs, 261 indexes, 155 RLS policies, 25 §4.1 entity rows.
+- `.agent/audit/gate-result-2026-05-23.md` — this file. PASS recorded.
+- `.agent/audit/gap-report-2026-05-23.md` — Live-DB column appended; drift
+  section added.
+- `.agent/audit/open-questions-2026-05-23.md` — Q5 populated with DB-AHEAD;
+  Q6 resolved; Q9/Q10/Q11 added for the drift findings.
+- `.agent/runtime-state.md` — 1.2c completion logged.
+
+No new migration files written. No `.sql` was executed against the live DB
+in this pass (read-only `information_schema`/`pg_catalog` queries only via
+`scripts/audit-live-schema.sql`).
+
+---
+
+## Phase 1.2b — Prior pass history (unchanged, retained for audit trail)
 
 ## Remediation attempt 3 — force Verifier redeploy + literal-placeholder backstop
 
