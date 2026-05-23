@@ -10,9 +10,14 @@ const ORIGINAL_REPO_ROOT = process.env.REPO_ROOT
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'verifier-server-test-'))
   process.env.REPO_ROOT = tmpDir
-  // Mock the Supabase client to prevent actual DB calls
+  // Mock the Supabase client to prevent actual DB calls. requireSupabaseClient
+  // must throw — server.ts wraps every write in try/catch, so the mock surfaces
+  // the missing-creds behavior without writing rows.
   vi.mock('../lib/supabase', () => ({
     getSupabaseClient: () => null,
+    requireSupabaseClient: () => {
+      throw new Error('mocked: supabase client unavailable in tests')
+    },
   }))
 })
 
@@ -85,7 +90,7 @@ describe('handleAudit — post-sync spec resolution', () => {
     const serverCode = readFileSync(join(__dirname, '..', 'server.ts'), 'utf-8')
 
     // Verify that syncRepoToHead appears before findTaskSpec in handleAudit
-    const syncIndex = serverCode.indexOf('syncRepoToHead(REPO_ROOT, head_after)')
+    const syncIndex = serverCode.indexOf('syncToCommitOnDisk(REPO_ROOT, head_after)')
     const findTaskSpecIndex = serverCode.indexOf('findTaskSpec(task_id)')
 
     expect(syncIndex).toBeGreaterThan(0)
@@ -98,9 +103,11 @@ describe('handleAudit — post-sync spec resolution', () => {
     const { readFileSync } = await import('fs')
     const serverCode = readFileSync(join(__dirname, '..', 'server.ts'), 'utf-8')
 
-    // Find the sync_failed writeUnknownVerifierRun call
+    // Find the sync_failed writeUnknownVerifierRun call. The post-sync
+    // assertion guards `actualHead !== head_after` (see ADR-2026-05-23-
+    // verifier-cluster-7da23cc3f830 §3.3 / §5 priority-3).
     const syncFailedMatch = serverCode.match(
-      /if \(!synced\)[^}]*writeUnknownVerifierRun\(\s*task_id,\s*(null|taskSpecPath)/s
+      /actualHead\s*!==\s*head_after[\s\S]*?writeUnknownVerifierRun\(\s*task_id,\s*(null|taskSpecPath)/
     )
 
     expect(syncFailedMatch).toBeTruthy()
@@ -120,5 +127,81 @@ describe('handleAudit — post-sync spec resolution', () => {
 
     expect(specNotFoundSection).toBeTruthy()
     expect(specNotFoundSection?.[1]).toBe('null')
+  })
+})
+
+// ── Regression test for ADR-2026-05-23-verifier-cluster-7da23cc3f830 §5 P3 ──
+//
+// Simulates a stale HEAD: REPO_ROOT points at a freshly-init'd git repo at
+// commit X, but the audit request claims `head_after` is a fake SHA Y. The
+// fetch/reset inside syncToCommitOnDisk fails (no `origin` remote + SHA does
+// not exist), so the on-disk HEAD remains at X. The post-sync assertion in
+// handleAudit must detect actualHead !== head_after and emit verdict=unknown
+// with reason=sync_failed instead of letting verify() read a stale tree.
+
+describe('handleAudit — post-sync HEAD assertion (sync-race regression)', () => {
+  it('emits verdict=unknown / reason=sync_failed when on-disk HEAD does not match head_after', async () => {
+    const { execFileSync } = await import('child_process')
+    execFileSync('git', ['init', '-q'], { cwd: tmpDir })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tmpDir })
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir })
+    writeFileSync(join(tmpDir, 'README.md'), 'stale-head regression repo')
+    execFileSync('git', ['add', '.'], { cwd: tmpDir })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: tmpDir })
+    const realHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir })
+      .toString()
+      .trim()
+
+    // Plausible-looking SHA that does not exist in the repo. fetch fails (no
+    // origin), reset --hard fails (SHA unknown), so HEAD stays at realHead.
+    const fakeHeadAfter = 'deadbeefcafebabe0123456789abcdef01234567'
+    expect(fakeHeadAfter).not.toBe(realHead)
+
+    const { handleAudit } = await import('../server.js')
+
+    // server.ts reads VERIFIER_API_TOKEN at module load. If it's set in the
+    // env (Railway VPS sets it), forge the matching Bearer so the auth gate
+    // doesn't short-circuit the sync_failed path we're trying to exercise.
+    const apiToken = process.env.VERIFIER_API_TOKEN ?? ''
+    const authHeader = apiToken ? `Bearer ${apiToken}` : ''
+
+    const req = {
+      headers: authHeader ? { authorization: authHeader } : {},
+      on: vi.fn((event: string, handler: (chunk?: Buffer) => void) => {
+        if (event === 'data') {
+          handler(
+            Buffer.from(
+              JSON.stringify({
+                task_id: 'phase-test-stale-head',
+                head_before: realHead,
+                head_after: fakeHeadAfter,
+              }),
+            ),
+          )
+        } else if (event === 'end') {
+          handler()
+        }
+      }),
+    } as unknown as IncomingMessage
+
+    let responseStatus = 0
+    let responseBody = ''
+    const res = {
+      writeHead: vi.fn((status: number) => {
+        responseStatus = status
+      }),
+      end: vi.fn((body: string) => {
+        responseBody = body
+      }),
+    } as unknown as ServerResponse
+
+    await handleAudit(req, res)
+
+    expect(responseStatus).toBe(200)
+    const parsed = JSON.parse(responseBody)
+    expect(parsed.verdict).toBe('unknown')
+    expect(parsed.reason).toBe('sync_failed')
+    expect(parsed.confidence).toBe(0)
+    expect(parsed.gaps).toEqual([])
   })
 })

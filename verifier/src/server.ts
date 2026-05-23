@@ -16,34 +16,32 @@ const execFileP = promisify(execFile)
 // whatever HEAD it had when it started. Specs that create new files always
 // fail because the new files only exist on the just-pushed commit. Fix:
 // fetch + reset --hard to head_after at the start of every audit.
-//
-// Returns true if the post-sync HEAD matches headAfter, false otherwise.
-// A false return means the row should be marked unknown_reason='sync_failed'
-// so the workflow-trace checker still sees a row for the commit.
-async function syncRepoToHead(repoRoot: string, headAfter: string): Promise<boolean> {
-  if (!headAfter || headAfter === 'unknown') return true
+async function syncToCommitOnDisk(repoRoot: string, headAfter: string): Promise<void> {
+  if (!headAfter || headAfter === 'unknown') return
   try {
     await execFileP('git', ['fetch', 'origin', 'main', '--quiet'], { cwd: repoRoot })
     await execFileP('git', ['reset', '--hard', headAfter], { cwd: repoRoot })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[verifier-server] sync to ${headAfter.slice(0, 8)} failed: ${msg.slice(0, 200)}`)
-    // Fall through to verify — the post-sync HEAD log will reveal the drift.
+    // Fall through to the post-sync assertion in handleAudit — if HEAD did
+    // not advance, the assertion will trip and we'll respond sync_failed.
   }
+}
 
-  let postSyncHead = 'unknown'
+// Read the on-disk HEAD as a SHA string. Returns 'unknown' on any failure.
+// Kept separate from syncToCommitOnDisk so the post-sync assertion is an
+// independent verification step at the call site (ADR-2026-05-23-verifier-
+// cluster-7da23cc3f830 §3.3 / §5 priority-3).
+async function readCurrentHead(repoRoot: string): Promise<string> {
   try {
     const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
-    postSyncHead = stdout.trim()
+    return stdout.trim()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[verifier-server] could not read post-sync HEAD: ${msg.slice(0, 200)}`)
+    return 'unknown'
   }
-
-  console.log(
-    `[verifier-server] post-sync HEAD: ${postSyncHead.slice(0, 8)} (requested ${headAfter.slice(0, 8)})`,
-  )
-  return postSyncHead === headAfter
 }
 
 const REPO_ROOT = process.env.REPO_ROOT ?? join(__dirname, '..', '..')
@@ -84,7 +82,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(json)
 }
 
-async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const auth = req.headers['authorization'] ?? ''
   if (API_TOKEN && auth !== `Bearer ${API_TOKEN}`) {
     send(res, 401, { error: 'unauthorized' })
@@ -109,11 +107,19 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
   const auditStartedAt = Date.now()
 
   // Sync the local clone to the commit Builder just pushed so files-exist
-  // and other fs-based checks see the new files. If sync fails (post-sync
-  // HEAD ≠ requested), record an unknown row and bail — verifying against
-  // a stale tree produces misleading gaps.
-  const synced = await syncRepoToHead(REPO_ROOT, head_after)
-  if (!synced) {
+  // and other fs-based checks see the new files. The post-sync assertion
+  // below is the load-bearing check: if `git pull` returned before HEAD
+  // actually advanced (the rem1 stale-pull window — see ADR-2026-05-23-
+  // verifier-cluster-7da23cc3f830 §3.3), we read the pre-Builder tree and
+  // emit a misleading empty-diff-guard fail. Detect it here, mark
+  // sync_failed, and bail before reading any files.
+  await syncToCommitOnDisk(REPO_ROOT, head_after)
+  const actualHead = await readCurrentHead(REPO_ROOT)
+  const syncRequested = head_after && head_after !== 'unknown'
+  if (syncRequested && actualHead !== head_after) {
+    console.error(
+      `[verifier-server] sync_failed task_id=${task_id} expected=${head_after} actual=${actualHead}`,
+    )
     try {
       await writeUnknownVerifierRun(
         task_id,
@@ -132,6 +138,7 @@ async function handleAudit(req: IncomingMessage, res: ServerResponse): Promise<v
       confidence: 0,
       gaps: [],
       audit_run_id: randomUUID(),
+      reason: 'sync_failed',
     })
     return
   }
