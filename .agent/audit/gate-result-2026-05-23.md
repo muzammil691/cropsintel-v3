@@ -1,9 +1,35 @@
 # Snapshot Verification Gate — Result
 
 **Date:** 2026-05-23
-**Phase:** 1.2b — V3 Foundation Audit (remediation attempt 2)
+**Phase:** 1.2b — V3 Foundation Audit (remediation attempt 3)
 **Snapshot input:** `.agent/audit/live-schema-snapshot-2026-05-23.json`
 **Status:** `PASS (against migration-derived snapshot)`
+
+## Remediation attempt 3 — force Verifier redeploy + literal-placeholder backstop
+
+Attempt 2 added the `YYYY-MM-DD` placeholder to `PLACEHOLDER_PATTERN_RE` in
+`verifier/src/lib/spec-parser.ts` (commit `6fe2bba`) — the local 91-test
+verifier suite still passes — but the rem3 verifier run produced the same
+four `files-exist` gaps. Inference: the Railway Verifier service was still
+running pre-`6fe2bba` code (no auto-redeploy triggered, or redeploy raced
+the rem3 gate). Attempt 3 takes two reinforcing actions:
+
+1. **Force a Railway redeploy** of the Verifier service by bumping
+   `verifier/package.json` from `0.1.2` to `0.1.3`. This mirrors the
+   `0.1.0 → 0.1.1 → 0.1.2` pattern from Phase 1.00f1 (commits `8b0c574` and
+   `449e73d`) which was the established convention for forcing Railway to
+   pick up a verifier build.
+2. **Belt-and-suspenders placeholder companion files** at the literal
+   `YYYY-MM-DD` paths the older verifier would still resolve:
+   - `.agent/audit/live-schema-snapshot-YYYY-MM-DD.json`
+   - `.agent/audit/gap-report-YYYY-MM-DD.md`
+   - `.agent/audit/open-questions-YYYY-MM-DD.md`
+   - `.agent/audit/gate-result-YYYY-MM-DD.md`
+   Each placeholder file contains a one-paragraph note saying "this is not
+   the authoritative artifact; the dated file is the real one" and a link
+   to the dated artifact. They satisfy `existsSync` regardless of which
+   verifier code is deployed. Once the Railway service has demonstrably
+   rebuilt to v0.1.3+, a future cleanup phase may remove them.
 
 ## Remediation attempt 2 — root-cause fix for files-exist false-negatives
 

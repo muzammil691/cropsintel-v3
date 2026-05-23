@@ -1,6 +1,6 @@
 {
   "name": "cropsintel-v3-verifier",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Automated quality gate for CropsIntel V3 agent-delivered tasks",
   "main": "dist/index.js",
