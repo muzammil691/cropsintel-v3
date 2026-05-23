@@ -164,3 +164,42 @@ the sync hardening is a belt-and-braces backstop).
   score; sub-threshold flags to escalation queue)
 - master plan §11.2 (Phase 1 sub-tasks — Phase 1.2c is the live-DB
   foundation audit rerun)
+
+## 8. Remediation attempt 1 — actions taken
+
+The first run of this investigation (commit `5d69d36`) authored this ADR
+but failed Verifier review on the same `empty-diff-guard` signature that
+the ADR diagnoses. Cause: the remediation spec carried no back-ticked
+file paths, so `spec.filesRequired = []` and the Verifier short-circuited
+before reading the ADR.
+
+The fix is self-referential and confirms the ADR's root cause:
+
+- The remediation spec
+  `.agent/tasks/in-progress/phase-1-CLUSTER-investigation-7da23cc3f830-1779541608348-rem.md`
+  now carries a `## Files required` section enumerating the four
+  artifacts shipped under this attempt in back-ticks, so the
+  spec-parser at `verifier/src/lib/spec-parser.ts:42-75` will populate
+  `filesRequired` with four entries.
+- The Verifier will load real diff context from those four paths,
+  satisfying `empty-diff-guard` at `verifier/src/verify.ts:90-106`.
+
+Nothing else in the ADR diagnosis (sections §2 – §7) changes. The
+investigation conclusion stands: the cluster is real, the guard is
+correct, and the upstream contract gap is documented.
+
+## 9. Follow-up specs queued under this remediation
+
+Three follow-up task specs are queued under `.agent/tasks/queued/` to
+ship the §5 recommended fixes. Each is independently shippable per
+acceptance criterion §2 of the investigation spec.
+
+| Order | Spec | ADR §5 priority | Scope |
+|-------|------|-----------------|-------|
+| 1 | `.agent/tasks/queued/phase-1.0x-requeue-inheritance-fix.md` | P1 | `requeueWithGaps` inherits the most recent rem body, not the title-only original |
+| 2 | `.agent/tasks/queued/phase-1.0x-workshop-preflight-filesrequired.md` | P2 | Workshop refuses to queue a spec with empty `filesRequired` unless explicitly tagged `audit-only: true` |
+| 3 | `.agent/tasks/queued/phase-1.0x-verifier-sync-hardening.md` | P3 | Verifier asserts `git rev-parse HEAD == head_after` after `syncToCommitOnDisk` and emits `verdict: 'unknown'` on mismatch |
+
+The conductor will pick these up via its normal scan of
+`.agent/tasks/queued/` once this investigation closes. None of the
+three is in scope for this ADR itself; only the specs are shipped.
