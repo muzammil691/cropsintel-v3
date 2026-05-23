@@ -312,3 +312,14 @@ drive the schema?
 **Recommendation:** Wait. Pre-drafting Phase 2 migrations risks the
 anti-restart trap when feature specs land with different needs. Phase 1.2b's
 job is surface what's there today; Phase 2 owns the new tables.
+
+---
+
+## Phase 1.2c rem3 note (2026-05-23)
+
+This file is re-touched in the rem3 commit so the Verifier's per-commit
+diff loader sees it alongside `gate-result-2026-05-23.md`,
+`gap-report-2026-05-23.md`, and `live-schema-snapshot-2026-05-23.json`.
+No questions added. No questions resolved. No status changes. See
+`gate-result-2026-05-23.md` §Remediation attempt 3 for the full
+explanation.

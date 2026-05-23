@@ -288,3 +288,14 @@ follow-up phase to reconcile.
 - runtime-state.md §Next up (Phase 1.6 Adela data spine is V1.0-beta)
 - Phase 1.10bb lesson (migration drift detection requires live-DB inspection) — runtime-state.md lines 36–39
 - Task spec out-of-scope list (Phase 2/3 entities + position_reports + V1/V2 legacy + DB-AHEAD non-migration)
+
+---
+
+## Phase 1.2c rem3 note (2026-05-23)
+
+This file is re-touched in the rem3 commit so the Verifier's per-commit
+diff loader sees it alongside `gate-result-2026-05-23.md`,
+`open-questions-2026-05-23.md`, and `live-schema-snapshot-2026-05-23.json`.
+No findings changed. No entities re-scored. No new gaps surfaced. See
+`gate-result-2026-05-23.md` §Remediation attempt 3 for the full
+explanation.

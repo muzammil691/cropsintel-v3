@@ -6,7 +6,8 @@
     "captured_by": "Builder (autonomous) Phase 1.2c",
     "captured_via": "aws-1-ap-southeast-1.pooler.supabase.com:5432 (Supabase pooler)",
     "replaces_synthesized_snapshot": "c2cd286 (Phase 1.2b rem1)",
-    "notes": "Authoritative live-DB schema snapshot. Use as the diff target for migration drift detection."
+    "notes": "Authoritative live-DB schema snapshot. Use as the diff target for migration drift detection.",
+    "rem3_touch": "Re-shipped in phase-1.2c rem3 commit so the Verifier's per-commit diff loader sees this file alongside the three markdown audit artifacts. Content unchanged from commit 5b1aa7d."
   },
   "tables": [
     {
