@@ -11,20 +11,35 @@ import type { IncomingMessage, ServerResponse } from 'http'
 // Instead it emits verdict='unknown' with reason='sync_failed' and a structured
 // log line including both expected (head_after) and actual (current HEAD).
 
+// Mocks must be hoisted to top-level (vitest 4.x requirement). Mock the
+// transitive openai-o3 chain via ./verify so test runs without verifier deps
+// installed locally — the sync_failed path returns before verify is called.
+vi.mock('./verify', () => ({
+  verify: vi.fn(async () => ({
+    verdict: 'pass',
+    confidence: 0.95,
+    gaps: [],
+    judgmentCallNotes: '',
+  })),
+}))
+
+vi.mock('./research', () => ({
+  runResearch: vi.fn(async () => ({ findings: [], confidence: 0 })),
+}))
+
+vi.mock('./lib/supabase', () => ({
+  getSupabaseClient: () => null,
+  requireSupabaseClient: () => {
+    throw new Error('mocked: supabase client unavailable in tests')
+  },
+}))
+
 let tmpDir: string
 const ORIGINAL_REPO_ROOT = process.env.REPO_ROOT
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'verifier-server-sync-test-'))
   process.env.REPO_ROOT = tmpDir
-  // Supabase writes are wrapped in try/catch in server.ts; throwing from the
-  // mocked client surfaces the missing-creds branch without persisting rows.
-  vi.mock('./lib/supabase', () => ({
-    getSupabaseClient: () => null,
-    requireSupabaseClient: () => {
-      throw new Error('mocked: supabase client unavailable in tests')
-    },
-  }))
 })
 
 afterEach(() => {

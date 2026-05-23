@@ -4,21 +4,36 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import type { IncomingMessage, ServerResponse } from 'http'
 
+// Mocks must be hoisted to top-level (vitest 4.x requirement). Mock the
+// transitive openai-o3 import chain via ../verify so the test runs without
+// verifier deps installed locally — the sync_failed path returns before
+// verify is called.
+vi.mock('../verify', () => ({
+  verify: vi.fn(async () => ({
+    verdict: 'pass',
+    confidence: 0.95,
+    gaps: [],
+    judgmentCallNotes: '',
+  })),
+}))
+
+vi.mock('../research', () => ({
+  runResearch: vi.fn(async () => ({ findings: [], confidence: 0 })),
+}))
+
+vi.mock('../lib/supabase', () => ({
+  getSupabaseClient: () => null,
+  requireSupabaseClient: () => {
+    throw new Error('mocked: supabase client unavailable in tests')
+  },
+}))
+
 let tmpDir: string
 const ORIGINAL_REPO_ROOT = process.env.REPO_ROOT
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'verifier-server-test-'))
   process.env.REPO_ROOT = tmpDir
-  // Mock the Supabase client to prevent actual DB calls. requireSupabaseClient
-  // must throw — server.ts wraps every write in try/catch, so the mock surfaces
-  // the missing-creds behavior without writing rows.
-  vi.mock('../lib/supabase', () => ({
-    getSupabaseClient: () => null,
-    requireSupabaseClient: () => {
-      throw new Error('mocked: supabase client unavailable in tests')
-    },
-  }))
 })
 
 afterEach(() => {
