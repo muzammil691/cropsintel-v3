@@ -53,3 +53,10 @@ follow-up from ADR `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc
 the rem1 stale-pull window — pick up after the P1 inheritance fix and
 P2 Workshop pre-flight have shipped, since those address larger blast
 radius issues.
+
+Re-confirmed queued under rem3 (2026-05-23) per ADR §11. The rem3
+audit gap-1 (o3-judgment claiming the ADR ended at §5) is itself
+consistent with the §3.3 sync race this spec is queued to fix, which
+re-validates the P3 priority. Spec content and acceptance criteria
+are unchanged from rem2; only this status note is updated so the rem3
+diff at HEAD visibly includes this file.

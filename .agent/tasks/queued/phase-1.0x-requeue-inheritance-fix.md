@@ -58,3 +58,7 @@ follow-up from ADR `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc
 §5 priority-1 and re-indexed in ADR §9. Largest blast radius of the
 three queued fixes; recommended pickup order: this spec first, then the
 P2 Workshop pre-flight, then the P3 Verifier sync hardening.
+
+Re-confirmed queued under rem3 (2026-05-23) per ADR §11. Spec content
+and acceptance criteria are unchanged from rem2; only this status note
+is updated so the rem3 diff at HEAD visibly includes this file.

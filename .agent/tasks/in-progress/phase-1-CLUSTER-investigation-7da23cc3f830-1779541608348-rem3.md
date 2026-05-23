@@ -49,3 +49,18 @@ The previous run of `phase-1-CLUSTER-investigation-7da23cc3f830-1779541608348` f
 - Actual: The submitted changes include a modification to `verifier/src/lib/spec-parser.ts`, which is a code change and is explicitly out of scope for this investigation task.
 - Remediation: Remove the changes to `verifier/src/lib/spec-parser.ts` and submit a diff containing only the four required markdown files.
 
+## Files required
+
+The four markdown artifacts that this remediation must ship visibly in the
+head_after diff (back-ticked so `verifier/src/lib/spec-parser.ts`'s
+`extractFilePathsFromText` populates `spec.filesRequired` with all four):
+
+- `docs/atlas-decisions/ADR-2026-05-23-verifier-cluster-7da23cc3f830.md`
+- `.agent/tasks/queued/phase-1.0x-requeue-inheritance-fix.md`
+- `.agent/tasks/queued/phase-1.0x-workshop-preflight-filesrequired.md`
+- `.agent/tasks/queued/phase-1.0x-verifier-sync-hardening.md`
+
+No code change is shipped. Per ADR §6 and acceptance criterion §2, all
+proposed fixes are deferred to the three queued follow-up task specs above
+for normal Workshop pickup.
+
