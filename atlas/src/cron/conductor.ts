@@ -13,7 +13,8 @@ import { checkClusterDedupe, rememberClusterKey } from '../lib/cluster-dedupe'
 import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
-import { requeueWithGaps, type VerifierGap } from '../lib/plan-server'
+import { requeueWithGaps, findInheritedBody, type VerifierGap } from '../lib/plan-server'
+import { isInfraSpec } from '../lib/infra-policy'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
@@ -1983,6 +1984,33 @@ async function autoRequeueOnVerifierFail(trustMode: TrustMode): Promise<void> {
         console.warn('[atlas-conductor] auto-requeue escalation WhatsApp failed:', err)
       }
       continue
+    }
+
+    // Phase 1.0x — infra-spec policy guard (hook B). Read the inherited
+    // body via the same lookup chain requeueWithGaps would use, parse it,
+    // and call isInfraSpec. On infra=true: log and skip the requeue
+    // entirely so the conductor short-circuits before requeueWithGaps
+    // runs. Belt-and-braces with the hook inside requeueWithGaps; either
+    // can fire first depending on lookup ordering, both refuse identically.
+    try {
+      const inheritedForCheck = await findInheritedBody({ taskId: rootTaskId, attempt: nextAttempt })
+      if (inheritedForCheck) {
+        const parsedForCheck = parseSpec(inheritedForCheck.content)
+        const detection = isInfraSpec({ body: parsedForCheck.body, taskId: rootTaskId })
+        if (detection.infra) {
+          console.warn(
+            `[atlas-conductor] auto-requeue refused (policy: infra spec — Layer ${detection.layer}) for ${rootTaskId}: ${detection.reason}`,
+          )
+          continue
+        }
+      }
+    } catch (err) {
+      // If the policy check itself fails, fall through to requeueWithGaps
+      // — that path's own hook (A) is the second line of defense.
+      console.warn(
+        `[atlas-conductor] infra-policy pre-check threw for ${rootTaskId}; falling through to requeueWithGaps hook:`,
+        err instanceof Error ? err.message : err,
+      )
     }
 
     try {
