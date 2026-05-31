@@ -16,6 +16,8 @@
 // verifier parser rather than introduce a third). See the drift-pin
 // test in infra-policy.test.ts for the parser-agreement contract.
 
+import { access, mkdir, writeFile } from 'fs/promises'
+import { resolve } from 'path'
 import { extractFilesRequired } from '../workshop/queue-validator'
 
 // Five exact roots. memory/ and adela/ are product-adjacent (cockpit
@@ -199,4 +201,43 @@ ${gapsLines}
 
 — atlas auto-requeue policy guard
 `
+}
+
+/**
+ * Write the infra-refusal question file at
+ * `<repoRoot>/.agent/questions/<taskId>-q.md`. Shared by both hook A
+ * (requeueWithGaps in plan-server.ts) and hook B (autoRequeueOnVerifierFail
+ * in cron/conductor.ts) so a refused requeue leaves the same artifact
+ * regardless of which hook fired.
+ *
+ * Skip-if-exists semantics: if the file is already present (a prior
+ * cron cycle wrote it, or hook A already ran on a previous attempt),
+ * we DO NOT overwrite. The earliest write wins. Caller can check the
+ * `written` flag to log appropriately.
+ */
+export async function writeInfraRefusalQuestion(args: {
+  taskId: string
+  detection: IsInfraSpecResult
+  gaps: VerifierGapShape[]
+  remediationAttempt: number
+  repoRoot: string
+}): Promise<{ written: boolean; path: string; reason?: string }> {
+  const questionsDir = resolve(args.repoRoot, '.agent/questions')
+  const path = resolve(questionsDir, `${args.taskId}-q.md`)
+  try {
+    await access(path)
+    // Exists → skip-if-exists. Earliest write wins; later cycle leaves it.
+    return { written: false, path, reason: 'already exists' }
+  } catch {
+    /* not present → fall through to write */
+  }
+  const stub = buildInfraQuestionStub({
+    taskId: args.taskId,
+    detection: args.detection,
+    gaps: args.gaps,
+    remediationAttempt: args.remediationAttempt,
+  })
+  await mkdir(questionsDir, { recursive: true })
+  await writeFile(path, stub, 'utf-8')
+  return { written: true, path }
 }

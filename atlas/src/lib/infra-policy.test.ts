@@ -8,11 +8,13 @@
 //      silently weakening the guard.
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { resolve } from 'path'
+import { tmpdir } from 'os'
 import {
   isInfraSpec,
   buildInfraQuestionStub,
+  writeInfraRefusalQuestion,
   INFRA_PATH_PREFIXES,
   INFRA_TASKID_PATTERN,
 } from './infra-policy'
@@ -278,6 +280,125 @@ describe('module constants — locked roots and regex', () => {
     expect(INFRA_TASKID_PATTERN.test('phase-X-workshop-engine')).toBe(true)
     expect(INFRA_TASKID_PATTERN.test('phase-X-council-fix')).toBe(true)
     expect(INFRA_TASKID_PATTERN.test('phase-X-designer-audit-fix')).toBe(true)
+  })
+})
+
+// ────────────────── writeInfraRefusalQuestion (hook symmetry) ──────────────────
+//
+// Both hook A (requeueWithGaps) and hook B (autoRequeueOnVerifierFail) call
+// writeInfraRefusalQuestion. The tests below simulate the conductor-path
+// (hook B) flow in a temp REPO_ROOT to assert the artifact is written with
+// the expected blocking-reason content, and that skip-if-exists prevents
+// later cycles from overwriting an earlier write.
+
+describe('writeInfraRefusalQuestion — conductor-path artifact write', () => {
+  it('writes .agent/questions/<taskId>-q.md with the expected blocking reason', async () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), 'atlas-infra-policy-'))
+    try {
+      const taskId = 'phase-1.0x-requeue-inheritance-fix'
+      const body = '# Task\n\nTitle-only body (no filesRequired).\n'
+      const detection = isInfraSpec({ body, taskId })
+      expect(detection.infra).toBe(true)
+      expect(detection.layer).toBe('C')
+
+      const r = await writeInfraRefusalQuestion({
+        taskId,
+        detection,
+        gaps: [
+          { check: 'empty-diff-guard', severity: 'fail', actual: 'no diff', expected: 'real diff', remediation: 'add paths' },
+        ],
+        remediationAttempt: 2,
+        repoRoot: tmpRoot,
+      })
+
+      expect(r.written).toBe(true)
+      const expectedPath = resolve(tmpRoot, '.agent/questions', `${taskId}-q.md`)
+      expect(r.path).toBe(expectedPath)
+      expect(existsSync(expectedPath)).toBe(true)
+
+      const contents = readFileSync(expectedPath, 'utf-8')
+      // Blocking-reason markers required by the user-facing contract:
+      expect(contents).toContain('infra-via-Claude-Code policy')
+      expect(contents).toContain('Layer C')
+      expect(contents).toContain(taskId)
+      // Layer C evidence is the matched task_id token — should appear in
+      // the matched-evidence list.
+      expect(contents).toMatch(/Matched evidence[\s\S]*requeue/i)
+      // Verifier gap context surfaced for the human handler.
+      expect(contents).toContain('empty-diff-guard')
+      expect(contents).toContain('Remediation attempt 2')
+      // Next steps — both options listed.
+      expect(contents).toContain('Have Claude Code audit + reauthor')
+      expect(contents).toContain('false positive')
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('skip-if-exists — does not overwrite an earlier write (earliest wins)', async () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), 'atlas-infra-policy-'))
+    try {
+      const taskId = 'phase-1.0x-verifier-sync-hardening'
+      const body = '# Task\n\n## Files required\n\n- `verifier/src/server.ts`\n'
+      const detection = isInfraSpec({ body, taskId })
+      expect(detection.infra).toBe(true)
+      expect(detection.layer).toBe('A')
+
+      // First write — should land.
+      const first = await writeInfraRefusalQuestion({
+        taskId,
+        detection,
+        gaps: [{ check: 'first-write-marker', severity: 'fail' }],
+        remediationAttempt: 1,
+        repoRoot: tmpRoot,
+      })
+      expect(first.written).toBe(true)
+      const firstContents = readFileSync(first.path, 'utf-8')
+      expect(firstContents).toContain('first-write-marker')
+
+      // Second write with different gaps — should SKIP (earliest wins).
+      const second = await writeInfraRefusalQuestion({
+        taskId,
+        detection,
+        gaps: [{ check: 'second-write-marker', severity: 'fail' }],
+        remediationAttempt: 2,
+        repoRoot: tmpRoot,
+      })
+      expect(second.written).toBe(false)
+      expect(second.reason).toBe('already exists')
+
+      // The file content must still be the first write — the second
+      // call must NOT have overwritten with less-informative content.
+      const finalContents = readFileSync(first.path, 'utf-8')
+      expect(finalContents).toContain('first-write-marker')
+      expect(finalContents).not.toContain('second-write-marker')
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('creates the .agent/questions/ directory when it does not yet exist', async () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), 'atlas-infra-policy-'))
+    try {
+      // tmpRoot has no .agent/questions/ yet — mkdir({recursive:true}) creates it.
+      const taskId = 'phase-1.0x-workshop-preflight-filesrequired'
+      const body = '# Task\n\nTitle-only.\n'
+      const detection = isInfraSpec({ body, taskId })
+      expect(detection.infra).toBe(true)
+
+      const r = await writeInfraRefusalQuestion({
+        taskId,
+        detection,
+        gaps: [],
+        remediationAttempt: 1,
+        repoRoot: tmpRoot,
+      })
+      expect(r.written).toBe(true)
+      expect(existsSync(resolve(tmpRoot, '.agent/questions'))).toBe(true)
+      expect(existsSync(r.path)).toBe(true)
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
   })
 })
 

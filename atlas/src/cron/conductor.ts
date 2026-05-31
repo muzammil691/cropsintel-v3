@@ -14,7 +14,7 @@ import { getCurrentMode } from '../lib/trust-mode'
 import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
 import { requeueWithGaps, findInheritedBody, type VerifierGap } from '../lib/plan-server'
-import { isInfraSpec } from '../lib/infra-policy'
+import { isInfraSpec, writeInfraRefusalQuestion } from '../lib/infra-policy'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
@@ -1998,6 +1998,26 @@ async function autoRequeueOnVerifierFail(trustMode: TrustMode): Promise<void> {
         const parsedForCheck = parseSpec(inheritedForCheck.content)
         const detection = isInfraSpec({ body: parsedForCheck.body, taskId: rootTaskId })
         if (detection.infra) {
+          // Symmetry with hook A in requeueWithGaps — write the same
+          // .agent/questions/<taskId>-q.md artifact so operators see one
+          // signal regardless of which hook fired. Skip-if-exists is
+          // enforced inside writeInfraRefusalQuestion; the earliest write
+          // wins. Failure to write the artifact is non-fatal: the
+          // console.warn below still records the refusal in Railway logs.
+          try {
+            await writeInfraRefusalQuestion({
+              taskId: rootTaskId,
+              detection,
+              gaps: (Array.isArray(row.gaps) ? row.gaps : []) as VerifierGap[],
+              remediationAttempt: nextAttempt,
+              repoRoot: REPO_ROOT,
+            })
+          } catch (writeErr) {
+            console.warn(
+              `[atlas-conductor] infra-policy: failed to write question file for ${rootTaskId}:`,
+              writeErr instanceof Error ? writeErr.message : writeErr,
+            )
+          }
           console.warn(
             `[atlas-conductor] auto-requeue refused (policy: infra spec — Layer ${detection.layer}) for ${rootTaskId}: ${detection.reason}`,
           )

@@ -5,7 +5,7 @@
 // All file paths are computed relative to REPO_ROOT (defaults to
 // /workspace/cropsintel-v3 on the Railway VPS).
 
-import { readFile, writeFile, readdir, mkdir } from 'fs/promises'
+import { readFile, writeFile, readdir } from 'fs/promises'
 import { resolve } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -13,7 +13,7 @@ import { withGitLock } from './git-mutex'
 import { parsePlan, serializePlan, moveNode, type PlanTree } from './plan-parser'
 import { getSupabaseClient } from './supabase'
 import { parseSpec, serializeFrontmatter } from './frontmatter'
-import { isInfraSpec, buildInfraQuestionStub } from './infra-policy'
+import { isInfraSpec, writeInfraRefusalQuestion } from './infra-policy'
 
 const execFileP = promisify(execFile)
 
@@ -311,20 +311,17 @@ export async function requeueWithGaps(args: {
   // Code per the 2026-05-23 policy. See atlas/src/lib/infra-policy.ts.
   const detection = isInfraSpec({ body: parsed.body, taskId: args.taskId })
   if (detection.infra) {
-    const questionsDir = resolve(REPO_ROOT, '.agent/questions')
-    const questionPath = resolve(questionsDir, `${args.taskId}-q.md`)
-    const stub = buildInfraQuestionStub({
-      taskId: args.taskId,
-      detection,
-      gaps: args.gaps,
-      remediationAttempt: attempt,
-    })
     try {
-      await mkdir(questionsDir, { recursive: true })
-      await writeFile(questionPath, stub, 'utf-8')
+      await writeInfraRefusalQuestion({
+        taskId: args.taskId,
+        detection,
+        gaps: args.gaps,
+        remediationAttempt: attempt,
+        repoRoot: REPO_ROOT,
+      })
     } catch (err) {
       console.warn(
-        `[plan-server] infra-policy: failed to write question file ${questionPath}:`,
+        `[plan-server] infra-policy: failed to write question file for ${args.taskId}:`,
         err instanceof Error ? err.message : err,
       )
     }
