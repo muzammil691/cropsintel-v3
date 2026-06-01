@@ -304,6 +304,64 @@ Single migration if cleanup is warranted.
 
 ---
 
+## J — Workshop `audit-only: true` escape hatch non-functional for Workshop-drafted specs
+
+**Logged:** 2026-05-31 (during P2 guard wiring into `queueWorkshopDiff`)
+
+**What:** the P2 guard (`validateQueueCandidateBody`) honors an
+`audit-only: true` flag in the spec's YAML frontmatter — that's the
+documented escape hatch for investigation/ADR specs that legitimately
+ship markdown rather than code. The hatch works for the
+`builder.queue_spec` chat tool, the `queueSpecFromPlanNode` path, and
+the `requeueWithGaps` / `safeRequeueWithReset` paths, because their
+spec bodies carry frontmatter through.
+
+It **does NOT work** for Workshop-drafted specs. `synthSpecBody` in
+[atlas/src/lib/queue-orchestrator.ts](../atlas/src/lib/queue-orchestrator.ts)
+constructs a spec body from `op.title` + `op.body` of the user-approved
+diff but emits no frontmatter at all (no leading `---` block). So even
+if a Workshop user wanted to mark their op `audit-only: true`, the
+synthesizer drops the frontmatter and the P2 guard refuses the
+title-only result.
+
+**Why this matters:** a legitimate Workshop investigation diff (e.g. a
+diff whose add op is "draft ADR for cluster X") cannot be queued via
+the Workshop path — the user has to either edit the spec post-synthesis
+to add the frontmatter, or shoehorn a `## Files required` block with a
+placeholder path. Both are awkward workarounds.
+
+**Suggested fix (two options, product-design decision):**
+
+1. **Extend `synthSpecBody` to propagate frontmatter from the op.** The
+   op shape (`PlanDiffOp` for `'add' | 'edit'`) would gain an optional
+   `audit_only?: boolean` field. When set, `synthSpecBody` emits
+   `---\naudit-only: true\n---\n` ahead of the body. The Workshop UI
+   adds a checkbox "this op is investigation-only (audit-only)" on
+   add/edit ops. Cleanest semantics; matches how chat-tool callers set
+   the flag.
+
+2. **Require a `## Files required` block in the Workshop UI** for every
+   add/edit op. The form validates before letting the user click
+   "Queue" — same UX constraint as authoring chat-tool specs. Higher
+   friction for investigation diffs (operator has to fake a paths
+   block), but eliminates the audit-only escape hatch entirely so
+   there's one consistent contract.
+
+**Currently documented in:** the bonus test case in
+[atlas/src/lib/p2-wiring.test.ts](../atlas/src/lib/p2-wiring.test.ts)
+under "queueWorkshopDiff — synthSpecBody validator contract" → "audit-
+only: true synth spec passes (Workshop investigation ADR)". The test
+documents the current (broken) behavior so any future fix has to
+update the assertion.
+
+**Owner:** Muzammil — decision between fix #1 and fix #2 is product UX,
+not a mechanical implementation question. Whichever ships, the
+validator contract stays unchanged; only the Workshop UX changes.
+
+**Detected:** P2 guard wiring (2026-05-31)
+
+---
+
 ## Adding a follow-up
 
 Append a new `## X — Title` section in chronological order. Keep the
