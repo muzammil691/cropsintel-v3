@@ -165,12 +165,18 @@ const jobs: JobConfig[] = [
       }
     },
   },
-  {
-    name: "price-staleness-probe",
-    schedule: "0 * * * *", // Hourly at the top of the hour
-    fn: runPriceStalenessProbe,
-  },
 ]
+
+// ---------------------------------------------------------------------------
+// Price-staleness probe (phase-1.6g)
+//
+// Deliberately scheduled OUTSIDE the `jobs` array so it bypasses `runJob` —
+// the spec mandates this probe does NOT write to the DB, and `runJob`
+// records start/complete/error events to `atlas_dispatches`. Hourly cron,
+// simple try/catch isolation, console logs only.
+// ---------------------------------------------------------------------------
+
+const PRICE_STALENESS_SCHEDULE = "0 * * * *" // Hourly at the top of the hour
 
 // ---------------------------------------------------------------------------
 // Scheduler activation
@@ -214,7 +220,50 @@ export function startScheduler(): void {
     console.log(`[scheduler] Registered ${job.name} with schedule: ${job.schedule}`)
   }
 
-  console.log(`[scheduler] ${jobs.length} cron job(s) registered`)
+  // Register the price-staleness probe separately so it bypasses runJob
+  // (spec: probe must NOT write to atlas_dispatches or any other table).
+  if (!cron.validate(PRICE_STALENESS_SCHEDULE)) {
+    console.error(
+      `[scheduler] Invalid cron expression for price-staleness-probe: ${PRICE_STALENESS_SCHEDULE}`
+    )
+  } else {
+    const probeTask = cron.schedule(PRICE_STALENESS_SCHEDULE, async () => {
+      if (shuttingDown) {
+        console.log("[scheduler] Shutdown in progress — skipping price-staleness-probe tick")
+        return
+      }
+      if (inFlight.get("price-staleness-probe")) {
+        console.log(
+          "[scheduler] price-staleness-probe already in-flight — skipping this tick"
+        )
+        return
+      }
+      inFlight.set("price-staleness-probe", true)
+      const startTime = Date.now()
+      console.log("[scheduler] Starting job: price-staleness-probe")
+      try {
+        await runPriceStalenessProbe()
+        const duration = Date.now() - startTime
+        console.log(`[scheduler] Job price-staleness-probe completed in ${duration}ms`)
+        lastRun["price-staleness-probe"] = new Date().toISOString()
+      } catch (err) {
+        const duration = Date.now() - startTime
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[scheduler] Job price-staleness-probe failed after ${duration}ms:`,
+          errorMessage
+        )
+      } finally {
+        inFlight.set("price-staleness-probe", false)
+      }
+    })
+    tasks.push(probeTask)
+    console.log(
+      `[scheduler] Registered price-staleness-probe with schedule: ${PRICE_STALENESS_SCHEDULE}`
+    )
+  }
+
+  console.log(`[scheduler] ${jobs.length + 1} cron job(s) registered`)
   installShutdownHandlers()
 }
 
