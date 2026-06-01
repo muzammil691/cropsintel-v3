@@ -1,5 +1,13 @@
 # Phase 1.2d — Manual Steps
 
+> **Remediation attempt 2 (2026-06-01):** This doc was first committed
+> in `eced3c0` (rem1) but the Verifier flagged it as `files-exist`
+> missing on attempt 2, likely due to a stale Verifier-service
+> filesystem state. This rem2 pass re-affirms the doc on disk and
+> bumps `.agent/runtime-state.md` so the per-attempt diff explicitly
+> includes `docs/phase-1.2d-manual-steps.md` for the Verifier's
+> existence check.
+
 **Audience:** Muzammil. The autonomous Builder pass for 1.2d re-ran the
 Snapshot Verification Gate against the authoritative live-DB snapshot
 (`.agent/audit/live-schema-snapshot-2026-05-23.json`,
