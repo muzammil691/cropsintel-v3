@@ -1,36 +1,29 @@
 /**
- * Price-staleness probe (Phase 1.6g — remediation attempt 2)
+ * Phase 1.6g — Adela price-staleness probe.
  *
- * Hourly self-probe that detects whether Adela's ingestion path into the
- * `prices` table is silently stalled. Reads the latest `ingested_at` value;
- * classifies the table as fresh or stale against a 6h threshold; pings
- * WhatsApp ONLY on state transitions to avoid notification spam.
+ * Hourly self-probe. Reads the latest `prices.ingested_at`, classifies the
+ * table as fresh vs stale against a 6h threshold, pings WhatsApp ONLY on
+ * state transitions.
  *
- * Spec constraints (do not regress):
- *   - NO database writes (read-only `SELECT` on `prices.ingested_at`).
- *   - NO new tables, migrations, edge functions, or notify modules.
- *   - Uses existing `notifyWhatsApp` from `../notify`.
- *   - `.catch` around the notify call so a Twilio failure never crashes the
- *     cron tick; pattern mirrors `adela/src/scrapers/abc.ts:324`.
- *
- * State is held module-level. A process restart resets state to 'unknown';
- * if the table is still stale post-restart, the next cycle fires one
- * (duplicate-but-acceptable) WhatsApp alert. This is documented behavior.
+ * Spec invariants (do not regress):
+ *   - READ-ONLY: a single `SELECT ingested_at FROM prices ORDER BY ... LIMIT 1`.
+ *     No DB writes anywhere in this file.
+ *   - Uses existing `notifyWhatsApp` from `../notify`. No new notify module.
+ *   - `.catch` around notifyWhatsApp so a Twilio failure never crashes the
+ *     cron tick (pattern mirrors `adela/src/scrapers/abc.ts:324`).
+ *   - State is module-level. A process restart resets to 'unknown'; the next
+ *     cycle then fires one (acceptable) duplicate alert if still stale.
  */
-
 import { supabase } from "../lib/supabase"
 import { notifyWhatsApp } from "../notify"
 
-const STALENESS_THRESHOLD_MS = 6 * 60 * 60 * 1000 // 6 hours
+const STALENESS_THRESHOLD_MS = 6 * 60 * 60 * 1000
 
 type State = "fresh" | "stale" | "unknown"
 
 let lastState: State = "unknown"
 
-/**
- * Test-only helper. Resets module-level state so each test starts from the
- * same baseline. Not exported from the package surface — internal use only.
- */
+// Test-only — resets module-level state between unit tests.
 export function __resetForTests(): void {
   lastState = "unknown"
 }
@@ -62,17 +55,16 @@ async function readLatestIngestedAt(): Promise<ProbeReading> {
   const ageMs = Date.now() - new Date(latest).getTime()
   const ageHours = ageMs / (60 * 60 * 1000)
   const state: "fresh" | "stale" = ageMs > STALENESS_THRESHOLD_MS ? "stale" : "fresh"
-
   return { state, latestIngestedAt: latest, ageHours, rowCount: 1 }
 }
 
-function formatStaleMessage(r: ProbeReading): string {
+function staleMsg(r: ProbeReading): string {
   const ts = r.latestIngestedAt ?? "none — table empty"
   const age = r.ageHours == null ? "∞" : r.ageHours.toFixed(1)
   return `⚠️ CropsIntel: prices stale. Latest ingested_at: ${ts}. Age: ${age}h. Threshold: 6h.`
 }
 
-function formatRecoveryMessage(r: ProbeReading): string {
+function recoveryMsg(r: ProbeReading): string {
   const ts = r.latestIngestedAt ?? "unknown"
   const age = r.ageHours == null ? "?" : r.ageHours.toFixed(1)
   return `✅ CropsIntel: prices fresh again. Latest ingested_at: ${ts}. Age: ${age}h.`
@@ -83,60 +75,49 @@ export async function runPriceStalenessProbe(): Promise<void> {
   const from = lastState
   const to = reading.state
 
-  const transitionPayload = {
-    event: "price_staleness.transition",
+  const corePayload = {
     from,
     to,
     latest_ingested_at: reading.latestIngestedAt,
     age_hours: reading.ageHours,
     row_count: reading.rowCount,
   }
+  const transitionPayload = { event: "price_staleness.transition", ...corePayload }
 
-  // Transitions that fire WhatsApp
+  // fresh|unknown → stale: alert.
   if ((from === "fresh" || from === "unknown") && to === "stale") {
     console.log("[price-staleness]", JSON.stringify(transitionPayload))
-    await notifyWhatsApp(formatStaleMessage(reading)).catch((err) =>
+    await notifyWhatsApp(staleMsg(reading)).catch((err) =>
       console.error("[price-staleness] notify failed", err)
     )
     lastState = to
     return
   }
 
+  // stale → fresh: recovery.
   if (from === "stale" && to === "fresh") {
     console.log("[price-staleness]", JSON.stringify(transitionPayload))
-    await notifyWhatsApp(formatRecoveryMessage(reading)).catch((err) =>
+    await notifyWhatsApp(recoveryMsg(reading)).catch((err) =>
       console.error("[price-staleness] notify failed", err)
     )
     lastState = to
     return
   }
 
-  // Healthy startup: unknown → fresh. Info log, no alert.
+  // unknown → fresh (healthy startup): info log, no alert.
   if (from === "unknown" && to === "fresh") {
     console.log(
       "[price-staleness]",
-      JSON.stringify({
-        event: "price_staleness.initial",
-        state: to,
-        latest_ingested_at: reading.latestIngestedAt,
-        age_hours: reading.ageHours,
-        row_count: reading.rowCount,
-      })
+      JSON.stringify({ event: "price_staleness.initial", state: to, ...corePayload })
     )
     lastState = to
     return
   }
 
-  // Same-state cycles — debug-level log only, no notification.
+  // Same-state cycles: debug log only, no WhatsApp.
   console.debug(
     "[price-staleness]",
-    JSON.stringify({
-      event: "price_staleness.cycle",
-      state: to,
-      latest_ingested_at: reading.latestIngestedAt,
-      age_hours: reading.ageHours,
-      row_count: reading.rowCount,
-    })
+    JSON.stringify({ event: "price_staleness.cycle", state: to, ...corePayload })
   )
   lastState = to
 }

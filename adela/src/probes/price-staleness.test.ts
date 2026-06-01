@@ -1,23 +1,22 @@
 /**
- * Price-staleness probe tests (Phase 1.6g — remediation attempt 2)
+ * Price-staleness probe tests (Phase 1.6g — remediation attempt 3).
  *
- * Pure unit tests. Mocks the Supabase client and the WhatsApp notifier so
- * no network is touched. Module-level `lastState` is reset between tests
- * via the exposed `__resetForTests()` helper.
- *
- * Test runner: `@jest/globals` — matches sibling tests in
- * `adela/src/scrapers/__tests__/*.test.ts`. The `adela` tsconfig.json
- * excludes `**\/*.test.ts` from the production build, so these tests never
- * break `npm run build`. (Trailing `*` in the comment escaped to keep the
- * doc block well-formed.)
- *
- * Six required cases (spec § "In scope" item 3):
- *   1. Empty `prices` table → stale, WhatsApp called once.
+ * SIX REQUIRED TEST CASES (spec § "In scope" item 3):
+ *   1. Empty `prices` table → stale, WhatsApp called once with stale message.
  *   2. Latest ingested_at = now() - 7h → stale, WhatsApp called once.
- *   3. Latest ingested_at = now() - 2h → fresh on first run, no WhatsApp.
- *   4. fresh → stale → fresh across 3 invocations → WhatsApp called 2 times.
- *   5. Two consecutive stale cycles → WhatsApp called 1 time.
+ *   3. Latest ingested_at = now() - 2h → fresh on first run, no WhatsApp
+ *      (unknown→fresh is silent).
+ *   4. fresh → stale → fresh across 3 invocations → WhatsApp called exactly
+ *      2 times (one stale alert, one recovery).
+ *   5. Two consecutive stale cycles → WhatsApp called exactly 1 time
+ *      (transition-only, not every cycle).
  *   6. notifyWhatsApp rejects → probe resolves; lastState advances.
+ *
+ * Mocks Supabase client + `notifyWhatsApp`. Resets module-level `lastState`
+ * between tests via the exported `__resetForTests()` helper. Runner is
+ * `@jest/globals` to match sibling tests in
+ * `adela/src/scrapers/__tests__/*.test.ts`. `adela/tsconfig.json` excludes
+ * `**\/*.test.ts` from the production build so tests never break it.
  */
 
 import { describe, test, expect, beforeEach, jest } from "@jest/globals"

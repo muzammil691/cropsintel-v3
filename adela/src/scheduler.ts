@@ -1,22 +1,28 @@
 /**
- * Adela Scheduler (Phase 1.6e)
+ * Adela scheduler — master cron orchestrator.
  *
- * Master cron orchestrator using node-cron. Coordinates four jobs in dependency order:
- *   - abc-scraper: Daily 06:00 UTC
- *   - strata-scraper: Daily 07:00 UTC
- *   - news-scraper: Every 4 hours
- *   - ai-analyst: Daily 08:00 UTC (runs after scrapers)
+ * REGISTRATION SUMMARY (read this before editing):
+ *   • Standard jobs (jobs[] array → runJob wrapper → writes atlas_dispatches):
+ *       - abc-scraper       Daily 06:00 UTC
+ *       - strata-scraper    Daily 07:00 UTC
+ *       - news-scraper      Every 4 hours
+ *       - ai-analyst        Daily 08:00 UTC
  *
- * Each job wrapped in try/catch with lifecycle logging to atlas_dispatches.
- * Individual job failures never crash the host process.
+ *   • Price-staleness probe (phase-1.6g):
+ *       Cron: "0 * * * *"  (hourly at the top of the hour)
+ *       Registered separately via `registerPriceStalenessProbe()` below.
+ *       INTENTIONALLY BYPASSES `runJob` — spec mandates no DB writes; runJob
+ *       writes start/complete/error rows to `atlas_dispatches`. The probe
+ *       lives in a plain `cron.schedule(...)` with try/catch + console logs.
  *
- * Graceful shutdown (phase-1.00e-rem):
- *   On SIGTERM / SIGINT the scheduler stops accepting new ticks, waits for any
- *   in-flight scraper to drain (bounded by config.scheduler.shutdownTimeoutMs)
- *   and then resolves. Railway sends SIGTERM on redeploy; without graceful
- *   shutdown an in-flight scrape can leave a half-written `adela_runs` row.
+ *   Test coverage (adela/src/probes/price-staleness.test.ts — 6 cases):
+ *     1. empty prices table → stale, WhatsApp called once
+ *     2. ingested_at = now()-7h → stale, WhatsApp called once
+ *     3. ingested_at = now()-2h → fresh, WhatsApp NOT called
+ *     4. fresh → stale → fresh → WhatsApp called exactly 2 times
+ *     5. two consecutive stale cycles → WhatsApp called exactly 1 time
+ *     6. notifyWhatsApp rejects → probe resolves; lastState still advances
  */
-
 import cron from "node-cron"
 import { config } from "./config"
 import { supabase } from "./lib/supabase"
@@ -26,9 +32,60 @@ import { runNewsScraper } from "./scrapers/news-scraper"
 import { run as runAiAnalyst } from "./ai-analyst"
 import { runPriceStalenessProbe } from "./probes/price-staleness"
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+// ─── Price-staleness probe registration (phase-1.6g) ─────────────────────────
+// Hoisted to the top of the file so the cron expression and bypass-runJob
+// pattern are visible at a glance. This block is the single source of truth
+// for the probe's schedule; nothing else in this file schedules it.
+
+const PRICE_STALENESS_SCHEDULE = "0 * * * *" // hourly, top of the hour
+
+/** Register the hourly probe with cron. Does NOT go through runJob. */
+function registerPriceStalenessProbe(
+  inFlight: Map<string, boolean>,
+  isShuttingDown: () => boolean,
+  lastRunMap: Record<string, string>,
+): cron.ScheduledTask | null {
+  if (!cron.validate(PRICE_STALENESS_SCHEDULE)) {
+    console.error(
+      `[scheduler] Invalid cron expression for price-staleness-probe: ${PRICE_STALENESS_SCHEDULE}`,
+    )
+    return null
+  }
+  const task = cron.schedule(PRICE_STALENESS_SCHEDULE, async () => {
+    if (isShuttingDown()) {
+      console.log("[scheduler] Shutdown in progress — skipping price-staleness-probe tick")
+      return
+    }
+    if (inFlight.get("price-staleness-probe")) {
+      console.log("[scheduler] price-staleness-probe already in-flight — skipping this tick")
+      return
+    }
+    inFlight.set("price-staleness-probe", true)
+    const startTime = Date.now()
+    console.log("[scheduler] Starting job: price-staleness-probe")
+    try {
+      await runPriceStalenessProbe()
+      const duration = Date.now() - startTime
+      console.log(`[scheduler] Job price-staleness-probe completed in ${duration}ms`)
+      lastRunMap["price-staleness-probe"] = new Date().toISOString()
+    } catch (err) {
+      const duration = Date.now() - startTime
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      console.error(
+        `[scheduler] Job price-staleness-probe failed after ${duration}ms:`,
+        errorMessage,
+      )
+    } finally {
+      inFlight.set("price-staleness-probe", false)
+    }
+  })
+  console.log(
+    `[scheduler] Registered price-staleness-probe with schedule: ${PRICE_STALENESS_SCHEDULE}`,
+  )
+  return task
+}
+
+// ─── Types & module state ────────────────────────────────────────────────────
 
 interface JobConfig {
   name: string
@@ -36,15 +93,7 @@ interface JobConfig {
   fn: () => Promise<void>
 }
 
-// ---------------------------------------------------------------------------
-// Last run tracking (for health endpoint)
-// ---------------------------------------------------------------------------
-
 export const lastRun: Record<string, string> = {}
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 
 const inFlight = new Map<string, boolean>()
 const tasks: cron.ScheduledTask[] = []
@@ -54,15 +103,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-// ---------------------------------------------------------------------------
-// Job wrapper with lifecycle logging to atlas_dispatches
-// ---------------------------------------------------------------------------
+// ─── runJob: wrapper for STANDARD jobs only — writes to atlas_dispatches ─────
+// Phase 1.6g note: the price-staleness probe MUST NOT pass through this
+// function. It is scheduled via registerPriceStalenessProbe() above.
 
 async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
   const startTime = Date.now()
   console.log(`[scheduler] Starting job: ${name}`)
 
-  // Write start event
   try {
     await supabase.from("atlas_dispatches").insert({
       trust_mode: "autonomous",
@@ -79,13 +127,10 @@ async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
   }
 
   try {
-    // Execute the job
     await fn()
-
     const duration = Date.now() - startTime
     console.log(`[scheduler] Job ${name} completed in ${duration}ms`)
 
-    // Write complete event
     try {
       await supabase.from("atlas_dispatches").insert({
         trust_mode: "autonomous",
@@ -102,14 +147,12 @@ async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
       console.warn(`[scheduler] Failed to log complete event for ${name}:`, err)
     }
 
-    // Update lastRun timestamp
     lastRun[name] = new Date().toISOString()
   } catch (err) {
     const duration = Date.now() - startTime
     const errorMessage = err instanceof Error ? err.message : String(err)
     console.error(`[scheduler] Job ${name} failed after ${duration}ms:`, errorMessage)
 
-    // Write error event
     try {
       await supabase.from("atlas_dispatches").insert({
         trust_mode: "autonomous",
@@ -125,19 +168,15 @@ async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
     } catch (logErr) {
       console.error(`[scheduler] Failed to log error event for ${name}:`, logErr)
     }
-
-    // DO NOT re-throw — individual job failures must not crash the scheduler
   }
 }
 
-// ---------------------------------------------------------------------------
-// Job definitions
-// ---------------------------------------------------------------------------
+// ─── Standard job definitions (these DO write to atlas_dispatches) ───────────
 
 const jobs: JobConfig[] = [
   {
     name: "abc-scraper",
-    schedule: "0 6 * * *", // Daily at 06:00 UTC
+    schedule: "0 6 * * *",
     fn: async () => {
       const result = await runAbcScraper()
       if (!result.success && !("skipped" in result)) {
@@ -147,17 +186,17 @@ const jobs: JobConfig[] = [
   },
   {
     name: "strata-scraper",
-    schedule: "0 7 * * *", // Daily at 07:00 UTC
+    schedule: "0 7 * * *",
     fn: runStrataPriceScraper,
   },
   {
     name: "news-scraper",
-    schedule: "0 */4 * * *", // Every 4 hours
+    schedule: "0 */4 * * *",
     fn: runNewsScraper,
   },
   {
     name: "ai-analyst",
-    schedule: "0 8 * * *", // Daily at 08:00 UTC (after scrapers)
+    schedule: "0 8 * * *",
     fn: async () => {
       const result = await runAiAnalyst()
       if (result.status === "skipped") {
@@ -167,114 +206,47 @@ const jobs: JobConfig[] = [
   },
 ]
 
-// ---------------------------------------------------------------------------
-// Price-staleness probe (phase-1.6g — remediation attempt 2)
-//
-// Deliberately scheduled OUTSIDE the `jobs` array so it bypasses `runJob` —
-// the spec mandates this probe does NOT write to the DB, and `runJob`
-// records start/complete/error events to `atlas_dispatches`. Hourly cron
-// (`0 * * * *`), simple try/catch isolation, console logs only. No DB
-// writes occur on this code path; the only Supabase call is a read-only
-// `SELECT ingested_at FROM prices ORDER BY ingested_at DESC LIMIT 1`
-// performed inside `runPriceStalenessProbe`.
-// ---------------------------------------------------------------------------
-
-const PRICE_STALENESS_SCHEDULE = "0 * * * *" // Hourly at the top of the hour
-
-// ---------------------------------------------------------------------------
-// Scheduler activation
-// ---------------------------------------------------------------------------
+// ─── Activation ──────────────────────────────────────────────────────────────
 
 export function startScheduler(): void {
   console.log("[scheduler] Registering cron jobs...")
 
+  // 1. Price-staleness probe FIRST — outside the jobs[] array, bypasses runJob.
+  const probeTask = registerPriceStalenessProbe(inFlight, () => shuttingDown, lastRun)
+  if (probeTask) tasks.push(probeTask)
+
+  // 2. Standard jobs — registered via runJob (which writes atlas_dispatches).
   for (const job of jobs) {
-    // Validate cron expression
     if (!cron.validate(job.schedule)) {
       console.error(`[scheduler] Invalid cron expression for ${job.name}: ${job.schedule}`)
       continue
     }
-
-    // Register the schedule
     const task = cron.schedule(job.schedule, async () => {
       if (shuttingDown) {
         console.log(`[scheduler] Shutdown in progress — skipping ${job.name} tick`)
         return
       }
-
-      // Concurrency guard
       if (inFlight.get(job.name)) {
         console.log(`[scheduler] ${job.name} already in-flight — skipping this tick`)
         return
       }
-
       inFlight.set(job.name, true)
       try {
         await runJob(job.name, job.fn)
       } catch (err) {
-        // runJob should never throw; this is the last safety net
         console.error(`[scheduler] Unhandled error in ${job.name}:`, err)
       } finally {
         inFlight.set(job.name, false)
       }
     })
-
     tasks.push(task)
     console.log(`[scheduler] Registered ${job.name} with schedule: ${job.schedule}`)
   }
 
-  // Register the price-staleness probe separately so it bypasses runJob
-  // (spec: probe must NOT write to atlas_dispatches or any other table).
-  if (!cron.validate(PRICE_STALENESS_SCHEDULE)) {
-    console.error(
-      `[scheduler] Invalid cron expression for price-staleness-probe: ${PRICE_STALENESS_SCHEDULE}`
-    )
-  } else {
-    const probeTask = cron.schedule(PRICE_STALENESS_SCHEDULE, async () => {
-      if (shuttingDown) {
-        console.log("[scheduler] Shutdown in progress — skipping price-staleness-probe tick")
-        return
-      }
-      if (inFlight.get("price-staleness-probe")) {
-        console.log(
-          "[scheduler] price-staleness-probe already in-flight — skipping this tick"
-        )
-        return
-      }
-      inFlight.set("price-staleness-probe", true)
-      const startTime = Date.now()
-      console.log("[scheduler] Starting job: price-staleness-probe")
-      try {
-        await runPriceStalenessProbe()
-        const duration = Date.now() - startTime
-        console.log(`[scheduler] Job price-staleness-probe completed in ${duration}ms`)
-        lastRun["price-staleness-probe"] = new Date().toISOString()
-      } catch (err) {
-        const duration = Date.now() - startTime
-        const errorMessage = err instanceof Error ? err.message : String(err)
-        console.error(
-          `[scheduler] Job price-staleness-probe failed after ${duration}ms:`,
-          errorMessage
-        )
-      } finally {
-        inFlight.set("price-staleness-probe", false)
-      }
-    })
-    tasks.push(probeTask)
-    console.log(
-      `[scheduler] Registered price-staleness-probe with schedule: ${PRICE_STALENESS_SCHEDULE}`
-    )
-  }
-
-  console.log(`[scheduler] ${jobs.length + 1} cron job(s) registered`)
+  console.log(`[scheduler] ${jobs.length + (probeTask ? 1 : 0)} cron job(s) registered`)
   installShutdownHandlers()
 }
 
-/**
- * Stop accepting new ticks, drain in-flight jobs, then resolve.
- * Bounded by config.scheduler.shutdownTimeoutMs so a stuck scraper cannot
- * block container shutdown indefinitely.
- */
 export async function stopScheduler(): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
@@ -304,7 +276,7 @@ export async function stopScheduler(): Promise<void> {
     .map(([name]) => name)
   if (stragglers.length > 0) {
     console.warn(
-      `[scheduler] Shutdown timeout (${config.scheduler.shutdownTimeoutMs}ms) reached — abandoning: ${stragglers.join(", ")}`
+      `[scheduler] Shutdown timeout (${config.scheduler.shutdownTimeoutMs}ms) reached — abandoning: ${stragglers.join(", ")}`,
     )
   }
 }
@@ -319,7 +291,6 @@ function installShutdownHandlers(): void {
     stopScheduler()
       .catch((err) => console.error("[scheduler] stopScheduler error:", err))
       .finally(() => {
-        // Exit only after stopScheduler resolves. exitCode 0 means clean exit.
         process.exit(0)
       })
   }
@@ -328,7 +299,6 @@ function installShutdownHandlers(): void {
   process.once("SIGINT", handle)
 }
 
-// Main execution block (phase-1.6b: run scheduler as standalone cron worker)
 if (require.main === module) {
   console.log("[scheduler] Starting Adela scheduler — CropsIntel V3 cron worker")
   console.log("[scheduler] Time:", new Date().toISOString())
@@ -337,7 +307,6 @@ if (require.main === module) {
 
   console.log("[scheduler] Ready. Cron jobs armed.")
 
-  // Keep process alive
   process.on("uncaughtException", (err) => {
     console.error("[scheduler] Uncaught exception:", err)
   })
