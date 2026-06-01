@@ -24,6 +24,7 @@ import { runAbcScraper } from "./scrapers/abc"
 import { runStrataPriceScraper } from "./scrapers/strata-scraper"
 import { runNewsScraper } from "./scrapers/news-scraper"
 import { run as runAiAnalyst } from "./ai-analyst"
+import { runPriceStalenessProbe } from "./probes/price-staleness"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -163,6 +164,11 @@ const jobs: JobConfig[] = [
         console.log(`[scheduler] ai-analyst skipped: ${result.reason}`)
       }
     },
+  },
+  {
+    name: "price-staleness-probe",
+    schedule: "0 * * * *", // Hourly at the top of the hour
+    fn: runPriceStalenessProbe,
   },
 ]
 
