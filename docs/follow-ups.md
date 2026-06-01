@@ -304,61 +304,70 @@ Single migration if cleanup is warranted.
 
 ---
 
-## J — Workshop `audit-only: true` escape hatch non-functional for Workshop-drafted specs
+## J — Workshop `audit-only: true` escape hatch is out-of-scope by design — CLOSED
 
 **Logged:** 2026-05-31 (during P2 guard wiring into `queueWorkshopDiff`)
 
-**What:** the P2 guard (`validateQueueCandidateBody`) honors an
-`audit-only: true` flag in the spec's YAML frontmatter — that's the
-documented escape hatch for investigation/ADR specs that legitimately
-ship markdown rather than code. The hatch works for the
-`builder.queue_spec` chat tool, the `queueSpecFromPlanNode` path, and
-the `requeueWithGaps` / `safeRequeueWithReset` paths, because their
-spec bodies carry frontmatter through.
+**Closed:** 2026-06-01 (after reframing — see below)
 
-It **does NOT work** for Workshop-drafted specs. `synthSpecBody` in
+**Original concern:** the P2 guard (`validateQueueCandidateBody`)
+honors an `audit-only: true` flag in spec frontmatter, but
+`synthSpecBody` in
 [atlas/src/lib/queue-orchestrator.ts](../atlas/src/lib/queue-orchestrator.ts)
-constructs a spec body from `op.title` + `op.body` of the user-approved
-diff but emits no frontmatter at all (no leading `---` block). So even
-if a Workshop user wanted to mark their op `audit-only: true`, the
-synthesizer drops the frontmatter and the P2 guard refuses the
-title-only result.
+emits no frontmatter at all — so a Workshop user couldn't engage the
+escape hatch even if they wanted to.
 
-**Why this matters:** a legitimate Workshop investigation diff (e.g. a
-diff whose add op is "draft ADR for cluster X") cannot be queued via
-the Workshop path — the user has to either edit the spec post-synthesis
-to add the frontmatter, or shoehorn a `## Files required` block with a
-placeholder path. Both are awkward workarounds.
+**Why we're closing this as out-of-scope rather than fixing it:**
 
-**Suggested fix (two options, product-design decision):**
+1. **Workshop's product purpose is plan-tree phase add/edit operations,
+   which are code work by definition.** The Workshop UI walks a user
+   through "I want to add Phase X to the master plan" → Claude drafts
+   a `PlanDiffOp` with `op: 'add' | 'edit'` → the user approves → the
+   atomic /queue handler synthesizes a spec from that op. Every step
+   assumes the resulting phase will produce code, a migration, or
+   schema work. There is no flow where Workshop drafts an
+   investigation ADR.
 
-1. **Extend `synthSpecBody` to propagate frontmatter from the op.** The
-   op shape (`PlanDiffOp` for `'add' | 'edit'`) would gain an optional
-   `audit_only?: boolean` field. When set, `synthSpecBody` emits
-   `---\naudit-only: true\n---\n` ahead of the body. The Workshop UI
-   adds a checkbox "this op is investigation-only (audit-only)" on
-   add/edit ops. Cleanest semantics; matches how chat-tool callers set
-   the flag.
+2. **Missing frontmatter dispatches fine.** Confirmed empirically when
+   `phase-1.2d-foundation-audit-rerun.md` shipped 2026-06-01 with
+   zero YAML frontmatter — Builder treats absent frontmatter as
+   priority=5 default, paused=false, deps=[]. Per
+   [agent-loop.sh:236-280](../agent/agent-loop.sh#L236) and the
+   downstream readers at
+   [tools.ts:484-487](../atlas/src/lib/tools.ts#L484),
+   [verify-side-effects.ts:233](../atlas/src/lib/verify-side-effects.ts#L233),
+   none of them require frontmatter to be present.
 
-2. **Require a `## Files required` block in the Workshop UI** for every
-   add/edit op. The form validates before letting the user click
-   "Queue" — same UX constraint as authoring chat-tool specs. Higher
-   friction for investigation diffs (operator has to fake a paths
-   block), but eliminates the audit-only escape hatch entirely so
-   there's one consistent contract.
+3. **A Workshop spec with a normal body containing back-ticked paths
+   passes P2 and dispatches normally — the common case.** This is the
+   only Workshop output shape that needs to work, and it does.
 
-**Currently documented in:** the bonus test case in
+4. **Audit-only / investigation specs go through the
+   `builder.queue_spec` chat tool**, not Workshop. The chat tool
+   accepts a raw spec body (frontmatter and all) authored by the
+   operator or Atlas chat — that path correctly honors `audit-only:
+   true`. Cluster ADRs, post-mortems, retro investigations: chat-tool
+   queue. Plan-tree phase additions: Workshop.
+
+**Caveat (the one thing that could reopen this):** empirically
+unconfirmed until the first real Workshop-drafted product spec
+ships. If that spec fails to dispatch or fails P2 in an unexpected
+way, reopen J and re-evaluate. The `phase-1.4-PRE-SMOKE-queue-pipeline-smoke-test`
+that shipped 2026-05-22 only exercised the queue plumbing with a
+synthetic no-op spec; the first **substantive product** Workshop
+spec is still pending (Proof 1, in flight).
+
+**Followup contract:** when reopened, options remain unchanged from
+the original entry — extend `synthSpecBody` to propagate
+frontmatter from `op.metadata.audit_only` (cleanest, ~25 LOC across
+3 files: Atlas type, LLM prompt, synthSpecBody emitter), or require
+a Files-required block in the Workshop UI (higher UX friction).
+The P2 wiring test
 [atlas/src/lib/p2-wiring.test.ts](../atlas/src/lib/p2-wiring.test.ts)
-under "queueWorkshopDiff — synthSpecBody validator contract" → "audit-
-only: true synth spec passes (Workshop investigation ADR)". The test
-documents the current (broken) behavior so any future fix has to
-update the assertion.
+"audit-only: true synth spec passes" case documents the current
+divergent behavior; that assertion would flip if the fix lands.
 
-**Owner:** Muzammil — decision between fix #1 and fix #2 is product UX,
-not a mechanical implementation question. Whichever ships, the
-validator contract stays unchanged; only the Workshop UX changes.
-
-**Detected:** P2 guard wiring (2026-05-31)
+**Status:** CLOSED-BY-DESIGN. No code change.
 
 ---
 
