@@ -10,7 +10,7 @@
  *  3. Download PDF
  *  4. Upload raw PDF to Supabase Storage bucket adela-raw/abc/
  *  5. Send to Gemini Pro for structured extraction (strict JSON schema)
- *  6. Validate with Zod, INSERT into position_reports + adela_scrape_results
+ *  6. Validate with Zod, INSERT into position_reports
  *  7. Notify Atlas (rows_inserted, storage_path) and WhatsApp
  *
  * Failures: log to adela_runs and return gracefully — the catch block must
@@ -289,21 +289,11 @@ export async function runAbcScraper(): Promise<AbcScraperResult> {
       console.error("[abc] DB insert failed:", insertErr.message)
       const dbErrMsg = `DB insert failed: ${insertErr.message}`.slice(0, 2000)
       await finishRun(runId, "failed", { error_message: dbErrMsg })
-      await writeAuditLog(runId, "failed", { error_message: dbErrMsg })
       return { success: false, error: dbErrMsg }
     }
 
-    // 6b. Generic per-scrape audit row in adela_scrape_results
+    // 6b. Resolve the storage path the downstream notify steps reference.
     const finalStoragePath = storageErr ? null : storagePath
-    const { error: scrapeAuditErr } = await supabase.from("adela_scrape_results").insert({
-      scraper: "abc",
-      scraped_at: new Date().toISOString(),
-      rows: extracted as Record<string, unknown>,
-      storage_path: finalStoragePath,
-    })
-    if (scrapeAuditErr) {
-      console.warn("[abc] adela_scrape_results insert failed (non-fatal):", scrapeAuditErr.message)
-    }
 
     // 7. Notify Atlas + WhatsApp (both wrapped — neither blocks completion)
     await notifyAtlas({
@@ -332,15 +322,6 @@ export async function runAbcScraper(): Promise<AbcScraperResult> {
       metadata: { report_date: reportDate, pdf_url: pdfUrl, storage_path: finalStoragePath },
     })
 
-    // 8. Write audit log row to adela_audit_log (per phase-1.00e-rem spec).
-    // This is always written last, even if notify failed earlier.
-    await writeAuditLog(runId, "success", {
-      report_date: extracted.report_date ?? reportDate,
-      pdf_url: pdfUrl,
-      storage_path: finalStoragePath,
-      rows_inserted: 1,
-    })
-
     console.log(`[abc] Done. Report for ${reportDate} ingested.`)
     return { success: true, rows_inserted: 1, storage_path: finalStoragePath }
   } catch (err) {
@@ -351,30 +332,7 @@ export async function runAbcScraper(): Promise<AbcScraperResult> {
     await finishRun(runId, "failed", { error_message: msg.slice(0, 2000) }).catch((auditErr) => {
       console.error("[abc] Failed to write failure audit row:", auditErr)
     })
-    await writeAuditLog(runId, "failed", { error_message: msg.slice(0, 2000) }).catch(
-      (auditErr) => {
-        console.error("[abc] Failed to write adela_audit_log row:", auditErr)
-      }
-    )
     return { success: false, error: msg }
   }
 }
 
-// ---------------------------------------------------------------------------
-// adela_audit_log writer (always last — never blocks success path)
-// ---------------------------------------------------------------------------
-async function writeAuditLog(
-  runId: string,
-  status: "success" | "failed",
-  payload: Record<string, unknown>
-): Promise<void> {
-  const { error } = await supabase.from("adela_audit_log").insert({
-    scraper: "abc",
-    run_id: runId,
-    status,
-    payload,
-  })
-  if (error) {
-    console.warn("[abc] adela_audit_log insert failed (non-fatal):", error.message)
-  }
-}

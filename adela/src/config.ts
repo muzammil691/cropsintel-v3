@@ -56,9 +56,11 @@ export const config = {
   },
 
   gemini: {
-    // gemini-1.5-pro returned 404 from v1beta in May 2026; current default is
-    // gemini-2.0-flash. Override via GEMINI_MODEL env var.
-    model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
+    // Migration history: gemini-1.5-pro returned 404 from v1beta in May 2026 →
+    // moved to gemini-2.0-flash, which Google retired ~2026-06-01 → now on
+    // gemini-2.5-flash. Override via GEMINI_MODEL env var so future
+    // deprecations can be handled without a code change.
+    model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
     maxRetries: intFromEnv("GEMINI_MAX_RETRIES", 2),
   },
 } as const
