@@ -15,6 +15,12 @@ import { checkBudget } from '../lib/cost-gate'
 import { ToolName, builderQueueOrder } from '../lib/tools'
 import { requeueWithGaps, findInheritedBody, type VerifierGap } from '../lib/plan-server'
 import { isInfraSpec, writeInfraRefusalQuestion } from '../lib/infra-policy'
+import {
+  shouldPauseForProductFirstFailure,
+  writeProductFirstFailureQuestion,
+  buildPauseWhatsAppMessage,
+  type VerifierGapShape,
+} from '../lib/remediation-policy'
 import { checkWorkflowTraceInvariants, consumeNewWorkflowViolations, type WorkflowTraceViolation } from '../lib/invariants'
 import { withGitLock } from '../lib/git-mutex'
 import { TrustMode } from '../types'
@@ -1950,8 +1956,9 @@ async function autoRequeueOnVerifierFail(trustMode: TrustMode): Promise<void> {
 
   // Dedup by task_id — keep only the most recent failure per task. Skip
   // failures we've already processed in this cron lifecycle.
-  const latestByTask = new Map<string, { task_id: string; gaps: unknown; ran_at: string }>()
-  for (const row of data as Array<{ task_id: string; gaps: unknown; ran_at: string }>) {
+  type VerifierRunRow = { task_id: string; gaps: unknown; ran_at: string; commit_sha?: string | null }
+  const latestByTask = new Map<string, VerifierRunRow>()
+  for (const row of data as Array<VerifierRunRow>) {
     if (!latestByTask.has(row.task_id)) latestByTask.set(row.task_id, row)
   }
 
@@ -2022,6 +2029,65 @@ async function autoRequeueOnVerifierFail(trustMode: TrustMode): Promise<void> {
             `[atlas-conductor] auto-requeue refused (policy: infra spec — Layer ${detection.layer}) for ${rootTaskId}: ${detection.reason}`,
           )
           continue
+        }
+
+        // Product-first-failure pause guard. On the very first Verifier
+        // failure of a non-infra ("product") spec (currentAttempt === 0),
+        // pause instead of auto-requeueing. The operator reviews via
+        // .agent/questions/<rootTaskId>-q.md and picks one of three
+        // options (re-queue, edit, leave-as-is). Subsequent rem-cycle
+        // failures (currentAttempt >= 1) flow through requeueWithGaps as
+        // normal — implicit operator consent the moment they re-queue
+        // manually.
+        //
+        // Reuses `detection` from the infra check above — no second
+        // parse of the inherited body. Skip-if-exists on the question
+        // file is the dedup contract: WhatsApp fires only on a fresh
+        // write so the operator gets exactly one ping per spec.
+        if (shouldPauseForProductFirstFailure({ currentAttempt, infra: detection.infra })) {
+          try {
+            const result = await writeProductFirstFailureQuestion({
+              taskId: rootTaskId,
+              gaps: (Array.isArray(row.gaps) ? row.gaps : []) as VerifierGapShape[],
+              commitSha: row.commit_sha ?? null,
+              ranAt: row.ran_at,
+              repoRoot: REPO_ROOT,
+            })
+            if (!result.written) {
+              console.debug(
+                `[atlas-conductor] product-pause: question file already exists for ${rootTaskId} — skipping ping`,
+              )
+              continue
+            }
+            try {
+              const firstGap =
+                Array.isArray(row.gaps) && row.gaps.length > 0
+                  ? (row.gaps[0] as VerifierGapShape)
+                  : undefined
+              await sendWhatsAppReply(
+                MUZAMMIL_WHATSAPP,
+                buildPauseWhatsAppMessage({ taskId: rootTaskId, firstGap }),
+              )
+            } catch (waErr) {
+              console.warn(
+                `[atlas-conductor] product-pause WhatsApp failed for ${rootTaskId}:`,
+                waErr instanceof Error ? waErr.message : waErr,
+              )
+            }
+            console.warn(
+              `[atlas-conductor] product-first-failure pause for ${rootTaskId}: question file written at ${result.path}, requeue skipped`,
+            )
+            continue
+          } catch (writeErr) {
+            // File write failed — preserve policy intent by still skipping
+            // the requeue. Operator won't have a file to read but the
+            // failure stays in verifier_runs for manual investigation.
+            console.warn(
+              `[atlas-conductor] product-pause: failed to write question file for ${rootTaskId}; requeue still skipped:`,
+              writeErr instanceof Error ? writeErr.message : writeErr,
+            )
+            continue
+          }
         }
       }
     } catch (err) {
