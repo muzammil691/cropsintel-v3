@@ -22,6 +22,7 @@ import { applyOpsToMasterPlan, type PlanDiffOp } from './workshop-diff-applier'
 import { REPO_ROOT, PLAN_PATH_REL, findExistingSpecBucket } from './plan-server'
 import { withGitLock } from './git-mutex'
 import { getSupabaseClient } from './supabase'
+import { validateQueueCandidateBody } from '../workshop/queue-validator'
 
 const execFileP = promisify(execFile)
 
@@ -323,6 +324,14 @@ export async function queueWorkshopDiff(
 
     const specFiles: Array<{ filename: string; body: string }> = []
     const filenameConflicts: string[] = []
+    // Phase 1.0x — P2 workshop pre-flight per synthesized spec. The
+    // Workshop synthesizer produces a body from op.title + op.body of the
+    // user's approved diff. If the user's diff body has no enumerable
+    // file paths (no back-ticks, no Files Required block, no audit-only
+    // flag), the resulting spec would deterministically fail the
+    // Verifier's empty-diff-guard — refuse here at authoring time with
+    // an actionable Workshop-specific message instead.
+    const validationFailures: string[] = []
     for (const op of appliedAddEdits) {
       const filename = specFilenameFor(op.phase_id, op.title)
       const existing = await findExistingSpecBucket(filename)
@@ -330,10 +339,25 @@ export async function queueWorkshopDiff(
         filenameConflicts.push(`${filename} (already in ${existing})`)
         continue
       }
-      specFiles.push({ filename, body: synthSpecBody(op) })
+      const body = synthSpecBody(op)
+      const taskId = filename.replace(/\.md$/, '')
+      const preflight = validateQueueCandidateBody(taskId, body, {
+        questionsDir: resolve(REPO_ROOT, '.agent/questions'),
+        writeQuestion: true,
+      })
+      if (!preflight.ok) {
+        validationFailures.push(
+          `Workshop spec '${op.title ?? op.phase_id}' has no enumerable file paths. Add a '## Files required' section with back-ticked paths, or set 'audit-only: true' in the spec frontmatter.`,
+        )
+        continue
+      }
+      specFiles.push({ filename, body })
     }
     if (filenameConflicts.length > 0) {
       return await finalize('failure', `spec filename collision(s): ${filenameConflicts.join(', ')}`, false, null, { stage: 'collision-check', conflicts: filenameConflicts })
+    }
+    if (validationFailures.length > 0) {
+      return await finalize('failure', `workshop pre-flight refused ${validationFailures.length} spec(s): ${validationFailures.join(' | ')}`, false, null, { stage: 'workshop-preflight', failures: validationFailures })
     }
 
     // 4. Write tmp dir.

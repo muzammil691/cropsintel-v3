@@ -14,6 +14,7 @@ import { parsePlan, serializePlan, moveNode, type PlanTree } from './plan-parser
 import { getSupabaseClient } from './supabase'
 import { parseSpec, serializeFrontmatter } from './frontmatter'
 import { isInfraSpec, writeInfraRefusalQuestion } from './infra-policy'
+import { validateQueueCandidateBody } from '../workshop/queue-validator'
 
 const execFileP = promisify(execFile)
 
@@ -331,6 +332,30 @@ export async function requeueWithGaps(args: {
     }
   }
 
+  // Phase 1.0x — P2 workshop pre-flight (the second guard on this path).
+  // Ordering is load-bearing: the infra check above runs first and
+  // early-returns; this P2 check must not run for infra specs or it
+  // would overwrite the infra question stub with a less-specific one
+  // (P2's validateQueueCandidateBody uses unconditional writeFileSync,
+  // not the skip-if-exists semantics of writeInfraRefusalQuestion).
+  // Do not reorder.
+  //
+  // P2 refuses specs with empty filesRequired AND no `audit-only: true`.
+  // The auto-requeue path produces these when the inherited body is the
+  // title-only original — the exact case the P2 guard exists to catch.
+  // We feed the full original spec content (frontmatter included) so the
+  // audit-only escape hatch is honored.
+  const preflight = validateQueueCandidateBody(args.taskId, originalContent, {
+    questionsDir: resolve(REPO_ROOT, '.agent/questions'),
+    writeQuestion: true,
+  })
+  if (!preflight.ok) {
+    return {
+      ok: false,
+      reason: `workshop pre-flight refused — ${preflight.reason}. See ${preflight.questionFilePath}`,
+    }
+  }
+
   const newFrontmatter = {
     ...parsed.frontmatter,
     priority: 1, // remediation is always urgent
@@ -415,7 +440,7 @@ export async function safeRequeue(args: {
 export async function safeRequeueWithReset(args: {
   specId: string
   body: string
-}): Promise<{ ok: boolean; archived: string[]; sha?: string; pushed?: boolean }> {
+}): Promise<{ ok: boolean; archived: string[]; sha?: string; pushed?: boolean; reason?: string }> {
   const filename = `${args.specId}.md`
   const ts = Date.now()
   const archiveDirRel = `.agent/tasks/cancelled/.archive/${ts}`
@@ -441,6 +466,23 @@ export async function safeRequeueWithReset(args: {
       archived.push(`${b}/${filename}`)
     } catch (err) {
       console.warn(`[plan-server] safeRequeueWithReset failed to archive ${fromRel}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  // Phase 1.0x — P2 workshop pre-flight. Refuse to write the queued
+  // spec if its body has no filesRequired and no `audit-only: true`.
+  // Locked behavior: archive intact on refusal — the caller's archive
+  // intent stands; only the requeue is blocked. Operator must add a
+  // back-ticked paths block or audit-only frontmatter, then re-call.
+  const preflight = validateQueueCandidateBody(args.specId, args.body, {
+    questionsDir: resolve(REPO_ROOT, '.agent/questions'),
+    writeQuestion: true,
+  })
+  if (!preflight.ok) {
+    return {
+      ok: false,
+      archived,
+      reason: `workshop pre-flight refused — ${preflight.reason}. See ${preflight.questionFilePath}`,
     }
   }
 
@@ -487,6 +529,22 @@ export async function queueSpecFromPlanNode(
   const relPath = `.agent/tasks/queued/${filename}`
   const fullPath = resolve(REPO_ROOT, relPath)
   const body = `---\npriority: 3\nsource: atlas-plan-tree\n---\n\n# Task: ${nodeTitle}\n\n${nodeBody}\n\n## Source plan node\n\n- Phase hint: ${phaseHint}\n- Generated: ${new Date().toISOString()}\n`
+  // Phase 1.0x — P2 workshop pre-flight. The plan-node synthesizer
+  // produces a body from the user's free-text node title + description;
+  // it does NOT enumerate file paths. Refuse with an actionable error so
+  // the operator either extends the plan-node UI capture flow with a
+  // paths field, OR marks the node `audit-only: true` for investigation
+  // specs that legitimately ship a markdown ADR rather than code.
+  const taskId = filename.replace(/\.md$/, '')
+  const preflight = validateQueueCandidateBody(taskId, body, {
+    questionsDir: resolve(REPO_ROOT, '.agent/questions'),
+    writeQuestion: true,
+  })
+  if (!preflight.ok) {
+    throw new Error(
+      `queue_spec_from_plan_node: workshop pre-flight refused — ${preflight.reason}. See ${preflight.questionFilePath}`,
+    )
+  }
   await writeFile(fullPath, body, 'utf-8')
   const result = await gitCommitAndPush(`atlas: queue spec from plan node — ${nodeTitle.slice(0, 60)}`, [relPath])
   return { filename, sha: result.sha, pushed: result.pushed }
