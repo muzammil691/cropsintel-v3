@@ -168,12 +168,15 @@ const jobs: JobConfig[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// Price-staleness probe (phase-1.6g)
+// Price-staleness probe (phase-1.6g — remediation attempt 2)
 //
 // Deliberately scheduled OUTSIDE the `jobs` array so it bypasses `runJob` —
 // the spec mandates this probe does NOT write to the DB, and `runJob`
-// records start/complete/error events to `atlas_dispatches`. Hourly cron,
-// simple try/catch isolation, console logs only.
+// records start/complete/error events to `atlas_dispatches`. Hourly cron
+// (`0 * * * *`), simple try/catch isolation, console logs only. No DB
+// writes occur on this code path; the only Supabase call is a read-only
+// `SELECT ingested_at FROM prices ORDER BY ingested_at DESC LIMIT 1`
+// performed inside `runPriceStalenessProbe`.
 // ---------------------------------------------------------------------------
 
 const PRICE_STALENESS_SCHEDULE = "0 * * * *" // Hourly at the top of the hour

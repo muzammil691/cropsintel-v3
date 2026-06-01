@@ -1,10 +1,17 @@
 /**
- * Price-staleness probe (Phase 1.6g)
+ * Price-staleness probe (Phase 1.6g — remediation attempt 2)
  *
  * Hourly self-probe that detects whether Adela's ingestion path into the
  * `prices` table is silently stalled. Reads the latest `ingested_at` value;
  * classifies the table as fresh or stale against a 6h threshold; pings
  * WhatsApp ONLY on state transitions to avoid notification spam.
+ *
+ * Spec constraints (do not regress):
+ *   - NO database writes (read-only `SELECT` on `prices.ingested_at`).
+ *   - NO new tables, migrations, edge functions, or notify modules.
+ *   - Uses existing `notifyWhatsApp` from `../notify`.
+ *   - `.catch` around the notify call so a Twilio failure never crashes the
+ *     cron tick; pattern mirrors `adela/src/scrapers/abc.ts:324`.
  *
  * State is held module-level. A process restart resets state to 'unknown';
  * if the table is still stale post-restart, the next cycle fires one

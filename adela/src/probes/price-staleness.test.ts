@@ -1,9 +1,23 @@
 /**
- * Price-staleness probe tests (Phase 1.6g)
+ * Price-staleness probe tests (Phase 1.6g — remediation attempt 2)
  *
  * Pure unit tests. Mocks the Supabase client and the WhatsApp notifier so
  * no network is touched. Module-level `lastState` is reset between tests
  * via the exposed `__resetForTests()` helper.
+ *
+ * Test runner: `@jest/globals` — matches sibling tests in
+ * `adela/src/scrapers/__tests__/*.test.ts`. The `adela` tsconfig.json
+ * excludes `**\/*.test.ts` from the production build, so these tests never
+ * break `npm run build`. (Trailing `*` in the comment escaped to keep the
+ * doc block well-formed.)
+ *
+ * Six required cases (spec § "In scope" item 3):
+ *   1. Empty `prices` table → stale, WhatsApp called once.
+ *   2. Latest ingested_at = now() - 7h → stale, WhatsApp called once.
+ *   3. Latest ingested_at = now() - 2h → fresh on first run, no WhatsApp.
+ *   4. fresh → stale → fresh across 3 invocations → WhatsApp called 2 times.
+ *   5. Two consecutive stale cycles → WhatsApp called 1 time.
+ *   6. notifyWhatsApp rejects → probe resolves; lastState advances.
  */
 
 import { describe, test, expect, beforeEach, jest } from "@jest/globals"
