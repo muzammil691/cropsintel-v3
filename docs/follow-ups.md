@@ -371,6 +371,14 @@ divergent behavior; that assertion would flip if the fix lands.
 
 ---
 
+## K — Recurring Verifier-strict-read pattern (mitigated by product-first-failure pause guard, 7a1bb21)
+
+**Logged:** 2026-06-02 (after shipping the pause guard in `atlas/src/lib/remediation-policy.ts`)
+
+**Pattern:** Verifier strict-reads spec language and finds wrapper/conditional contradictions, triggering remediation cycles (observed in 1.2d files-exist gate and 1.6g "does NOT write to DB" gate). The product-first-failure pause guard now surfaces these to the operator on first failure instead of auto-grinding. Spec authors should pre-empt by acknowledging wrapper effects in spec language.
+
+---
+
 ## Adding a follow-up
 
 Append a new `## X — Title` section in chronological order. Keep the
