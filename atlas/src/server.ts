@@ -70,6 +70,7 @@ import { startSnapshotCron } from './cron/snapshot'
 import { startConductorLoop, getConductorState } from './cron/conductor'
 import { getBroadcasterObservability } from './lib/workshop-whatsapp-broadcaster'
 import { getCurrentMode, getModeMetadata, setMode, loadTrustModeFromDb, verifyTrustModePersistence } from './lib/trust-mode'
+import { isEmergencyStopEnabled } from './lib/emergency-stop'
 import { buildHonestyPrompt } from './lib/system-prompt'
 import { detectIntent, buildIntentHint } from './lib/intent-detect'
 import {
@@ -2114,6 +2115,7 @@ function attachTtsWebSocket(server: ReturnType<typeof createServer>): void {
 }
 
 export async function startServer(): Promise<void> {
+  const emergencyStoppedAtBoot = isEmergencyStopEnabled()
   validateEnv()
   await loadTrustModeFromDb()
 
@@ -2133,6 +2135,40 @@ export async function startServer(): Promise<void> {
     }
 
     if (url === '/health' && method === 'GET') {
+      if (isEmergencyStopEnabled()) {
+        json(res, 200, {
+          status: 'emergency_stopped',
+          service: 'cropsintel-atlas',
+          version: '0.1.0',
+          emergency_stop: true,
+          trust_mode: 'stopped',
+          ts: new Date().toISOString(),
+          git_state: {
+            state: 'not_checked',
+            reason: 'ATLAS_EMERGENCY_STOP',
+          },
+          queue_frozen: true,
+          queue_freeze_reason: 'ATLAS_EMERGENCY_STOP',
+          conductor_state: {
+            state: 'disabled',
+            last_heartbeat_at: null,
+            heartbeat_interval_ms: null,
+            last_audited_commit: null,
+            last_remediation_spec: null,
+            in_flight_builder_tasks: null,
+            in_flight_filenames: [],
+          },
+          workshop_broadcaster_state: {
+            state: 'disabled',
+            last_tick_at: null,
+            last_ping_sent_at: null,
+            sessions_pinged_total: 0,
+            interval_ms: null,
+          },
+        })
+        return
+      }
+
       // 1.10bd: surface git_state + queue_frozen so the operator can detect
       // ahead-of-remote / diverged / frozen states without SSHing into Railway.
       // Step 2a — conductor_state block surfaces the autonomous heartbeat loop
@@ -2153,6 +2189,15 @@ export async function startServer(): Promise<void> {
         queue_freeze_reason: getQueueFreezeReason(),
         conductor_state: conductorState,
         workshop_broadcaster_state: broadcasterState,
+      })
+      return
+    }
+
+    if (isEmergencyStopEnabled()) {
+      json(res, 503, {
+        error: 'atlas_emergency_stopped',
+        message: 'Atlas is emergency-stopped. Only GET /health is available.',
+        trust_mode: 'stopped',
       })
       return
     }
@@ -6358,47 +6403,53 @@ export async function startServer(): Promise<void> {
     json(res, 404, { error: 'Not found' })
   })
 
-  attachTtsWebSocket(server)
+  if (emergencyStoppedAtBoot) {
+    console.warn(
+      '[boot] ATLAS_EMERGENCY_STOP active — interactive sockets, git recovery, snapshots, conductor, broadcaster, repo indexing, and persistence checks are disabled',
+    )
+  } else {
+    attachTtsWebSocket(server)
 
-  // 1.10bd-queue-pivot Step 3b: detect ahead/behind/diverged on boot.
-  // Behind → pull --rebase. Ahead with stuck in_progress queue ops →
-  // freeze queue. Diverged → freeze + WhatsApp alert. See lib/queue-
-  // orchestrator.ts bootGitRecovery() for the full state machine.
-  try {
-    const alertPhone = process.env.VERIFIER_ALERT_PHONE
-    const recovery = await bootGitRecovery({
-      notifyWhatsApp: alertPhone
-        ? async (message: string) => { try { await sendWhatsAppReply(alertPhone, message) } catch { /* boot must not block */ } }
-        : undefined,
-    })
-    console.log(`[boot] git-recovery: state=${recovery.state.state} action=${recovery.action} frozen=${recovery.queueFrozen}`)
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e)
-    console.warn('[boot] git-recovery failed (continuing):', detail)
-  }
+    // 1.10bd-queue-pivot Step 3b: detect ahead/behind/diverged on boot.
+    // Behind → pull --rebase. Ahead with stuck in_progress queue ops →
+    // freeze queue. Diverged → freeze + WhatsApp alert. See lib/queue-
+    // orchestrator.ts bootGitRecovery() for the full state machine.
+    try {
+      const alertPhone = process.env.VERIFIER_ALERT_PHONE
+      const recovery = await bootGitRecovery({
+        notifyWhatsApp: alertPhone
+          ? async (message: string) => { try { await sendWhatsAppReply(alertPhone, message) } catch { /* boot must not block */ } }
+          : undefined,
+      })
+      console.log(`[boot] git-recovery: state=${recovery.state.state} action=${recovery.action} frozen=${recovery.queueFrozen}`)
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      console.warn('[boot] git-recovery failed (continuing):', detail)
+    }
 
-  startSnapshotCron()
-  startConductorLoop()
-  // Phase 1.10ak: build repo index in the background so the wizard has fresh
-  // facts. Never throws — Atlas keeps booting if GitHub is unreachable.
-  void startRepoIndexLoop()
+    startSnapshotCron()
+    startConductorLoop()
+    // Phase 1.10ak: build repo index in the background so the wizard has fresh
+    // facts. Never throws — Atlas keeps booting if GitHub is unreachable.
+    void startRepoIndexLoop()
 
-  // Phase 1.10ae: round-trip atlas_config write+read+delete BEFORE we start
-  // accepting traffic. If the table is missing, RLS broke service_role, or
-  // the env keys are wrong we want a loud log on every deploy — not a silent
-  // revert of every user's mode to `passive` 30 seconds later. Failure does
-  // NOT exit the process: Atlas can still answer chat with the env-default
-  // mode, so we keep listening but log once per minute so the regression is
-  // impossible to miss in Railway logs.
-  try {
-    await verifyTrustModePersistence()
-    console.log('[boot] trust-mode persistence self-check: ok')
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e)
-    console.error('[boot] FATAL: trust-mode persistence broken:', detail)
-    setInterval(() => {
-      console.error('[boot] trust-mode degraded — atlas_config not writable:', detail)
-    }, 60_000)
+    // Phase 1.10ae: round-trip atlas_config write+read+delete BEFORE we start
+    // accepting traffic. If the table is missing, RLS broke service_role, or
+    // the env keys are wrong we want a loud log on every deploy — not a silent
+    // revert of every user's mode to `passive` 30 seconds later. Failure does
+    // NOT exit the process: Atlas can still answer chat with the env-default
+    // mode, so we keep listening but log once per minute so the regression is
+    // impossible to miss in Railway logs.
+    try {
+      await verifyTrustModePersistence()
+      console.log('[boot] trust-mode persistence self-check: ok')
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      console.error('[boot] FATAL: trust-mode persistence broken:', detail)
+      setInterval(() => {
+        console.error('[boot] trust-mode degraded — atlas_config not writable:', detail)
+      }, 60_000)
+    }
   }
 
   server.listen(PORT, () => {
