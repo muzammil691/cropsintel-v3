@@ -15,6 +15,17 @@ proxies through this service so secrets never ship in the bundle.
 | `ATLAS_API_TOKEN` | Bearer token clients use for `Authorization: Bearer …` |
 | `BUDGET_OVERRIDE_TOKEN` | Optional one-shot override for the cost gate |
 
+## Safety controls
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `ATLAS_EMERGENCY_STOP` | `false` | Process-level kill switch. When `true`, `1`, `yes`, or `on`, persisted trust-mode settings are ignored, all autonomous/background work and interactive endpoints are disabled, and only `GET /health` remains available. |
+| `ATLAS_TRUST_MODE` | `passive` | Normal operating mode when the emergency stop is off. Invalid or missing values fail safely to `passive`; a persisted `atlas_config.trust_mode` may override it during normal operation. |
+
+The emergency stop has higher authority than `ATLAS_TRUST_MODE` and the
+persisted `atlas_config.trust_mode` row. The health response reports
+`status: "emergency_stopped"` and `trust_mode: "stopped"` while it is active.
+
 ## Optional budget tuning
 
 | Var | Default | Purpose |
