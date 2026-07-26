@@ -1,13 +1,32 @@
-import { TrustMode } from '../types'
+import type { TrustMode } from '../types'
+import { isEmergencyStopEnabled } from './emergency-stop'
 import { getSupabaseClient } from './supabase'
 
-let _currentMode: TrustMode = (process.env.ATLAS_TRUST_MODE as TrustMode) ?? 'passive'
+const VALID_TRUST_MODES: TrustMode[] = ['passive', 'chat', 'confirm', 'auto', 'stopped']
+
+export function resolveStartupTrustMode(
+  env: NodeJS.ProcessEnv = process.env,
+): TrustMode {
+  if (isEmergencyStopEnabled(env)) return 'stopped'
+  const configured = env.ATLAS_TRUST_MODE?.trim().toLowerCase() as TrustMode | undefined
+  return configured && VALID_TRUST_MODES.includes(configured) ? configured : 'passive'
+}
+
+let _currentMode: TrustMode = resolveStartupTrustMode()
 let _modeSetAt: Date = new Date()
-let _modeSetBy: string = 'env-var-default'
+let _modeSetBy: string = isEmergencyStopEnabled() ? 'ATLAS_EMERGENCY_STOP' : 'env-var-default'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 export async function loadTrustModeFromDb(): Promise<void> {
+  if (isEmergencyStopEnabled()) {
+    _currentMode = 'stopped'
+    _modeSetAt = new Date()
+    _modeSetBy = 'ATLAS_EMERGENCY_STOP'
+    console.warn('[trust-mode] ATLAS_EMERGENCY_STOP is active; ignoring persisted trust mode')
+    return
+  }
+
   const sb = getSupabaseClient()
   if (!sb) {
     console.log(`[trust-mode] no Supabase client; using env default: ${_currentMode}`)
@@ -54,11 +73,23 @@ export async function loadTrustModeFromDb(): Promise<void> {
 }
 
 export function getCurrentMode(): TrustMode {
+  // Re-check the environment on every read. Railway environment variables are
+  // normally immutable for a running process, but this makes the safety
+  // invariant hold even in tests or an unusual runtime that mutates process.env.
+  if (isEmergencyStopEnabled()) return 'stopped'
   return _currentMode
 }
 
 export function getModeMetadata() {
-  return { mode: _currentMode, setAt: _modeSetAt, setBy: _modeSetBy }
+  if (isEmergencyStopEnabled()) {
+    return {
+      mode: 'stopped' as const,
+      setAt: _modeSetAt,
+      setBy: 'ATLAS_EMERGENCY_STOP',
+      emergencyStop: true,
+    }
+  }
+  return { mode: _currentMode, setAt: _modeSetAt, setBy: _modeSetBy, emergencyStop: false }
 }
 
 /**
@@ -70,6 +101,11 @@ export function getModeMetadata() {
  * `passive` (the original 1.10y bug) is now impossible without a loud log.
  */
 export async function verifyTrustModePersistence(): Promise<void> {
+  if (isEmergencyStopEnabled()) {
+    console.warn('[trust-mode] emergency stop active; skipping persistence write self-check')
+    return
+  }
+
   const sb = getSupabaseClient()
   if (!sb) {
     throw new Error('atlas_config self-check skipped: no Supabase client (set V3_SUPABASE_URL + V3_SUPABASE_SECRET_KEY)')
@@ -89,9 +125,12 @@ export async function verifyTrustModePersistence(): Promise<void> {
 }
 
 export async function setMode(newMode: TrustMode, setBy: string): Promise<void> {
-  const valid: TrustMode[] = ['passive', 'chat', 'confirm', 'auto', 'stopped']
-  if (!valid.includes(newMode)) {
-    throw new Error(`Invalid trust mode: ${newMode}. Must be one of: ${valid.join(', ')}`)
+  if (!VALID_TRUST_MODES.includes(newMode)) {
+    throw new Error(`Invalid trust mode: ${newMode}. Must be one of: ${VALID_TRUST_MODES.join(', ')}`)
+  }
+
+  if (isEmergencyStopEnabled()) {
+    throw new Error('Atlas emergency stop is active; trust mode cannot be changed until ATLAS_EMERGENCY_STOP is removed')
   }
 
   console.log(`[trust-mode] writing to DB: mode=${newMode} by=${setBy}`)
